@@ -1,0 +1,14 @@
+# 工具指南
+
+所有工具都在本仓库根目录运行;只有 `tools/build.sh` 需要 Docker(受沙盒限制,需 escalation),
+`tools/make-icons.py` 需要带 Pillow 的 Python 运行时(用 Codex 自带运行时,见工作区根 `AGENTS.md`),
+其余为纯标准库。
+
+| 工具 | 作用 | 何时用 |
+|---|---|---|
+| `tools/build.sh` | 在固定镜像 `devkitpro/devkita64:20260219` 里执行 `make`,产出 `acnh-manager.nro` | 每次改完源码构建时 |
+| `tools/deploy-nro.py` | 经 sys-agent 的内置 FTP(默认 `switch:6001`)把 NRO 推到 `/switch/ACNH-Manager/`;`--fetch-log` 取回 `spike.log`、`spike-history.log`、`log.txt`(后者 M1 起产生) | 真机迭代:构建 → 部署 → 启动 → 回读日志 |
+| `tools/summarize-spike-log.py` | 解析环境探测日志:打印 `ns` 内容表、`ncm` 的更新标题 version 与 Program 内容 id、`dmnt:cht` 的 ModuleId,按当前判据(①ns 版本 ②ncm 内容 id ③ModuleId 复核)给出 PASS/FAIL;`fsp-ldr` 相关行仅作历史信息 | 每次真机探测后复核结论 |
+| `tools/make-icons.py` | 从主图 `assets/icon-org.png` 生成 `assets/icon.jpg`(256×256 JPEG,NACP/hbmenu 图标)与 `assets/icon.png`(256×256 PNG,商店图标);`--source` 可换主图;需带 Pillow 的运行时 | 换图标或商店素材时 |
+
+构建产物与日志等过程性材料放 `build/scratch/`(已忽略);真机验收结论写入 `docs/device-acceptance.md`(M5 建立)。

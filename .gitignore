@@ -1,0 +1,10 @@
+build/
+dist/
+*.nro
+*.nacp
+*.elf
+*.lst
+*.map
+.DS_Store
+__pycache__/
+*.pyc
