@@ -6,6 +6,7 @@
 #include "install/gate.hpp"
 #include "log.hpp"
 #include "probe.hpp"
+#include "ui/app.hpp"
 
 namespace {
 
@@ -138,15 +139,26 @@ int main(int argc, char **argv) {
         consoleUpdate(nullptr);
     }
 
-    PadState pad;
-    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-    padInitializeDefault(&pad);
-    while (appletMainLoop()) {
-        padUpdate(&pad);
-        if (padGetButtonsDown(&pad) & HidNpadButton_Plus) {
-            break;
+    /* 界面模式:环境报告已经落在 log.txt,这里进入 framebuffer 界面。 */
+    {
+        acnh_manager::ui::App app;
+        if (app.Init(sd)) {
+            app.Run();
+            app.Exit();
+        } else {
+            std::printf("ui init failed (fonts or framebuffer); press + to exit\n");
+            consoleUpdate(nullptr);
+            PadState pad;
+            padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+            padInitializeDefault(&pad);
+            while (appletMainLoop()) {
+                padUpdate(&pad);
+                if (padGetButtonsDown(&pad) & HidNpadButton_Plus) {
+                    break;
+                }
+                consoleUpdate(nullptr);
+            }
         }
-        consoleUpdate(nullptr);
     }
     consoleExit(nullptr);
     return 0;

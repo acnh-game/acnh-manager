@@ -7,6 +7,7 @@ CXXFLAGS ?= -std=c++17 -O1 -g -Wall -Wextra -Werror
 INCLUDES := -I../source
 SOURCES := host_tests.cpp \
            ../source/env/config_ini.cpp \
+           ../source/i18n/strings.cpp \
            ../source/manifest/json.cpp \
            ../source/manifest/manifest.cpp \
            ../source/install/gate.cpp

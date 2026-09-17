@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "env/config_ini.hpp"
+#include "i18n/strings.hpp"
 #include "install/gate.hpp"
 #include "manifest/json.hpp"
 #include "manifest/manifest.hpp"
@@ -385,6 +386,22 @@ override_key=!L
     CHECK(title_advice.text.find("不要按住 R") != std::string::npos);
 }
 
+void TestStrings() {
+    using acnh_manager::i18n::Language;
+    using acnh_manager::i18n::StringId;
+    using acnh_manager::i18n::StringCount;
+    using acnh_manager::i18n::Text;
+    /* 表项数量必须与枚举一一对应,否则新文案容易漏一边。 */
+    CHECK(StringCount() == static_cast<unsigned>(StringId::ExitHint) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ExitHint); ++i) {
+        const auto id = static_cast<StringId>(i);
+        CHECK(Text(id, Language::ZhHans) != nullptr);
+        CHECK(Text(id, Language::English) != nullptr);
+        CHECK(std::string(Text(id, Language::ZhHans)).size() > 0);
+        CHECK(std::string(Text(id, Language::English)).size() > 0);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -397,6 +414,7 @@ int main() {
     TestGate();
     TestPlan();
     TestOverrideConfig();
+    TestStrings();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

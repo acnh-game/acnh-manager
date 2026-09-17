@@ -1,5 +1,7 @@
 #---------------------------------------------------------------------------------
 .SUFFIXES:
+# 链接失败时删除残缺目标,避免下次 make 拿残缺的 ELF 去 elf2nro(会报 "expected AArch64")。
+.DELETE_ON_ERROR:
 #---------------------------------------------------------------------------------
 
 ifeq ($(strip $(DEVKITPRO)),)
@@ -12,7 +14,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	acnh-manager
 BUILD		:=	build
-SOURCES		:=	source source/manifest source/install source/env
+SOURCES		:=	source source/manifest source/install source/env source/ui source/i18n
 DATA		:=	data
 INCLUDES	:=	source
 
@@ -34,13 +36,16 @@ CFLAGS	:=	-g -Wall -Wextra -O2 -ffunction-sections \
 CFLAGS	+=	-Wno-missing-field-initializers
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
+# FreeType 头文件在 portlibs 的 freetype2 子目录里(需要在 CXXFLAGS 之前追加)。
+CFLAGS	+=	-I$(PORTLIBS)/include/freetype2
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lnx
+# FreeType 静态库自带 harfbuzz auto-hinter、PNG 与 bzip2 支持,四者都要显式链接。
+LIBS	:= -lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 

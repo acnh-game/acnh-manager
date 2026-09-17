@@ -20,6 +20,7 @@ Switch 构建纪律)与跨仓库命名规则见工作区根 `AGENTS.md`;产品�
 ```
 
 Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,真机安装/测试由用户手工执行。
+链接依赖(见 `docs/architecture.md` 第 7 节):`-lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx`。
 
 ## 验证
 

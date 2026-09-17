@@ -145,3 +145,20 @@ spike 只读:不写游戏目录,不创建 `state.json`。
   从 acnh-agent 的发布产物生成(发布门控见 `../../docs/acnh_manager_plan.md` 第 8 节)。
 - **M0 探针仍随 App 保留**:在 SD 卡上创建空文件 `/switch/ACNH-Manager/dev-probe` 时,App 会在
   环境报告之后额外运行 M0 取证的探针(写 `spike.log`),用于复核 `fsp-ldr` 等已否路线。
+
+## 7. 界面层(M1)
+
+| 模块 | 职责 |
+|---|---|
+| `source/ui/gfx.*` | framebuffer 上的最小绘制层:填充、矩形、描边、带 alpha 的像素混合 |
+| `source/ui/font.*` | FreeType + 主机共享字体(`plGetSharedFontByType`,Standard/简中/扩展简中/繁中/韩文),带按字号分组的字形缓存;缺字自动换下一款字体 |
+| `source/ui/app.*` | 页面状态机(状态 / 设置)、输入处理、卡片式布局与渲染 |
+| `source/i18n/strings.*` | 简中 / English 双语文案表(`StringId` 枚举 + 两列),由主机测试保证两边都补齐 |
+
+- 链接依赖:`-lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx`(portlibs 里的静态 FreeType 自带
+  harfbuzz auto-hinter、PNG 与 bzip2 支持,四个库都必须显式列出),头文件在
+  `$(PORTLIBS)/include/freetype2`。
+- 渲染循环:`framebufferCreate` + `framebufferMakeLinear`,每帧 `framebufferBegin/End`;
+  分辨率取 `width_aligned/height_aligned`(1280×720 起)。
+- 交互:`A` 刷新环境(设置页为切换语言)、`L/R` 切页、`B` 或 `+` 退出;安装/确认/进度/结果页
+  在 M2 用同一套渲染接入。
