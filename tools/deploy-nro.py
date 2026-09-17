@@ -69,6 +69,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--file", type=pathlib.Path, default=DEFAULT_NRO)
     parser.add_argument("--remote-name", default=None)
     parser.add_argument("--fetch-log", action="store_true")
+    parser.add_argument("--push-file", type=pathlib.Path,
+                        help="把任意本地文件推到 SD(--remote 指定相对路径,如 payload/subsdk9)")
+    parser.add_argument("--remote", default=None, help="配合 --push-file 的远端相对路径")
     parser.add_argument("--log-dir", type=pathlib.Path,
                         default=REPO_ROOT / "build" / "scratch")
     args = parser.parse_args(argv)
@@ -82,7 +85,23 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        if args.fetch_log:
+        if args.push_file is not None:
+            if args.remote is None:
+                print("error: --push-file requires --remote", file=sys.stderr)
+                return 1
+            if not args.push_file.is_file():
+                print(f"error: {args.push_file} not found", file=sys.stderr)
+                return 1
+            remote = f"{REMOTE_DIR}/{args.remote.lstrip('/')}"
+            ensure_dir(ftp, remote.rsplit("/", 1)[0])
+            with args.push_file.open("rb") as handle:
+                ftp.storbinary(f"STOR {remote}", handle)
+            size = args.push_file.stat().st_size
+            if ftp.size(remote) != size:
+                print(f"error: size mismatch after upload: {remote}", file=sys.stderr)
+                return 1
+            print(f"pushed {args.push_file} -> {remote} ({size} B, verified)")
+        elif args.fetch_log:
             fetch_logs(ftp, args.log_dir)
         else:
             if not args.file.is_file():

@@ -64,8 +64,15 @@ struct ParseResult {
     Manifest manifest;
 };
 
+struct ParseOptions {
+    /* 发布路径要求 dirty=false 且 buildFlags 只含语义钩子位;开发用清单可放宽这两项
+       (调用方必须在 UI 上明确标注"开发用清单")。 */
+    bool require_release_build{true};
+};
+
 /* app_version 用点分十进制(如 "0.1.0");用于校验 app.minVersion。 */
-ParseResult Parse(std::string_view text, std::string_view app_version);
+ParseResult Parse(std::string_view text, std::string_view app_version,
+                  ParseOptions options = ParseOptions{});
 
 /* target 安全检查:非空、无前导 '/'、无 '\\'、无 ".." 片段。 */
 bool IsSafeTarget(std::string_view target);

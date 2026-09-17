@@ -215,7 +215,7 @@ int CompareVersions(std::string_view lhs, std::string_view rhs) {
     return 0;
 }
 
-ParseResult Parse(std::string_view text, std::string_view app_version) {
+ParseResult Parse(std::string_view text, std::string_view app_version, ParseOptions options) {
     ParseResult result;
     json::Value root;
     std::string json_error;
@@ -268,11 +268,11 @@ ParseResult Parse(std::string_view text, std::string_view app_version) {
     if (!ok) {
         return result;
     }
-    if (result.manifest.agent.dirty) {
+    if (options.require_release_build && result.manifest.agent.dirty) {
         result.error = "manifest: agent build is dirty; refusing a non-release artifact";
         return result;
     }
-    if (result.manifest.agent.build_flags != kReleaseBuildFlags) {
+    if (options.require_release_build && result.manifest.agent.build_flags != kReleaseBuildFlags) {
         result.error = Describe(
             "manifest: agent buildFlags=%#x is not the release form (%#x = semantic hook only)",
             result.manifest.agent.build_flags, kReleaseBuildFlags);

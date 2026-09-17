@@ -10,7 +10,9 @@ SOURCES := host_tests.cpp \
            ../source/i18n/strings.cpp \
            ../source/manifest/json.cpp \
            ../source/manifest/manifest.cpp \
-           ../source/install/gate.cpp
+           ../source/install/gate.cpp \
+           ../source/util/sha256.cpp \
+           ../source/util/time.cpp
 BINARY := host-tests
 
 .PHONY: all run clean

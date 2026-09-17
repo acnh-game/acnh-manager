@@ -14,7 +14,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	acnh-manager
 BUILD		:=	build
-SOURCES		:=	source source/manifest source/install source/env source/ui source/i18n
+SOURCES		:=	source source/manifest source/install source/env source/ui source/i18n source/util
 DATA		:=	data
 INCLUDES	:=	source
 

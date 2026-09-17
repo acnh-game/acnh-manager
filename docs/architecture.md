@@ -162,3 +162,38 @@ spike 只读:不写游戏目录,不创建 `state.json`。
   分辨率取 `width_aligned/height_aligned`(1280×720 起)。
 - 交互:`A` 刷新环境(设置页为切换语言)、`L/R` 切页、`B` 或 `+` 退出;安装/确认/进度/结果页
   在 M2 用同一套渲染接入。
+
+## 8. 安装 / 卸载引擎(M2)
+
+| 模块 | 职责 |
+|---|---|
+| `source/util/sha256.*` | 自带 SHA-256(纯 C++17),标准测试向量校验,支持分块流式更新 |
+| `source/util/time.*` | Unix 秒 → `YYYY-MM-DDTHH:MM:SSZ`(纯函数) |
+| `source/install/engine.*` | 落盘与记录:目录递归创建、整文件读写、分块哈希、`WriteFileVerified`(临时文件 → `SetSize` → 写入 → 回读校验 → 备份改名 → 删备份)、`state.json` 读写、`Install()`/`Uninstall()` |
+
+### 8.1 写入与替换顺序(不写半截文件)
+
+```text
+payload 读取 → 大小比对 → sha256 比对(先验后写)
+  → 目标 .acnh-tmp:CreateFile → SetSize → Write(Flush) → 回读 sha256
+  → 旧文件改名 .acnh-old → 临时文件改名到目标 → 删除 .acnh-old
+  → 全部文件成功后写 state.json(同样走上面的校验流程)
+```
+
+任何一步失败都立即返回错误,`state.json` 不更新,下次运行会通过 `Plan()` 判定为 `Repair`。
+
+### 8.2 卸载
+
+按 `state.json` 逐条校验 sha256:**改过的文件拒绝删除**(不猜测、不强制),全部通过后逐个删除;
+`exefs` 目录只在为空时删除(非空说明还有别人的文件);最后删掉 `state.json`。干跑模式只做校验与统计。
+
+### 8.3 清单来源与"开发用清单"
+
+- 发布形态由 M4 的导入工具把清单与 payload 内嵌进 NRO;
+- M2 阶段 App 读取 SD 上的开发用文件:`/switch/ACNH-Manager/dev-manifest.json` 与
+  `/switch/ACNH-Manager/payload/`,由 `tools/make-dev-manifest.py` 从 acnh-agent 的构建产物生成。
+- 清单校验默认要求"发布形态"(`dirty=false` 且 `buildFlags` 只含语义钩子位);开发构建会被
+  **默认拒绝**并在状态页显示原因。要在 M4 之前干跑,必须在设置页显式打开"允许开发清单",
+  此时 UI 会标注清单来自开发文件 —— 这是有意的:发布门控不接受非发布产物。
+- `干跑模式`(设置页默认开启)只做校验与统计,不写任何文件;确认安装页会同时显示将要写入的
+  文件、大小与 sha256 前缀。

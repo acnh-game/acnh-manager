@@ -12,6 +12,8 @@
 #include "install/gate.hpp"
 #include "manifest/json.hpp"
 #include "manifest/manifest.hpp"
+#include "util/sha256.hpp"
+#include "util/time.hpp"
 
 namespace {
 
@@ -402,6 +404,36 @@ void TestStrings() {
     }
 }
 
+void TestSha256() {
+    using acnh_manager::util::Sha256;
+    using acnh_manager::util::Sha256Hex;
+    /* 标准测试向量。 */
+    CHECK(Sha256Hex("") ==
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(Sha256Hex("abc") ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(Sha256Hex(std::string(56, 'a')) ==
+          "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a");
+    CHECK(Sha256Hex(std::string(64, 'a')) ==
+          "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
+    /* 分块更新与一次性计算一致(引擎按 64 KiB 分块读大文件)。 */
+    const std::string payload(200000, 'x');
+    Sha256 streaming;
+    for (std::size_t offset = 0; offset < payload.size(); offset += 65536) {
+        const std::size_t chunk = std::min<std::size_t>(65536, payload.size() - offset);
+        streaming.Update(payload.data() + offset, chunk);
+    }
+    CHECK(Sha256::ToHex(streaming.Finish()) == Sha256Hex(payload));
+}
+
+void TestTimeFormat() {
+    using acnh_manager::util::FormatUnixTimeUtc;
+    CHECK(FormatUnixTimeUtc(0) == "1970-01-01T00:00:00Z");
+    CHECK(FormatUnixTimeUtc(951782400) == "2000-02-29T00:00:00Z"); /* 闰日 */
+    CHECK(FormatUnixTimeUtc(1758000000) == "2025-09-16T05:20:00Z");
+    CHECK(FormatUnixTimeUtc(1757999999) == "2025-09-16T05:19:59Z");
+}
+
 }  // namespace
 
 int main() {
@@ -415,6 +447,8 @@ int main() {
     TestPlan();
     TestOverrideConfig();
     TestStrings();
+    TestSha256();
+    TestTimeFormat();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

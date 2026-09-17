@@ -1,13 +1,18 @@
 #pragma once
 
-/* 界面骨架:framebuffer + FreeType 文本,状态页与设置页。
-   M1 阶段只做只读展示与语言切换;安装/卸载页在 M2 接入同一套渲染。 */
+/* 界面:状态 / 安装确认 / 卸载 / 结果 / 设置 五个页面。
+   M2 阶段即可真机干跑整条流程:清单来自 SD 上的开发用清单文件,payload 来自 payload 目录,
+   干跑模式(默认开启)只校验不写盘。 */
 
 #include <switch.h>
 
+#include <string>
+
 #include "env/detect.hpp"
 #include "i18n/strings.hpp"
+#include "install/engine.hpp"
 #include "install/gate.hpp"
+#include "manifest/manifest.hpp"
 #include "ui/font.hpp"
 
 namespace acnh_manager::ui {
@@ -16,19 +21,25 @@ class App {
 public:
     bool Init(FsFileSystem &sd);
     void Exit();
-    /* 主循环:按 B 或 + 返回。 */
+    /* 主循环:在状态页按 B 或 + 返回。 */
     void Run();
 
 private:
-    enum class Page { Status, Settings };
+    enum class Page { Status, Install, Uninstall, Result, Settings };
 
     void Collect();
+    void RefreshPlan();
+    void RunInstall();
+    void RunUninstall();
+
     void Render();
     void RenderHeader(Surface surface);
     void RenderFooter(Surface surface);
-    void RenderStatusPage(Surface surface);
-    void RenderSettingsPage(Surface surface);
-    /* 非 const:Font 的字形缓存会在绘制时写入。 */
+    void RenderStatus(Surface surface);
+    void RenderInstall(Surface surface);
+    void RenderUninstall(Surface surface);
+    void RenderResult(Surface surface);
+    void RenderSettings(Surface surface);
     void Field(Surface surface, int x, int y, const char *label, const std::string &value,
                Color value_color);
     void Card(Surface surface, int x, int y, int w, int h, const char *title);
@@ -40,8 +51,29 @@ private:
     bool m_fb_ready{false};
     Page m_page{Page::Status};
     i18n::Language m_language{i18n::Language::ZhHans};
+
     env::EnvironmentReport m_report{};
+    manifest::Manifest m_manifest{};
+    bool m_have_manifest{false};
+    std::string m_manifest_error{};
     install::GateResult m_gate{};
+    install::InstallPlan m_plan{};
+    install::InstallState m_state{};
+    bool m_have_state{false};
+    std::string m_state_error{};
+
+    bool m_dry_run{true};
+    bool m_allow_dev_manifest{false};
+    std::string m_payload_dir{"/switch/ACNH-Manager/payload"};
+    std::string m_dev_manifest_path{"/switch/ACNH-Manager/dev-manifest.json"};
+
+    std::string m_progress_step{};
+    int m_progress_index{0};
+    int m_progress_total{0};
+    bool m_result_ok{false};
+    std::string m_result_error{};
+    int m_result_files{0};
+    bool m_result_dry_run{false};
 };
 
 }  // namespace acnh_manager::ui
