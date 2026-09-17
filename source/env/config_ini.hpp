@@ -13,7 +13,9 @@
        explicitly empty -> key_combination=0, by_default=false -> never applies
    - a per-title `[override_config] override_key` overrides the global default;
    - `[hbl_config] override_any_app` + `override_any_app_key` (default R) mean "holding this
-     key while launching anything opens hbmenu". */
+     key while launching an *application* opens hbmenu instead".  Atmosphere only treats the
+     application range (0x0100000000010000..0x01FFFFFFFFFFFFFF) as applications, so games are
+     covered while system applets (eShop, news, settings, ...) are not -- measured on hardware. */
 #include <string>
 #include <string_view>
 

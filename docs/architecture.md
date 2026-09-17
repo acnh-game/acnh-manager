@@ -68,7 +68,7 @@ OpenFile → SetSize → Write)。
 真机实测返回 `0x2EEA02`(module=2 FS,description=6005),而且只有 `create` 会失败 —— 读、校验
 (干跑)全都正常,表现为"干跑 3/3 通过、真装第一步就失败"。
 
-写盘探针(`/switch/ACNH-Manager/dev-writeprobe`,见第 6.4 节)在同一台机器上给出的矩阵:
+写盘探针(`/switch/ACNH-Manager/dev-writeprobe`,见第 6.5 节)在同一台机器上给出的矩阵:
 
 | 目标 | 路径写法 | create 结果 |
 |---|---|---|
@@ -128,7 +128,29 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 | `source/env/config_ini.*` | `override_config.ini` 与 per-title `config.ini` 的语义解析,产出"启动游戏要不要按键"的人话提示(纯逻辑) |
 | `source/env/detect.*` | 真机取数(只读):`ns` 内容表、`ncm` 更新标题 Program 内容 id、`dmnt:cht` ModuleId、覆盖配置、exefs 现状与旧金手指检测 → `EnvironmentReport` |
 
-### 6.1 门控状态(`Evaluate`)
+### 6.1 覆盖键提示的精确语义(实测澄清)
+
+`override_config.ini` 里有两套键,含义不同:
+
+- `[default_config] override_key`(本机为 `!L`)= **exefs 覆盖**(cheats / `subsdk9`)是否生效的开关:
+  `!L` 表示默认生效、按住 L 关闭。这是"覆盖键提示"那一行真正描述的东西。
+- `[hbl_config] override_any_app_key`(默认 `R`)+ `override_any_app`(默认 `true`)= 按住该键
+  **启动应用**时改为进入 hbmenu。
+
+第二条常被误读成"任何程序"。Atmosphere 的判据是
+`override_any_app && ncm::IsApplicationId(program_id)`(`cfg_override.board.nintendo_nx.inc`),
+而"应用"的定义是 **`0x0100000000010000` ~ `0x01FFFFFFFFFFFFFF`**(`ncm_content_meta_id.hpp`):
+
+| 启动对象 | id | 分类 | 按住 R 的结果 |
+|---|---|---|---|
+| 游戏(如 ACNH `01006F8002326000`) | 应用段内 | Application | 进入 hbmenu(以应用身份运行) |
+| Nintendo eShop | `010000000000100B` | SystemApplet(`...1000`–`...1FFF`) | **无效果** |
+| 游戏新闻 / 设置 / 相册 | 同段 | SystemApplet | **无效果** |
+
+所以界面文案写"启动**游戏**会进入 hbmenu"是准确的(玩家会在意的就是游戏),系统程序不在其列;
+本机实测与源码判据一致。
+
+### 6.2 门控状态(`Evaluate`)
 
 | 状态 | 触发条件 | 处理 |
 |---|---|---|
@@ -140,13 +162,13 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 | `ContentIdMismatch` | 版本相同但内容指纹不同(重打包/未支持的新构建) | 拒绝 |
 | `BuildIdMismatch` | 游戏正在运行,且 `dmnt:cht` 的 ModuleId 与条目不符 | 拒绝 |
 
-### 6.2 安装动作(`Plan`)
+### 6.3 安装动作(`Plan`)
 
 按顺序判定:门控未通过 → `Blocked`;无安装记录 → `Install`;记录的内容 id 不同 → `Install`(换构建);
 记录的 agent 版本不同 → `Install`(升级/降级);任一文件缺失或 sha256/size 不符 → `Repair`;
 全部一致 → `UpToDate`(跳过写入)。
 
-### 6.3 state.json
+### 6.4 state.json
 
 ```json
 {"schema":1,"agentVersion":"0.11.0","agentCommit":"4ac89fd403b7",
@@ -158,7 +180,7 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 
 写入必须遵守第 4 节的 `SetSize` 约定;卸载只删除这里记录且哈希一致的文件。
 
-### 6.4 测试与阶段说明
+### 6.5 测试与阶段说明
 
 - 主机测试:`make -C tests`(覆盖 JSON 解析/拒绝、清单校验、路径安全、版本比较、门控七种状态、
   安装五种动作、state 往返、覆盖键语义多种情形)。

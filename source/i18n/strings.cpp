@@ -74,7 +74,7 @@ constexpr Entry kStrings[] = {
     {"覆盖永不生效(override_key 为空或按键名无法识别):请改成 !L 或删除该项", "Override never applies (override_key empty or the key name is unknown): change it to !L or remove the entry"},
     {"覆盖默认生效;启动游戏时不要按住 %s", "Override applies by default; do not hold %s while launching the game"},
     {"覆盖默认关闭;启动游戏时需要按住 %s", "Override is off by default; hold %s while launching the game"},
-    {"。注意:按住 %s 启动任何应用会进入 hbmenu", ". Note: holding %s while launching any application opens hbmenu"},
+    {"。注意:按住 %s 启动游戏会进入 hbmenu", ". Note: holding %s while launching a game opens hbmenu"},
     {"state.json 无法解析: %s", "state.json could not be parsed: %s"},
     {"内嵌清单无效: %s", "invalid embedded manifest: %s"},
     {"清单无效: %s", "invalid manifest: %s"},
