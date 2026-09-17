@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import ftplib
+import hashlib
 import pathlib
 import sys
 
@@ -38,13 +39,22 @@ def ensure_dir(ftp: ftplib.FTP, path: str) -> None:
 def deploy(ftp: ftplib.FTP, local: pathlib.Path, remote_name: str) -> None:
     ensure_dir(ftp, REMOTE_DIR)
     remote = f"{REMOTE_DIR}/{remote_name}"
+    local_bytes = local.read_bytes()
+    local_sha = hashlib.sha256(local_bytes).hexdigest()
     size = local.stat().st_size
     with local.open("rb") as handle:
         ftp.storbinary(f"STOR {remote}", handle)
     remote_size = ftp.size(remote)
     if remote_size != size:
         raise RuntimeError(f"size mismatch after upload: local={size} remote={remote_size}")
-    print(f"deployed {local.name} ({size} B) -> {remote} (verified)")
+    # 回读校验:把远端文件读回来比对 sha256,确认"卡上的就是刚构建的这份"。
+    readback = bytearray()
+    ftp.retrbinary(f"RETR {remote}", readback.extend)
+    remote_sha = hashlib.sha256(bytes(readback)).hexdigest()
+    if remote_sha != local_sha:
+        raise RuntimeError(f"sha256 mismatch after upload: local={local_sha[:16]} "
+                           f"remote={remote_sha[:16]} (程序正在运行时会写不进去,请先退出)")
+    print(f"deployed {local.name} ({size} B) -> {remote} (sha256 {local_sha[:16]}… verified)")
 
 
 def fetch_logs(ftp: ftplib.FTP, out_dir: pathlib.Path) -> None:

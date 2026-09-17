@@ -1,19 +1,29 @@
 #include <switch.h>
 
+#include <fcntl.h>
 #include <cstdio>
+#include <unistd.h>
 
 #include "env/detect.hpp"
 #include "install/gate.hpp"
 #include "log.hpp"
 #include "probe.hpp"
 #include "ui/app.hpp"
+#include "ui/text_ui.hpp"
+
+#ifndef ACNH_BUILD_STAMP
+#define ACNH_BUILD_STAMP "unknown"
+#endif
 
 namespace {
 
+constexpr const char *kBuildStamp = ACNH_BUILD_STAMP;
 constexpr const char *kAppDir = "/switch/ACNH-Manager";
 constexpr const char *kLogPath = "/switch/ACNH-Manager/log.txt";
 constexpr const char *kLogHistoryPath = "/switch/ACNH-Manager/log-history.log";
 constexpr const char *kProbeFlagPath = "/switch/ACNH-Manager/dev-probe";
+constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
+constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
 /* 与 Makefile 的 APP_VERSION 保持一致。 */
 constexpr const char *kAppVersion = "0.1.0";
 
@@ -59,6 +69,39 @@ bool FileExists(FsFileSystem &sd, const char *path) {
     }
     fsFileClose(&file);
     return true;
+}
+
+/* 与 EdiZon-SE 的做法对齐:进界面之前把常用服务与时钟准备好,并把 stdout/stderr
+   重定向到 SD 上的文件(避免任何库输出落到未初始化的控制台上)。
+   失败不致命,逐项记录到日志。 */
+void PrepareEnvironment(acnh_manager::Log *log) {
+    fsdevMountSdmc();
+    /* 注意:**不要**动 STDOUT/STDERR 的 fd:我们与 hbl 加载器同进程,dup2 会改到它的
+       stdio 状态(实测会导致加载器在 stdio 缓冲路径里崩溃)。诊断一律走 Log 的文件写入。 */
+    (void)kStdioPath;
+
+    struct Step {
+        const char *name;
+        Result (*init)();
+    };
+    const Step steps[] = {
+        {"setsysInitialize", setsysInitialize},
+        {"socketInitializeDefault", socketInitializeDefault},
+        {"plInitialize", []() { return plInitialize(PlServiceType_User); }},
+        {"psmInitialize", psmInitialize},
+        {"pminfoInitialize", pminfoInitialize},
+        {"pmdmntInitialize", pmdmntInitialize},
+        {"romfsInit", romfsInit},
+        {"hidsysInitialize", hidsysInitialize},
+        {"pcvInitialize", pcvInitialize},
+        {"clkrstInitialize", clkrstInitialize},
+    };
+    for (const Step &step : steps) {
+        const Result rc = step.init();
+        if (log != nullptr) {
+            log->Line("env: %s rc=0x%08X", step.name, rc);
+        }
+    }
 }
 
 void ReportEnvironment(acnh_manager::Log &log,
@@ -120,6 +163,7 @@ int main(int argc, char **argv) {
     }
 
     if (R_SUCCEEDED(rc_log)) {
+        log.Line("build: %s (ACNH-Manager %s)", kBuildStamp, kAppVersion);
         log.Line("start: fsInitialize rc=0x%08X openSdmc rc=0x%08X mkdir rc=0x%08X", rc_fs, rc_sd,
                  rc_dir);
         const auto report = acnh_manager::env::Collect(sd);
@@ -132,7 +176,36 @@ int main(int argc, char **argv) {
         log.Sync();
     }
 
-    /* 界面模式:日志保持打开,界面各阶段都记录,便于崩溃后取证。 */
+    /* 环境准备(对齐 EdiZon-SE 的 serviceInitialize + stdio 重定向)。 */
+    if (R_SUCCEEDED(rc_log)) {
+        log.Line("env: preparing services");
+        log.Sync();
+        /* 图形路径不再往控制台/stdio 回显:避免触碰同进程内 hbl 的 stdio。 */
+        log.SetEcho(false);
+    }
+    PrepareEnvironment(R_SUCCEEDED(rc_log) ? &log : nullptr);
+
+    /* 界面模式:默认图形界面;`/switch/ACNH-Manager/ui-text` 存在时退回控制台文本界面。 */
+    const bool want_text_ui = FileExists(sd, kTextUiFlagPath);
+    if (want_text_ui) {
+        if (R_SUCCEEDED(rc_log)) {
+            log.Line("text-ui: starting");
+            log.Sync();
+        }
+        acnh_manager::ui::TextUi ui;
+        if (ui.Init()) {
+            ui.Run(R_SUCCEEDED(rc_log) ? &log : nullptr, sd);
+            ui.Exit();
+        }
+        if (R_SUCCEEDED(rc_log)) {
+            log.Line("text-ui: finished");
+            log.Sync();
+            log.Close();
+        }
+        return 0;
+    }
+
+    /* 图形界面路径(实验性):日志保持打开,各阶段都记录,便于崩溃后取证。 */
     {
         acnh_manager::ui::App app;
         std::string ui_error;

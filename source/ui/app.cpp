@@ -1,6 +1,7 @@
 #include "app.hpp"
 
 #include <cstdio>
+#include <algorithm>
 #include <string>
 
 #include "manifest/manifest.hpp"
@@ -74,9 +75,12 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
         return false;
     }
     Trace("ui: font init ok");
-    Trace("ui: framebufferCreate ...");
+    /* 与 EdiZon-SE 保持一致:固定请求 2 个 buffer。 */
+    const u32 num_fbs = 2;
+    Trace("ui: framebufferCreate ... (applet=%d num_fbs=%u)",
+          static_cast<int>(appletGetAppletType()), num_fbs);
     const Result rc_create =
-        framebufferCreate(&m_fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, 2);
+        framebufferCreate(&m_fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, num_fbs);
     if (R_FAILED(rc_create)) {
         Trace("ui: framebufferCreate rc=0x%08X", rc_create);
         if (error != nullptr) {
@@ -107,6 +111,29 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     Collect();
     Trace("ui: environment collected (exefs=%zu, manifest=%d)", m_report.exefs.size(),
           m_have_manifest ? 1 : 0);
+    /* 调试开关:存在 /switch/ACNH-Manager/dev-pause 时,停在首帧之前等待 +,
+       便于在进程存活状态下用 sys-agent 读内存布局(见 docs/device-acceptance.md)。 */
+    {
+        FsFile flag{};
+        const bool pause_before_first_frame =
+            m_sd != nullptr &&
+            R_SUCCEEDED(fsFsOpenFile(m_sd, "/switch/ACNH-Manager/dev-pause", FsOpenMode_Read, &flag));
+    if (pause_before_first_frame) {
+        fsFileClose(&flag);
+            Trace("ui: paused before first frame (press + to continue)");
+            PadState pad;
+            padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+            padInitializeDefault(&pad);
+            while (appletMainLoop()) {
+                padUpdate(&pad);
+                if ((padGetButtonsDown(&pad) & HidNpadButton_Plus) != 0) {
+                    break;
+                }
+            }
+            Trace("ui: resuming, drawing first frame");
+            m_stage_pause = true;
+        }
+    }
     /* 立刻画一帧:把"framebuffer 能画"与"能收集数据"分开暴露。 */
     Trace("ui: first frame ...");
     Render();
@@ -253,6 +280,21 @@ void App::Run() {
     }
 }
 
+/* 首帧分段暂停:等用户按 + 再继续(用于逐段定位渲染崩溃)。 */
+void App::WaitForPlus(const char *stage) {
+    Trace("frame: paused after %s (press + to continue)", stage);
+    PadState pad;
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    padInitializeDefault(&pad);
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        if ((padGetButtonsDown(&pad) & HidNpadButton_Plus) != 0) {
+            break;
+        }
+    }
+    Trace("frame: resuming after %s", stage);
+}
+
 void App::Render() {
     if (!m_fb_ready) {
         return;
@@ -261,14 +303,36 @@ void App::Render() {
     /* framebufferMakeLinear 之后必须画在 framebufferBegin 返回的影子缓冲上,
        framebufferEnd 再把它拷进真正的 framebuffer。 */
     void *framebuffer = framebufferBegin(&m_fb, &stride);
+    const bool trace = m_trace_frames > 0;
+    if (trace) {
+        Trace("frame: begin (buf=%p stride=%u)", framebuffer, stride);
+    }
     Surface surface;
     surface.pixels = static_cast<u32 *>(framebuffer != nullptr ? framebuffer : m_fb.buf);
     surface.width = static_cast<int>(m_fb.width_aligned);
-    surface.height = static_cast<int>(m_fb.height_aligned);
+    /* 关键:线性影子缓冲由 framebufferMakeLinear 按 **窗口高度** 分配
+       (stride * ((win->height+7)&~7)),而 width/height_aligned 会向上取整到 GOB 边界
+       (720 -> 768 行)。若按 height_aligned 绘制就会越界写堆 48 行(约 245 KB/帧),
+       破坏与 hbl 加载器共享的进程堆 —— 实测会导致加载器在 stdio 缓冲路径里崩溃。
+       因此绘制高度取窗口高度与 height_aligned 的较小值。 */
+    surface.height = std::min(static_cast<int>(m_fb.height_aligned),
+                              static_cast<int>(m_fb.win->height));
     surface.stride = static_cast<int>(stride / 4);
 
     Fill(surface, kBackground);
+    if (trace) {
+        Trace("frame: fill done");
+        if (m_stage_pause) {
+            WaitForPlus("fill");
+        }
+    }
     RenderHeader(surface);
+    if (trace) {
+        Trace("frame: header done");
+        if (m_stage_pause) {
+            WaitForPlus("header");
+        }
+    }
     switch (m_page) {
         case Page::Status: RenderStatus(surface); break;
         case Page::Install: RenderInstall(surface); break;
@@ -276,8 +340,24 @@ void App::Render() {
         case Page::Result: RenderResult(surface); break;
         case Page::Settings: RenderSettings(surface); break;
     }
+    if (trace) {
+        Trace("frame: body done");
+        if (m_stage_pause) {
+            WaitForPlus("body");
+        }
+    }
     RenderFooter(surface);
+    if (trace) {
+        Trace("frame: footer done");
+        if (m_stage_pause) {
+            WaitForPlus("footer");
+        }
+    }
     framebufferEnd(&m_fb);
+    if (trace) {
+        Trace("frame: end done");
+        --m_trace_frames;
+    }
 }
 
 void App::RenderHeader(Surface surface) {
@@ -312,6 +392,10 @@ void App::RenderFooter(Surface surface) {
         hint = i18n::StringId::HintControlsResult;
     }
     m_font.Draw(surface, kMargin, y + 8, kFontSmall, kSubtle, Tr(hint));
+    /* 页脚右侧显示构建戳:一眼确认跑的是哪次构建。 */
+    const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
+    m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 8, kFontSmall, kSubtle,
+                kBuildStamp);
 }
 
 void App::Card(Surface surface, int x, int y, int w, int h, const char *title) {
@@ -325,14 +409,23 @@ void App::Card(Surface surface, int x, int y, int w, int h, const char *title) {
 
 void App::Field(Surface surface, int x, int y, const char *label, const std::string &value,
                 Color value_color) {
+    if (m_trace_frames > 0) {
+        Trace("field: label=\"%s\" value=\"%.24s\"", label, value.c_str());
+    }
     m_font.Draw(surface, x, y, kFontBody, kSubtle, label);
     m_font.Draw(surface, x + 240, y, kFontBody, value_color, value, 760);
+    if (m_trace_frames > 0) {
+        Trace("field: done");
+    }
 }
 
 void App::RenderStatus(Surface surface) {
     int y = kHeaderHeight + kMargin / 2;
     const int width = surface.width - kMargin * 2;
 
+    if (m_trace_frames > 0) {
+        Trace("status: card1 (game)");
+    }
     Card(surface, kMargin, y, width, 190, Tr(i18n::StringId::SectionGame));
     int row = y + 56;
     Field(surface, kMargin + 24, row, Tr(i18n::StringId::LabelHos), m_report.hos_version, kText);
@@ -349,6 +442,9 @@ void App::RenderStatus(Surface surface) {
           std::to_string(m_report.build.version), kText);
     y += 190 + kCardGap;
 
+    if (m_trace_frames > 0) {
+        Trace("status: card2 (override)");
+    }
     Card(surface, kMargin, y, width, 150, Tr(i18n::StringId::SectionOverride));
     row = y + 56;
     Field(surface, kMargin + 24, row, Tr(i18n::StringId::LabelOverrideConfig),
@@ -370,6 +466,9 @@ void App::RenderStatus(Surface surface) {
     }
     y += 150 + kCardGap;
 
+    if (m_trace_frames > 0) {
+        Trace("status: card3 (manifest)");
+    }
     const int remaining = surface.height - kFooterHeight - kCardGap - y;
     Card(surface, kMargin, y, width, remaining, Tr(i18n::StringId::SectionManifest));
     row = y + 56;

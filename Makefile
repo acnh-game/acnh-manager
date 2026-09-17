@@ -22,6 +22,9 @@ APP_TITLE	:=	ACNH-Manager
 APP_AUTHOR	:=	leolovenet
 APP_VERSION	:=	0.1.0
 
+# 构建戳由 tools/build.sh 传入(UTC 时间 + commit);手动 make 时给占位值。
+BUILD_STAMP	?=	manual
+
 # NACP 图标(hbmenu/相册显示);由 tools/make-icons.py 从小程序图标生成。
 ICON		:=	assets/icon.jpg
 
@@ -36,6 +39,7 @@ CFLAGS	:=	-g -Wall -Wextra -O2 -ffunction-sections \
 CFLAGS	+=	-Wno-missing-field-initializers
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
+CFLAGS	+=	-DACNH_BUILD_STAMP="\"$(BUILD_STAMP)\""
 # FreeType 头文件在 portlibs 的 freetype2 子目录里(需要在 CXXFLAGS 之前追加)。
 CFLAGS	+=	-I$(PORTLIBS)/include/freetype2
 
@@ -123,11 +127,23 @@ else
 
 DEPENDS	:=	$(OFILES:.o=.d)
 
+# 构建戳变化时强制重编译:内容不同才 touch,避免每次都全量重编。
+STAMP_DEP	:=	$(BUILD)/build-stamp
+
 all	:	$(OUTPUT).nro
 
 $(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
 
 $(OUTPUT).elf	:	$(OFILES)
+
+$(OFILES): $(STAMP_DEP)
+
+$(STAMP_DEP): FORCE
+	@mkdir -p $(dir $@)
+	@echo '$(BUILD_STAMP)' | cmp -s - $@ 2>/dev/null || echo '$(BUILD_STAMP)' > $@
+
+.PHONY: FORCE
+FORCE:
 
 %.o: %.cpp
 	@echo $(notdir $<)

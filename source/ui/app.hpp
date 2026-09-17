@@ -22,6 +22,13 @@ class Log; /* log.hpp */
 
 namespace acnh_manager::ui {
 
+#ifndef ACNH_BUILD_STAMP
+#define ACNH_BUILD_STAMP "unknown"
+#endif
+
+/* 页脚显示的构建戳(由 tools/build.sh 注入)。 */
+inline constexpr const char *kBuildStamp = ACNH_BUILD_STAMP;
+
 class App {
 public:
     /* 失败时把失败步骤与返回码写进 error(便于写日志与在控制台显示)。 */
@@ -83,6 +90,11 @@ private:
     int m_result_files{0};
     bool m_result_dry_run{false};
     std::string m_update_status{"(未检查)"};
+    /* 首帧逐段写日志:崩溃时能定位到具体绘制阶段。 */
+    int m_trace_frames{1};
+    /* 首帧分段暂停(dev-pause 存在时):每画完一段等按 +,用于逐段定位崩溃。 */
+    bool m_stage_pause{false};
+    void WaitForPlus(const char *stage);
 };
 
 }  // namespace acnh_manager::ui
