@@ -16,12 +16,16 @@
 #include "net/update.hpp"
 #include "ui/font.hpp"
 
+namespace acnh_manager {
+class Log; /* log.hpp */
+}
+
 namespace acnh_manager::ui {
 
 class App {
 public:
     /* 失败时把失败步骤与返回码写进 error(便于写日志与在控制台显示)。 */
-    bool Init(FsFileSystem &sd, std::string *error);
+    bool Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error);
     void Exit();
     /* 主循环:在状态页按 B 或 + 返回。 */
     void Run();
@@ -46,7 +50,9 @@ private:
                Color value_color);
     void Card(Surface surface, int x, int y, int w, int h, const char *title);
     const char *Tr(i18n::StringId id) const { return i18n::Text(id, m_language); }
+    void Trace(const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
+    acnh_manager::Log *m_log{nullptr};
     FsFileSystem *m_sd{nullptr};
     Font m_font{};
     Framebuffer m_fb{};

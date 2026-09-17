@@ -5,7 +5,22 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+#include "log.hpp"
+
 namespace acnh_manager::ui {
+
+void Font::Trace(const char *fmt, ...) {
+    if (m_log == nullptr) {
+        return;
+    }
+    char buf[192];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    m_log->Line("%s", buf);
+    m_log->Sync();
+}
 
 struct Font::Impl {
     FT_Library library{nullptr};
@@ -45,19 +60,23 @@ std::uint32_t NextCodepoint(std::string_view text, std::size_t *index) {
 
 }  // namespace
 
-bool Font::Init(std::string *error) {
+bool Font::Init(acnh_manager::Log *log, std::string *error) {
+    m_log = log;
     if (m_impl != nullptr) {
         return true;
     }
+    Trace("font: FT_Init_FreeType ...");
     m_impl = new Impl();
     if (FT_Init_FreeType(&m_impl->library) != 0) {
         if (error != nullptr) {
             *error = "FT_Init_FreeType failed";
         }
+        Trace("font: FT_Init_FreeType failed");
         delete m_impl;
         m_impl = nullptr;
         return false;
     }
+    Trace("font: plInitialize ...");
     const Result rc = plInitialize(PlServiceType_User);
     if (R_FAILED(rc)) {
         if (error != nullptr) {
@@ -65,24 +84,41 @@ bool Font::Init(std::string *error) {
             std::snprintf(buf, sizeof(buf), "plInitialize rc=0x%08X", rc);
             *error = buf;
         }
+        Trace("font: plInitialize rc=0x%08X", rc);
         FT_Done_FreeType(m_impl->library);
         delete m_impl;
         m_impl = nullptr;
         return false;
     }
     int failures = 0;
+    int loaded = 0;
     for (const PlSharedFontType type : kFontTypes) {
         PlFontData data{};
         if (R_FAILED(plGetSharedFontByType(&data, type))) {
             ++failures;
+            Trace("font: type %d request failed", static_cast<int>(type));
+            continue;
+        }
+        if (data.address == nullptr || data.size == 0) {
+            ++failures;
+            Trace("font: type %d empty (addr=%p size=%u)", static_cast<int>(type), data.address,
+                  static_cast<unsigned>(data.size));
             continue;
         }
         FT_Face face = nullptr;
-        if (FT_New_Memory_Face(m_impl->library, static_cast<const FT_Byte *>(data.address),
-                               static_cast<FT_Long>(data.size), 0, &face) == 0) {
+        const int rc_face =
+            FT_New_Memory_Face(m_impl->library, static_cast<const FT_Byte *>(data.address),
+                               static_cast<FT_Long>(data.size), 0, &face);
+        if (rc_face == 0) {
             m_faces.push_back(face);
+            ++loaded;
+            Trace("font: type %d loaded (%u bytes)", static_cast<int>(type),
+                  static_cast<unsigned>(data.size));
+        } else {
+            Trace("font: type %d FT_New_Memory_Face rc=%d", static_cast<int>(type), rc_face);
         }
     }
+    Trace("font: %d faces loaded, %d unavailable", loaded, failures);
     if (m_faces.empty() && error != nullptr) {
         char buf[96];
         std::snprintf(buf, sizeof(buf), "no shared font faces (%d requests failed)", failures);

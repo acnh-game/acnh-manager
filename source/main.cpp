@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
             log.Line("ui: initialising");
             log.Sync();
         }
-        if (app.Init(sd, &ui_error)) {
+        if (app.Init(R_SUCCEEDED(rc_log) ? &log : nullptr, sd, &ui_error)) {
             if (R_SUCCEEDED(rc_log)) {
                 log.Line("ui: init ok (fonts + framebuffer ready)");
                 log.Sync();

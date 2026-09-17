@@ -12,6 +12,10 @@
 
 #include "ui/gfx.hpp"
 
+namespace acnh_manager {
+class Log; /* log.hpp */
+}
+
 namespace acnh_manager::ui {
 
 /* 常用字号(像素)。 */
@@ -22,8 +26,9 @@ inline constexpr int kFontSmall = 18;
 
 class Font {
 public:
-    /* error 非空时写入失败步骤(plInitialize 返回码、字体数量等)。 */
-    bool Init(std::string *error = nullptr);
+    /* error 非空时写入失败步骤(plInitialize 返回码、字体数量等);
+       log 非空时把每个子步骤写进日志(每步 flush,便于崩溃后取证)。 */
+    bool Init(acnh_manager::Log *log = nullptr, std::string *error = nullptr);
     void Exit();
     bool Ready() const { return !m_faces.empty(); }
 
@@ -53,8 +58,12 @@ private:
     /* 只保存指针与生命周期标记:FT_Library/FT_Face 的完整类型留在 .cpp。 */
     struct Impl;
     Impl *m_impl{nullptr};
+    acnh_manager::Log *m_log{nullptr};
     std::vector<void *> m_faces;
     std::vector<SizeCache> m_caches;
+
+    /* 写一行日志并立即 flush;m_log 为空时静默。 */
+    void Trace(const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 };
 
 }  // namespace acnh_manager::ui

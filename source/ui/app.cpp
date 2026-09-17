@@ -4,8 +4,23 @@
 #include <string>
 
 #include "manifest/manifest.hpp"
+#include "log.hpp"
 
 namespace acnh_manager::ui {
+
+void App::Trace(const char *fmt, ...) {
+    if (m_log == nullptr) {
+        return;
+    }
+    char buf[192];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    m_log->Line("%s", buf);
+    m_log->Sync();
+}
+
 namespace {
 
 /* 家族配色(与图标同源):青绿主色、奶油底、沙色点缀。 */
@@ -51,14 +66,19 @@ std::string FormatBytes(std::uint64_t size) {
 
 }  // namespace
 
-bool App::Init(FsFileSystem &sd, std::string *error) {
+bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
+    m_log = log;
     m_sd = &sd;
-    if (!m_font.Init(error)) {
+    Trace("ui: font init ...");
+    if (!m_font.Init(log, error)) {
         return false;
     }
+    Trace("ui: font init ok");
+    Trace("ui: framebufferCreate ...");
     const Result rc_create =
         framebufferCreate(&m_fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, 2);
     if (R_FAILED(rc_create)) {
+        Trace("ui: framebufferCreate rc=0x%08X", rc_create);
         if (error != nullptr) {
             char buf[96];
             std::snprintf(buf, sizeof(buf), "framebufferCreate rc=0x%08X", rc_create);
@@ -67,8 +87,11 @@ bool App::Init(FsFileSystem &sd, std::string *error) {
         m_font.Exit();
         return false;
     }
+    Trace("ui: framebufferCreate ok");
+    Trace("ui: framebufferMakeLinear ...");
     const Result rc_linear = framebufferMakeLinear(&m_fb);
     if (R_FAILED(rc_linear)) {
+        Trace("ui: framebufferMakeLinear rc=0x%08X", rc_linear);
         if (error != nullptr) {
             char buf[96];
             std::snprintf(buf, sizeof(buf), "framebufferMakeLinear rc=0x%08X", rc_linear);
@@ -78,10 +101,16 @@ bool App::Init(FsFileSystem &sd, std::string *error) {
         m_font.Exit();
         return false;
     }
+    Trace("ui: framebufferMakeLinear ok (buf=%p linear=%p)", m_fb.buf, m_fb.buf_linear);
     m_fb_ready = true;
+    Trace("ui: collecting environment ...");
     Collect();
+    Trace("ui: environment collected (exefs=%zu, manifest=%d)", m_report.exefs.size(),
+          m_have_manifest ? 1 : 0);
     /* 立刻画一帧:把"framebuffer 能画"与"能收集数据"分开暴露。 */
+    Trace("ui: first frame ...");
     Render();
+    Trace("ui: first frame done");
     return true;
 }
 
