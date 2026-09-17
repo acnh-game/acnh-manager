@@ -14,7 +14,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	acnh-manager
 BUILD		:=	build
-SOURCES		:=	source source/manifest source/install source/env source/ui source/i18n source/util
+SOURCES		:=	source source/manifest source/install source/env source/ui source/i18n source/util source/net
 DATA		:=	data
 INCLUDES	:=	source
 
@@ -45,7 +45,7 @@ ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
 # FreeType 静态库自带 harfbuzz auto-hinter、PNG 与 bzip2 支持,四者都要显式链接。
-LIBS	:= -lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx
+LIBS	:= -lfreetype -lharfbuzz -lpng -lbz2 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lnx
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 

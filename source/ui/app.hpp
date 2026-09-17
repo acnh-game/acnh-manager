@@ -13,6 +13,7 @@
 #include "install/engine.hpp"
 #include "install/gate.hpp"
 #include "manifest/manifest.hpp"
+#include "net/update.hpp"
 #include "ui/font.hpp"
 
 namespace acnh_manager::ui {
@@ -74,6 +75,7 @@ private:
     std::string m_result_error{};
     int m_result_files{0};
     bool m_result_dry_run{false};
+    std::string m_update_status{"(未检查)"};
 };
 
 }  // namespace acnh_manager::ui

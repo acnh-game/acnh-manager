@@ -52,4 +52,7 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 | `README.md` | 项目概览与当前支持范围 |
 | `docs/architecture.md` | 架构、版本识别与门控、SD 布局、环境检查(改行为前必读) |
 | `docs/tools-guide.md` | 本仓库工具的用法与登记 |
+| `docs/release-process.md` | 发布流程:导入门控、商店打包、上架与指南站同步(发布前必读) |
+| `docs/store-listing.md` | 商店条目元数据与素材要求(改对外文案前) |
+| `docs/device-acceptance.md` | 真机验收矩阵与基线环境(每次真机验收后更新) |
 | `../../docs/acnh_manager_plan.md` | 产品定稿方案(跨仓库决策) |

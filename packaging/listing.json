@@ -1,0 +1,20 @@
+{
+  "name": "acnh-manager",
+  "title": "ACNH-Manager",
+  "author": "leolovenet",
+  "category": "tool",
+  "license": "GPLv3",
+  "url": "https://github.com/leolovenet/acnh-manager",
+  "summary": {
+    "en": "Installer and manager for the Animal Crossing: New Horizons in-game agent.",
+    "zh": "《集合啦!动物森友会》游戏内 agent 的安装与管理工具。"
+  },
+  "details": {
+    "en": "ACNH-Manager installs and updates the acnh-agent files (atmosphere/contents/01006F8002326000/exefs) for Animal Crossing: New Horizons, and can uninstall them again.\n\nIt detects which game build is installed (title version + update content id, plus the running main module id when the game is open), refuses builds it does not support, verifies every file with SHA-256 before writing, and keeps an install record so one tap rolls everything back.\n\nCurrent support: ACNH 3.0.3 only. The agent itself is fail-closed: on an unknown build it installs nothing and does nothing in-game.",
+    "zh": "ACNH-Manager 负责安装与更新《集合啦!动物森友会》的 acnh-agent 文件(atmosphere/contents/01006F8002326000/exefs),并支持一键卸载回滚。\n\n它会识别当前安装的是哪个游戏构建(标题版本号 + 更新包内容 id,游戏运行时还会读运行中的 main 模块 id),不支持的构建一律拒绝;写入前逐文件校验 SHA-256,并保留安装记录以便回滚。\n\n当前支持:仅 ACNH 3.0.3。agent 自身是 fail-closed 的:遇到不认识的构建不写任何数据、游戏内也不做任何事。"
+  },
+  "changelog": {
+    "en": "0.1.0 - first public build: environment detection, install/uninstall with verification, dry-run mode, in-app update check.",
+    "zh": "0.1.0 - 首个公开版本:环境识别、带校验的安装/卸载、干跑模式、应用内检查更新。"
+  }
+}

@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <string>
 
+#include "manifest/manifest.hpp"
+
 namespace acnh_manager::ui {
 namespace {
 
@@ -187,6 +189,17 @@ void App::Run() {
         }
         if ((down & HidNpadButton_X) != 0 && m_page == Page::Settings) {
             m_dry_run = !m_dry_run;
+        }
+        /* 联网检查更新:按需触发(启动静默检查需要工作线程,M5 再挪到后台)。 */
+        if ((down & HidNpadButton_Plus) != 0 && m_page == Page::Settings) {
+            const auto check = net::CheckForUpdate(net::kDefaultManifestUrl, net::kDefaultCaPath);
+            if (check.ok) {
+                const auto parsed = manifest::Parse(check.manifest_text, "0.1.0");
+                m_update_status = parsed.ok ? std::string("清单可用,agent ") + parsed.manifest.agent.version
+                                            : std::string("清单无效: ") + parsed.error;
+            } else {
+                m_update_status = (check.skipped ? "跳过: " : "失败: ") + check.reason;
+            }
         }
         Render();
     }
@@ -454,6 +467,9 @@ void App::RenderSettings(Surface surface) {
     m_font.Draw(surface, kMargin + 24, row, kFontBody, kSubtle, Tr(i18n::StringId::LabelManifestSource));
     m_font.Draw(surface, kMargin + 240, row, kFontSmall, kText,
                 m_dev_manifest_path + (m_allow_dev_manifest ? "  [dev allowed]" : ""));
+    row += 36;
+    m_font.Draw(surface, kMargin + 24, row, kFontBody, kSubtle, "联网检查(+)");
+    m_font.Draw(surface, kMargin + 240, row, kFontSmall, kText, m_update_status, 700);
 }
 
 }  // namespace acnh_manager::ui

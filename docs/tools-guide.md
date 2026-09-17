@@ -12,6 +12,8 @@
 | `tools/make-icons.py` | 从主图 `assets/icon-org.png` 生成 `assets/icon.jpg`(256×256 JPEG,NACP/hbmenu 图标)与 `assets/icon.png`(256×256 PNG,商店图标);`--source` 可换主图;需带 Pillow 的运行时 | 换图标或商店素材时 |
 | `tools/make-dev-manifest.py` | 从 acnh-agent 的 `dist/` 产物生成开发用清单与 payload 目录(`build/scratch/dev-payload/`),保留真实的 `buildFlags`/`dirty` | M4 之前做真机干跑;发布门控默认会拒绝这类清单 |
 | `tools/deploy-nro.py --push-file <本地> --remote <相对路径>` | 把单个文件推到 `/switch/ACNH-Manager/<相对路径>`(推 payload 与开发用清单用),上传后校验大小 | 部署 NRO 之外的文件时 |
+| `tools/import-agent-release.py` | 发布门控 + 导入:校验 `dirty=false`/`buildFlags=2`/NSO 哈希/NPDM 重放校验/profile 指纹,通过后写 `packaging/agent-lock.json` 与内嵌 payload | 每次发布前;开发构建会被拒绝(设计如此) |
+| `tools/make-store-package.py` | 生成官方商店 `pkgbuild.json`、图标/横幅与本地测试仓库(`repo.json` + zip) | 打包上架材料或验证商店流程时 |
 
 主机侧测试不在 `tools/` 下,单独放在 `tests/`:`make -C tests` 编译并运行清单解析、门控判定、
 安装决策与 `state.json` 往返的单元测试(不需要 Docker 与真机)。
