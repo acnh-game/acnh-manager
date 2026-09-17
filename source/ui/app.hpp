@@ -20,7 +20,8 @@ namespace acnh_manager::ui {
 
 class App {
 public:
-    bool Init(FsFileSystem &sd);
+    /* 失败时把失败步骤与返回码写进 error(便于写日志与在控制台显示)。 */
+    bool Init(FsFileSystem &sd, std::string *error);
     void Exit();
     /* 主循环:在状态页按 B 或 + 返回。 */
     void Run();

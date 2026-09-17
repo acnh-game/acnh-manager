@@ -22,7 +22,8 @@ inline constexpr int kFontSmall = 18;
 
 class Font {
 public:
-    bool Init();
+    /* error 非空时写入失败步骤(plInitialize 返回码、字体数量等)。 */
+    bool Init(std::string *error = nullptr);
     void Exit();
     bool Ready() const { return !m_faces.empty(); }
 

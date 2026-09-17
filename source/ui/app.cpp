@@ -51,18 +51,37 @@ std::string FormatBytes(std::uint64_t size) {
 
 }  // namespace
 
-bool App::Init(FsFileSystem &sd) {
+bool App::Init(FsFileSystem &sd, std::string *error) {
     m_sd = &sd;
-    if (!m_font.Init()) {
+    if (!m_font.Init(error)) {
         return false;
     }
-    if (R_FAILED(framebufferCreate(&m_fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888,
-                                   2))) {
+    const Result rc_create =
+        framebufferCreate(&m_fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, 2);
+    if (R_FAILED(rc_create)) {
+        if (error != nullptr) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "framebufferCreate rc=0x%08X", rc_create);
+            *error = buf;
+        }
+        m_font.Exit();
         return false;
     }
-    framebufferMakeLinear(&m_fb);
+    const Result rc_linear = framebufferMakeLinear(&m_fb);
+    if (R_FAILED(rc_linear)) {
+        if (error != nullptr) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "framebufferMakeLinear rc=0x%08X", rc_linear);
+            *error = buf;
+        }
+        framebufferClose(&m_fb);
+        m_font.Exit();
+        return false;
+    }
     m_fb_ready = true;
     Collect();
+    /* 立刻画一帧:把"framebuffer 能画"与"能收集数据"分开暴露。 */
+    Render();
     return true;
 }
 
@@ -210,9 +229,11 @@ void App::Render() {
         return;
     }
     u32 stride = 0;
-    framebufferBegin(&m_fb, &stride);
+    /* framebufferMakeLinear 之后必须画在 framebufferBegin 返回的影子缓冲上,
+       framebufferEnd 再把它拷进真正的 framebuffer。 */
+    void *framebuffer = framebufferBegin(&m_fb, &stride);
     Surface surface;
-    surface.pixels = static_cast<u32 *>(m_fb.buf);
+    surface.pixels = static_cast<u32 *>(framebuffer != nullptr ? framebuffer : m_fb.buf);
     surface.width = static_cast<int>(m_fb.width_aligned);
     surface.height = static_cast<int>(m_fb.height_aligned);
     surface.stride = static_cast<int>(stride / 4);

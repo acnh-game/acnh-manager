@@ -45,25 +45,36 @@ std::uint32_t NextCodepoint(std::string_view text, std::size_t *index) {
 
 }  // namespace
 
-bool Font::Init() {
+bool Font::Init(std::string *error) {
     if (m_impl != nullptr) {
         return true;
     }
     m_impl = new Impl();
     if (FT_Init_FreeType(&m_impl->library) != 0) {
+        if (error != nullptr) {
+            *error = "FT_Init_FreeType failed";
+        }
         delete m_impl;
         m_impl = nullptr;
         return false;
     }
-    if (R_FAILED(plInitialize(PlServiceType_User))) {
+    const Result rc = plInitialize(PlServiceType_User);
+    if (R_FAILED(rc)) {
+        if (error != nullptr) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "plInitialize rc=0x%08X", rc);
+            *error = buf;
+        }
         FT_Done_FreeType(m_impl->library);
         delete m_impl;
         m_impl = nullptr;
         return false;
     }
+    int failures = 0;
     for (const PlSharedFontType type : kFontTypes) {
         PlFontData data{};
         if (R_FAILED(plGetSharedFontByType(&data, type))) {
+            ++failures;
             continue;
         }
         FT_Face face = nullptr;
@@ -71,6 +82,11 @@ bool Font::Init() {
                                static_cast<FT_Long>(data.size), 0, &face) == 0) {
             m_faces.push_back(face);
         }
+    }
+    if (m_faces.empty() && error != nullptr) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "no shared font faces (%d requests failed)", failures);
+        *error = buf;
     }
     return !m_faces.empty();
 }

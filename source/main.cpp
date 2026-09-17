@@ -103,10 +103,8 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    consoleInit(nullptr);
-    std::printf("ACNH-Manager %s\nlog: %s\n", kAppVersion, kLogPath);
-    consoleUpdate(nullptr);
-
+    /* 刻意不使用 libnx 控制台:在 hbl 环境里它会占用默认窗口,与界面 framebuffer 抢同一份状态
+       (实测会引起加载器进程崩溃)。所有诊断写 log.txt,界面自己负责显示。 */
     const Result rc_fs = fsInitialize();
     FsFileSystem sd{};
     const Result rc_sd = R_SUCCEEDED(rc_fs) ? fsOpenSdCardFileSystem(&sd) : rc_fs;
@@ -132,22 +130,31 @@ int main(int argc, char **argv) {
         }
         log.Line("=== done: press + to exit ===");
         log.Sync();
-        log.Close();
-    } else {
-        std::printf("fatal: cannot open %s (sdmc rc=0x%08X log rc=0x%08X)\n", kLogPath, rc_sd,
-                    rc_log);
-        consoleUpdate(nullptr);
     }
 
-    /* 界面模式:环境报告已经落在 log.txt,这里进入 framebuffer 界面。 */
+    /* 界面模式:日志保持打开,界面各阶段都记录,便于崩溃后取证。 */
     {
         acnh_manager::ui::App app;
-        if (app.Init(sd)) {
+        std::string ui_error;
+        if (R_SUCCEEDED(rc_log)) {
+            log.Line("ui: initialising");
+            log.Sync();
+        }
+        if (app.Init(sd, &ui_error)) {
+            if (R_SUCCEEDED(rc_log)) {
+                log.Line("ui: init ok (fonts + framebuffer ready)");
+                log.Sync();
+            }
             app.Run();
             app.Exit();
+            if (R_SUCCEEDED(rc_log)) {
+                log.Line("ui: loop exited");
+            }
         } else {
-            std::printf("ui init failed (fonts or framebuffer); press + to exit\n");
-            consoleUpdate(nullptr);
+            if (R_SUCCEEDED(rc_log)) {
+                log.Line("ui init failed: %s", ui_error.c_str());
+            }
+            /* 没有控制台可用,只能等用户按 + 退出;失败原因已写进 log.txt。 */
             PadState pad;
             padConfigureInput(1, HidNpadStyleSet_NpadStandard);
             padInitializeDefault(&pad);
@@ -156,10 +163,13 @@ int main(int argc, char **argv) {
                 if (padGetButtonsDown(&pad) & HidNpadButton_Plus) {
                     break;
                 }
-                consoleUpdate(nullptr);
             }
         }
+        if (R_SUCCEEDED(rc_log)) {
+            log.Line("app: exiting");
+            log.Sync();
+            log.Close();
+        }
     }
-    consoleExit(nullptr);
     return 0;
 }

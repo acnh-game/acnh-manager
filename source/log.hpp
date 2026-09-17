@@ -93,8 +93,13 @@ public:
         for (Sink &sink : m_sinks) {
             Write(sink, buf, static_cast<u64>(n));
         }
-        std::printf("%s", buf);
+        if (m_echo) {
+            std::printf("%s", buf);
+        }
     }
+
+    /* 关掉控制台回显:报告里含中文,而控制台只有 ASCII 字体,回显会变乱码。 */
+    void SetEcho(bool on) { m_echo = on; }
 
 private:
     struct Sink {
@@ -125,6 +130,7 @@ private:
 
     Sink m_sinks[2]{};
     size_t m_sink_count{0};
+    bool m_echo{true};
 };
 
 }  // namespace acnh_manager
