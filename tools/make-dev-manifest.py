@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""从 acnh-agent 的构建产物生成"开发用清单"与 payload 目录(M2 真机干跑用)。
+"""Build a "dev manifest" plus payload directory from acnh-agent build output (for on-device dry runs).
 
-它做三件事:
-  1. 读 acnh-agent 的 dist/version.json 与 dist/acnh-agent.nso,以及派生 NPDM;
-  2. 按当前清单契约生成 dev-manifest.json(**保留真实的 buildFlags/dirty**,不做任何美化);
-  3. 把 payload 文件复制到输出目录,文件名与清单里的 source 对齐。
+It does three things:
+It does three things:
+  1. read acnh-agent's dist/version.json, dist/acnh-agent.nso and the derived NPDM;
+  2. write dev-manifest.json following the current contract (**keeping the real buildFlags/dirty**);
 
-产物默认写到本仓库已忽略的 build/scratch/dev-payload/,再由 tools/deploy-nro.py 推到 SD:
+Output goes to the ignored build/scratch/dev-payload/, which tools/deploy-nro.py then pushes to the SD:
     /switch/ACNH-Manager/dev-manifest.json
     /switch/ACNH-Manager/payload/{subsdk9,main.npdm,acnh-agent.version}
 
-注意:开发构建的 buildFlags 含 DEV/RPC 位,清单校验默认会拒绝它——这是有意设计的
-发布门控。要在 M4 之前干跑流程,请在 App 设置页显式打开"允许开发清单"。
+Note: a development build carries the DEV/RPC bits and the manifest check refuses it by design;
+that gate is deliberate.  To dry-run the flow, allow dev manifests on the app's settings page.
 
-用法:
+Usage:
     python3 tools/make-dev-manifest.py
     python3 tools/make-dev-manifest.py --nso ../acnh-agent/dist/acnh-agent.nso \
         --npdm ../acnh-agent/dist/acnh-3.0.3-frame-hook-self/main.npdm \
@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         ("subsdk9", args.nso, f"{EXEFS}/subsdk9", nso_sha, "game"),
         ("main.npdm", args.npdm, f"{EXEFS}/main.npdm", npdm_sha, "game"),
     ]
-    # 侧车写进 payload 目录,清单里直接用它的哈希。
+    # The sidecar goes into the payload directory; the manifest simply uses its hash.
     sidecar = out_payload / "acnh-agent.version"
     sidecar.write_bytes(version_sidecar)
     files.append(("acnh-agent.version", sidecar, f"{EXEFS}/acnh-agent.version",
@@ -126,8 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     for name, _source, target, sha, _restart in files:
         print(f"  {out_payload / name}  ->  {target}  sha256={sha[:16]}…")
     if manifest["agent"]["buildFlags"] != 2 or manifest["agent"]["dirty"]:
-        print("note: 这是开发构建,发布门控会拒绝它;真机干跑请在 App 设置里打开"
-              "\"允许开发清单\"。")
+        print("note: this is a development build and the release gate will refuse it; "
+              "allow dev manifests in the app settings for an on-device dry run.")
     return 0
 
 

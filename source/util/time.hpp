@@ -5,7 +5,7 @@
 
 namespace acnh_manager::util {
 
-/* Unix 秒 → "YYYY-MM-DDTHH:MM:SSZ"(UTC)。纯函数,便于主机测试。 */
+/* Unix seconds -> "YYYY-MM-DDTHH:MM:SSZ" (UTC).  A pure function, so it is host-testable. */
 std::string FormatUnixTimeUtc(std::int64_t unix_seconds);
 
 }  // namespace acnh_manager::util

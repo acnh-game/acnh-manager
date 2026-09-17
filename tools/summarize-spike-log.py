@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""解析 M0 spike 日志,打印一份可复核的摘要。
+"""Parse an M0 spike log and print a checkable summary.
 
-纯标准库;针对 /switch/ACNH-Manager/spike.log 的格式:
-    HOS / targets 头、ns content meta 列表、exefs 覆盖快照、dmnt:cht、fsp-ldr 组合。
+Standard library only.  Expects the format of /switch/ACNH-Manager/spike.log:
+    HOS/targets header, ns content-meta list, exefs override snapshot, dmnt:cht, fsp-ldr combinations.
 
-用法:
+Usage:
     python3 tools/summarize-spike-log.py build/scratch/spike.log
 
-判定:
-    - 主判据是 ncm:update 的 latest key 版本 == 2228224 且其内容表里 type=1(Program)的
-      content id == E10617820DB06889E1638499478DA0DE;两者都可用 --expect-version /
-      --expect-program-content-id 覆盖;
-    - dmnt:cht 的 ModuleId(游戏在跑时)作为字节级复核,默认期望
-      FF1D1C05670DB6021C85B624A710B963,可用 --expect-id 覆盖;
-    - fsp-ldr 相关行只作为历史信息打印:该路径在实测中被 Atmosphere 拒绝,不参与判定。
+Verdict:
+    - primary: ncm:update latest-key version == 2228224 and its type=1 (Program) content id ==
+      E10617820DB06889E1638499478DA0DE; override with --expect-version / --expect-program-content-id;
+    - byte-level cross-check: dmnt:cht ModuleId (while the game runs), expected
+      FF1D1C05670DB6021C85B624A710B963; override with --expect-id;
+    - fsp-ldr lines are informational only: Atmosphere refused that path on real hardware.
+    - fsp-ldr lines are informational only: Atmosphere refused that path on real hardware.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ DEFAULT_EXPECT_VERSION = 2228224
 DEFAULT_EXPECT_PROGRAM_CONTENT_ID = "e10617820db06889e1638499478da0de"
 DEFAULT_EXPECT_NPDM = "0fc17cae37a3ff9337301b30cc2dc8a785248b0a0011503ca197f46d996e6a94"
 
-# 标签形如 "code[base/patch-storage attr=None]",内部含空格,所以按第一个 ": " 切分。
-# printf 的 %#x 对 0 不输出 "0x" 前缀,所以结果码要同时接受 0x… 与纯十六进制。
+# Labels look like "code[base/patch-storage attr=None]" and contain spaces, so split on the first ": ".
+# printf's %#x prints no "0x" for zero, so accept both "0x..." and bare hex.
 RE_CALL = re.compile(r"^(?P<label>.+?): fsldrOpenCodeFileSystem rc=(?P<rc>(?:0x)?[0-9a-f]+)")
 RE_MODULE = re.compile(r"^(?P<label>.+?): /main NSO0 module_id=(?P<id>[0-9A-Fa-f]+)")
 RE_NPDM = re.compile(r"^(?P<label>.+?): /main\.npdm size=(?P<size>\d+) sha256=(?P<sha>[0-9a-f]+)")
@@ -47,7 +47,7 @@ RE_NCM_CONTENT = re.compile(r"^\s+content\[(?P<i>\d+)\] id=(?P<id>[0-9A-Fa-f]+) 
 
 
 def id_matches(actual: str, expect: str) -> bool:
-    """ModuleId 的 0x20 字节里只有前 16 字节有效(其余补零),按前缀比较。"""
+    """Only the first 16 of the ModuleId's 0x20 bytes are meaningful, so compare by prefix."""
     a, e = actual.lower(), expect.lower()
     return a.startswith(e) or e.startswith(a)
 
@@ -132,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {label}")
         print(f"    root entries ({count}): {names}")
         print(f"    module_id: {mid}")
-        print(f"      first 8 bytes (cheat 口径): {mid[:16].upper()}  [{id_ok} vs expected {expect_id.upper()}]")
+        print(f"      first 8 bytes (cheat view): {mid[:16].upper()}  [{id_ok} vs expected {expect_id.upper()}]")
         print(f"    main.npdm: {npdm_text}"
               + (f"  [MATCH expected {args.expect_npdm_sha256[:16]}…]"
                  if npdm and npdm[1] == args.expect_npdm_sha256 else ""))

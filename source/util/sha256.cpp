@@ -99,7 +99,8 @@ void Sha256::Update(const void *data, std::size_t size) {
 
 std::array<std::uint8_t, 32> Sha256::Finish() {
     const std::uint64_t bit_size = m_total_size * 8;
-    /* 填充到 buffer_size == 56(mod 64):先补 0x80,再补 0,最后写 8 字节大端位长。 */
+    /* Pad to buffer_size == 56 (mod 64): a 0x80 byte, then zeros, then the 8-byte
+       big-endian bit length. */
     std::uint8_t padding[72]{};
     padding[0] = 0x80;
     const std::size_t pad_len =

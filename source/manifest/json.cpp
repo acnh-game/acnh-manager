@@ -133,7 +133,7 @@ private:
                         return false;
                     }
                     if (code >= 0xD800 && code <= 0xDBFF) {
-                        /* 代理对:高代理必须紧跟 \uXXXX 低代理。 */
+                        /* Surrogate pair: a high surrogate must be followed by \uXXXX low. */
                         if (m_text.substr(m_pos, 2) != "\\u") {
                             return Fail("lone surrogate");
                         }

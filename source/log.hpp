@@ -8,16 +8,17 @@
 
 namespace acnh_manager {
 
-/* SD 卡上的行式日志。直接用 fs* API,不依赖 devoptab 挂载。
+/* Line-based log file on the SD card.  Uses the fs* API directly, no devoptab mount.
 
-   两个关键约定:
-   1. **每写一行都 打开 → 写入 → flush → 关闭**:这样日志在 App 运行期间也能被 FTP 读取
-      (保持打开时 fs 会返回 "Device or resource busy"),崩溃时也不会丢缓冲;
-   2. fs 不允许写到 EOF 之外,写入前必须先把文件撑到目标长度(SetSize),
-      顺序与 Sphaira 的 write_entire_file 一致。 */
+   Two rules matter:
+   1. **every line is opened -> written -> flushed -> closed**: that keeps the log readable
+      over FTP while the app runs (an open handle makes fs answer "Device or resource
+      busy") and loses nothing if we crash;
+   2. fs cannot write past EOF, so the file is grown to the target length first (SetSize),
+      exactly like Sphaira's write_entire_file. */
 class Log {
 public:
-    /* truncate = true:重建文件(每次运行的当前日志);false:追加(跨运行保留)。 */
+    /* truncate = true: recreate the file (this run's log); false: append (kept across runs). */
     Result Open(FsFileSystem &sd, const char *path, bool truncate) {
         if (m_sink_count >= kMaxSinks || path == nullptr) {
             return MAKERESULT(Module_Libnx, LibnxError_BadInput);
@@ -47,14 +48,15 @@ public:
 
     ~Log() { Close(); }
 
-    /* 句柄不保持打开,这里只标记结束。 */
+    /* The handle is never kept open; this only marks the end. */
     void Close() {
         for (Sink &sink : m_sinks) {
             sink.open = false;
         }
     }
 
-    /* 写入路径逐行 flush+close,无需额外动作;保留此接口给调用方语义用。 */
+    /* The write path flushes and closes per line, so nothing to do here; kept for API
+       symmetry. */
     void Sync() {}
 
     void Line(const char *fmt, ...) __attribute__((format(printf, 2, 3))) {
@@ -79,7 +81,8 @@ public:
         }
     }
 
-    /* 关掉控制台回显(报告含中文,控制台只有 ASCII 字体会变乱码)。 */
+    /* Turn console echo off (the report carries non-ASCII text and the console font is
+       ASCII only). */
     void SetEcho(bool on) { m_echo = on; }
 
 private:

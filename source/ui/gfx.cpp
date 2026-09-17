@@ -4,8 +4,57 @@
 
 namespace acnh_manager::ui {
 
+Surface Surface::Clipped(int x, int y, int w, int h) const {
+    Surface out = *this;
+    if (w <= 0 || h <= 0) {
+        return out;
+    }
+    const int x0 = clip_w > 0 ? std::max(clip_x, x) : x;
+    const int y0 = clip_h > 0 ? std::max(clip_y, y) : y;
+    const int x1 = clip_w > 0 ? std::min(clip_x + clip_w, x + w) : x + w;
+    const int y1 = clip_h > 0 ? std::min(clip_y + clip_h, y + h) : y + h;
+    out.clip_x = x0;
+    out.clip_y = y0;
+    out.clip_w = x1 - x0;
+    out.clip_h = y1 - y0;
+    return out;
+}
+
+Bounds DrawBounds(Surface surface) {
+    Bounds bounds;
+    bounds.x0 = surface.clip_w > 0 ? std::max(0, surface.clip_x) : 0;
+    bounds.y0 = surface.clip_h > 0 ? std::max(0, surface.clip_y) : 0;
+    bounds.x1 = surface.clip_w > 0 ? std::min(surface.width, surface.clip_x + surface.clip_w)
+                                   : surface.width;
+    bounds.y1 = surface.clip_h > 0 ? std::min(surface.height, surface.clip_y + surface.clip_h)
+                                   : surface.height;
+    return bounds;
+}
+
+Surface Surface::Subview(int x, int y, int w, int h) const {
+    Surface out;
+    if (pixels == nullptr || stride <= 0 || w <= 0 || h <= 0) {
+        return out;
+    }
+    const Bounds bounds = DrawBounds(*this);
+    const int x0 = std::max(bounds.x0, x);
+    const int y0 = std::max(bounds.y0, y);
+    const int x1 = std::min(bounds.x1, x + w);
+    const int y1 = std::min(bounds.y1, y + h);
+    if (x0 >= x1 || y0 >= y1) {
+        return out;
+    }
+    out.pixels = pixels + static_cast<std::ptrdiff_t>(y0) * stride + x0;
+    out.stride = stride;
+    out.width = x1 - x0;
+    out.height = y1 - y0;
+    return out;
+}
+
 void BlendPixel(Surface surface, int x, int y, Color color) {
-    if (x < 0 || y < 0 || x >= surface.width || y >= surface.height || surface.pixels == nullptr) {
+    const Bounds bounds = DrawBounds(surface);
+    if (x < bounds.x0 || y < bounds.y0 || x >= bounds.x1 || y >= bounds.y1 ||
+        surface.pixels == nullptr) {
         return;
     }
     u32 *row = surface.pixels + static_cast<std::ptrdiff_t>(y) * surface.stride;
@@ -31,10 +80,14 @@ void FillRect(Surface surface, int x, int y, int w, int h, Color color) {
     if (surface.pixels == nullptr || w <= 0 || h <= 0) {
         return;
     }
-    const int x0 = std::max(0, x);
-    const int y0 = std::max(0, y);
-    const int x1 = std::min(surface.width, x + w);
-    const int y1 = std::min(surface.height, y + h);
+    const Bounds bounds = DrawBounds(surface);
+    const int x0 = std::max(bounds.x0, x);
+    const int y0 = std::max(bounds.y0, y);
+    const int x1 = std::min(bounds.x1, x + w);
+    const int y1 = std::min(bounds.y1, y + h);
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
     if (color.a >= 255) {
         const u32 packed = RGBA8(color.r, color.g, color.b, 255);
         for (int row = y0; row < y1; ++row) {

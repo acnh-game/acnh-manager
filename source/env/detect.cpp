@@ -52,7 +52,7 @@ bool ReadTextFile(FsFileSystem &sd, const char *path, std::string *out) {
     return true;
 }
 
-/* dmnt:cht 的元数据布局(与 Atmosphere 头文件一致,sizeof == 0x70)。 */
+/* dmnt:cht metadata layout (matches Atmosphere's header, sizeof == 0x70). */
 struct CheatProcessMetadata {
     u64 process_id;
     u64 program_id;
@@ -78,7 +78,7 @@ void CollectDmnt(EnvironmentReport *report) {
         return;
     }
     if (metadata.program_id != kAcnhTitleId) {
-        return; /* 挂着的是别的应用,不作为判据 */
+        return; /* something else is running; not a verdict input */
     }
     char hex[0x21];
     Hex(hex, metadata.main_nso_module_id, 16);
@@ -158,7 +158,7 @@ EnvironmentReport Collect(FsFileSystem &sd) {
     report.applet_type = static_cast<int>(appletGetAppletType());
     report.build.title_id = "01006F8002326000";
 
-    /* ① ns:内容表(版本号与 Patch 存储位置)+ 是否有应用在运行 */
+    /* 1. ns: content table (version and patch storage) + whether an app is running */
     if (R_SUCCEEDED(nsInitialize())) {
         NsApplicationContentMetaStatus status[16]{};
         s32 count = 0;
@@ -183,15 +183,15 @@ EnvironmentReport Collect(FsFileSystem &sd) {
         report.problems += "nsInitialize failed";
     }
 
-    /* ② ncm:更新标题的 Program 内容 id(门控主判据) */
+    /* 2. ncm: the update title's Program content id (the gate's primary input) */
     CollectNcm(&report);
 
-    /* ③ dmnt:cht:游戏在运行时的 main ModuleId(加固判据) */
+    /* 3. dmnt:cht: main ModuleId while the game runs (the strengthened input) */
     if (report.application_running) {
         CollectDmnt(&report);
     }
 
-    /* 覆盖配置:启动游戏时要不要按键 */
+    /* Override configuration: whether a key must be held at launch */
     std::string override_text;
     if (ReadTextFile(sd, kOverrideConfig, &override_text)) {
         report.have_override_config = true;
@@ -207,7 +207,7 @@ EnvironmentReport Collect(FsFileSystem &sd) {
         report.advice = Advise(OverrideConfig{}, OverrideKey{});
     }
 
-    /* 安装现状与旧金手指检测 */
+    /* Current install state and the legacy-cheat check */
     report.exefs = ListDirectory(sd, kExefsDir);
     for (const ExefsFile &file : ListDirectory(sd, kCheatsDir)) {
         if (file.name.size() == 36 && file.name.compare(32, 4, ".txt") == 0) {

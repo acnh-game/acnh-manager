@@ -61,6 +61,27 @@ fsFileFlush(&file) / fsFileGetSize(&file, &size)   # 收尾与自检
 校验后再改名落地。参考实现:`src/sphaira/source/fs.cpp` 的 `write_entire_file`(CreateFile →
 OpenFile → SetSize → Write)。
 
+### 4.1 路径必须是以 `/` 开头的绝对路径
+
+`fs*` 系列只接受绝对路径。清单里的 `files[].target` 按契约是相对路径(`atmosphere/...`,
+`manifest::IsSafeTarget` 明确禁止前导 `/`),**直接把它交给 `fsFsCreateFile` 会被 FS 拒绝**:
+真机实测返回 `0x2EEA02`(module=2 FS,description=6005),而且只有 `create` 会失败 —— 读、校验
+(干跑)全都正常,表现为"干跑 3/3 通过、真装第一步就失败"。
+
+写盘探针(`/switch/ACNH-Manager/dev-writeprobe`,见第 6.4 节)在同一台机器上给出的矩阵:
+
+| 目标 | 路径写法 | create 结果 |
+|---|---|---|
+| `/switch/ACNH-Manager/` | 绝对 | `0x00000000`,write/read/delete 全通过 |
+| `switch/ACNH-Manager/` | 相对 | `0x002EEA02` |
+| `/atmosphere/contents/01006F8002326000/exefs/` | 绝对 | `0x00000000`,write/read/delete 全通过 |
+| `atmosphere/contents/01006F8002326000/exefs/` | 相对 | `0x002EEA02` |
+
+结论有两条:①相对路径就是这个错误码的唯一原因;②**applet 模式可以写 SD 卡,包括游戏目录**
+(所以不需要为了写盘去要 application 模式)。引擎因此把所有落到 `fs*` 的路径都过一遍
+`install::AbsolutePath()`(读、写、哈希、改名、删除、建目录),清单里的相对 target 只在
+`state.json` 与清单里保持相对形态。
+
 ## 5. M0 环境探测(spike)
 
 M0 的目标是在真机上把上节调用链钉死,并留下可复核日志。行为:
@@ -141,10 +162,18 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 
 - 主机测试:`make -C tests`(覆盖 JSON 解析/拒绝、清单校验、路径安全、版本比较、门控七种状态、
   安装五种动作、state 往返、覆盖键语义多种情形)。
-- **M1 阶段 App 不内置发布清单**,状态页会显示"清单不可用";清单与内嵌 payload 由 M4 的导入工具
-  从 acnh-agent 的发布产物生成(发布门控见 `../../docs/acnh_manager_plan.md` 第 8 节)。
+- 清单与内嵌 payload 由 M4 的导入工具从 acnh-agent 的发布产物生成(发布门控见
+  `../../docs/acnh_manager_plan.md` 第 8 节)。**没导入时**状态页显示"未内置(等待发布导入)",App 仍能
+  启动并显示环境,只是无法安装。
 - **M0 探针仍随 App 保留**:在 SD 卡上创建空文件 `/switch/ACNH-Manager/dev-probe` 时,App 会在
   环境报告之后额外运行 M0 取证的探针(写 `spike.log`),用于复核 `fsp-ldr` 等已否路线。
+- **写盘探针**:存在 `/switch/ACNH-Manager/dev-writeprobe` 时,启动阶段会对"绝对/相对 × 普通目录/
+  游戏目录"四种组合各跑一遍 create→SetSize→write→flush→read→delete,把每步返回码写进 `log.txt`
+  (见第 4.1 节)。它只创建并删除自己的临时文件,不碰已有文件;定位完写盘问题后应把开关删掉。
+- **分段暂停**:存在 `/switch/ACNH-Manager/dev-pause` 时,首帧之前等一次 `+`,之后每画完一段
+  (填充/页眉/正文/页脚)再等一次 —— 用来逐段定位渲染崩溃。开关删掉即恢复成"启动直接出界面"。
+- **文本界面**:存在 `/switch/ACNH-Manager/ui-text` 时,不走图形界面,退回控制台文本界面
+  (`source/ui/text_ui.cpp`)。图形路径排查时的兜底入口。
 
 ## 7. 界面层(M1)
 
@@ -154,14 +183,45 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 | `source/ui/font.*` | FreeType + 主机共享字体(`plGetSharedFontByType`,Standard/简中/扩展简中/繁中/韩文),带按字号分组的字形缓存;缺字自动换下一款字体 |
 | `source/ui/app.*` | 页面状态机(状态 / 设置)、输入处理、卡片式布局与渲染 |
 | `source/i18n/strings.*` | 简中 / English 双语文案表(`StringId` 枚举 + 两列),由主机测试保证两边都补齐 |
+| `source/util/text_wrap.hpp` | 折行规则(纯函数,主机可测):拉丁文本按空格断词、超长单词才中段断、CJK 按字断、`\n` 强制换行 |
 
 - 链接依赖:`-lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx`(portlibs 里的静态 FreeType 自带
   harfbuzz auto-hinter、PNG 与 bzip2 支持,四个库都必须显式列出),头文件在
   `$(PORTLIBS)/include/freetype2`。
-- 渲染循环:`framebufferCreate` + `framebufferMakeLinear`,每帧 `framebufferBegin/End`;
-  分辨率取 `width_aligned/height_aligned`(1280×720 起)。
+- 渲染循环:`framebufferCreate` + `framebufferMakeLinear`,每帧 `framebufferBegin/End`。
+  **绘制高度只能取 `win->height`,不能取 `height_aligned`**:线性影子缓冲是按窗口高度分配的
+  (`stride * ((win->height + 7) & ~7)`),`height_aligned` 却是 GOB 向上取整(720 → 768 行);
+  按它绘制每帧会越界写堆 48 行(约 245 KB),破坏与 hbl 加载器共享的进程堆,表现为
+  "进入游戏或按键就整机崩溃"。宽度用 `width_aligned` 是安全的(1280 本来就对齐)。
 - 交互:`A` 刷新环境(设置页为切换语言)、`L/R` 切页、`B` 或 `+` 退出;安装/确认/进度/结果页
   在 M2 用同一套渲染接入。
+
+### 7.1 绘制与排版约定
+
+界面出过的两类事故都来自"约定没写下来",所以这里定死:
+
+- **两套 Surface,坐标约定不同,名字即约定**。`Clipped(x, y, w, h)` 只收缩绘制范围,
+  坐标系仍是绝对像素(用来给整页兜底,例如"不许画到页脚上");`Subview(x, y, w, h)`
+  把原点挪到该矩形左上角,子视图内用**局部**坐标(用来把一段内容锁进卡片/列表)。
+  两者都与上一层裁剪自动求交,所以页级限制会传递下去。混用两者会让整块内容被静默裁掉
+  (卡片框还在、正文全空),因此卡片正文、文件列表一律用 `Subview`。
+- **折行只有一份实现**。`ui/font.*` 的 `Wrap` 是唯一折行逻辑,`Draw`、`Measure`、
+  `LineCount`、`Fit` 都从它派生,保证"量出来的行数"与"画出来的行数"一致。
+  布局按量出来的行数算行高和卡片高度,而不是写死行距 —— 长值折行后压到下一行、
+  或正文越过卡片下边框,根因都是这两者不一致。
+- **断词规则在 `util/text_wrap.hpp`**:拉丁文本在空格处断(放不下的词整体下移),
+  只有单个超长单词才允许中段断;CJK 没有空格,保持按字断。这条规则单独抽成纯函数是因为
+  它无法靠眼睛验收 —— 真机出现过英文句子被劈成 `Note: hol` / `ding R` 的情况,
+  现在有主机测试逐条钉住(含这个具体用例)。
+- **长文本按行截断,完整内容进日志**。`Fit(text, size, width, max_lines)` 超出时在末行
+  补省略号;清单校验原文这类开发者向信息用小一号字(`Row::size`),界面只画得下的部分,
+  完整文本写进 `log.txt`。
+- **界面语言是进程级的**。`i18n::SetLanguage()` 跟着界面切换走,安装引擎、网络层等
+  非 UI 模块用 `i18n::Text` / `i18n::Format` 取文案;凡是**采集时就拼好的句子**
+  (如覆盖键建议)必须在切语言后重新采集一次,否则会留着旧语言的文本(实测过)。
+- **页面装不下时先收紧行距**。三张卡片的行间距在 `kRowGap`(默认 8)与 0 之间自动下调;
+  卡片高度由内容算出,最后一张补满剩余空间但绝不越过页脚。日志会打印每次布局的实际值
+  (`status: layout row_gap=… needed=… available=…`),判断"排版是不是被压紧了"看这一行。
 
 ## 8. 安装 / 卸载引擎(M2)
 
@@ -189,12 +249,16 @@ payload 读取 → 大小比对 → sha256 比对(先验后写)
 
 ### 8.3 清单来源与"开发用清单"
 
-- 发布形态由 M4 的导入工具把清单与 payload 内嵌进 NRO;
-- M2 阶段 App 读取 SD 上的开发用文件:`/switch/ACNH-Manager/dev-manifest.json` 与
-  `/switch/ACNH-Manager/payload/`,由 `tools/make-dev-manifest.py` 从 acnh-agent 的构建产物生成。
+- **正式通道(内嵌)**:`tools/import-agent-release.py` 通过门控后把清单与 payload 写入 `data/`,
+  构建时由 devkitPro 的 bin2s 变成 NRO 里的 `.rodata` 符号(`source/payload/embedded.*` 读它们)。
+  所以正式安装完全离线,且不需要 romfs、devoptab 或任何服务 —— 这条路径在本机上被反复验证是安全的。
+- **开发通道(SD)**:`/switch/ACNH-Manager/dev-manifest.json` 与 `/switch/ACNH-Manager/payload/`
+  由 `tools/make-dev-manifest.py` 从 acnh-agent 的构建产物生成;只在正式通道不可用、且设置页显式
+  允许开发清单时才会被读到。App 用两处文案区分来源("已内置(NRO 自带)" / "开发用清单文件")。
 - 清单校验默认要求"发布形态"(`dirty=false` 且 `buildFlags` 只含语义钩子位);开发构建会被
   **默认拒绝**并在状态页显示原因。要在 M4 之前干跑,必须在设置页显式打开"允许开发清单",
   此时 UI 会标注清单来自开发文件 —— 这是有意的:发布门控不接受非发布产物。
+- payload 与清单同源:内嵌清单配内嵌 payload,开发清单配 SD 上的 payload 目录,不会混用。
 - `干跑模式`(设置页默认开启)只做校验与统计,不写任何文件;确认安装页会同时显示将要写入的
   文件、大小与 sha256 前缀。
 
@@ -209,6 +273,6 @@ payload 读取 → 大小比对 → sha256 比对(先验后写)
 - **只检查,不决策**:拿不到清单时静默保留内置/本地清单,并记录原因;失败绝不影响安装门控;
 - **不做"关闭证书校验"的降级**:没有 CA 文件就直接跳过并说明(`跳过: 缺少 CA 文件`);
 - 目标是 `https://lextuo.com/acnh-chat-code/guide/agent-manifest.json`(与指南站、商店包同一份);
-- CA 来源:`/switch/ACNH-Manager/ca.pem`,或在 M4 收尾时内嵌进 romfs 二选一;
+- CA 来源:内嵌进 NRO(与 payload 同一条 bin2s 通道,不引入 romfs)或读 `/switch/ACNH-Manager/ca.pem`;
 - 触发方式:目前是设置页按 `+` 手动触发(阻塞式,数秒)。**启动时静默检查需要工作线程**,
   留到 M5 与界面一起收尾。

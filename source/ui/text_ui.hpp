@@ -1,14 +1,14 @@
 #pragma once
 
-/* 文本界面(默认形态)。
+/* Console text UI (the fallback form).
 
-   为什么存在:在 hbl/applet 环境下,自制程序自己新建 framebuffer 的图形界面在本机上会
-   让加载器进程崩溃(见 docs/device-acceptance.md 的崩溃调查记录);而 libnx 控制台路径
-   已被 M0/M1-A 两版实测证明可用。所以默认走控制台文本界面,图形界面用开关启用:
-   `/switch/ACNH-Manager/ui-graphics` 存在时尝试图形界面。
-
-   控制台字体是 ASCII 8×8,因此界面文案只用英文;中文说明留在 log.txt 里。 */
-
+   Why it exists: in this hbl/applet environment, a homebrew app creating its own
+   framebuffer used to crash the loader process (see the crash investigation in
+   docs/device-acceptance.md), while the libnx console path was proven usable in M0/M1-A.
+   The console UI is what runs by default; the graphics one is opt-in:
+   `/switch/ACNH-Manager/ui-graphics` enables it.
+   The console font is ASCII 8x8, so the text UI speaks English only; Chinese notes stay in
+   log.txt. */
 #include <switch.h>
 
 namespace acnh_manager {
@@ -19,10 +19,10 @@ namespace acnh_manager::ui {
 
 class TextUi {
 public:
-    /* 返回 false 表示无法初始化控制台。 */
+    /* false means the console could not be initialized. */
     bool Init();
     void Exit();
-    /* 主循环:按 B 或 + 退出。 */
+    /* Main loop: B or + exits. */
     void Run(acnh_manager::Log *log, FsFileSystem &sd);
 };
 

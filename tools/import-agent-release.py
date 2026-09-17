@@ -1,27 +1,37 @@
 #!/usr/bin/env python3
-"""把 acnh-agent 的发布产物导入本仓库(发布门控)。
+"""Import an acnh-agent release into this repo (release gate).
 
-门控(全部通过才落盘,任何一条不过就拒绝并说明原因):
-  1. dist/version.json 的 dirty == false;
-  2. buildFlags == 2(只含语义钩子位;DEV / RPC server / 其他实验位一律拒绝);
+Gate (everything must pass before anything is written; failures say why):
+  1. dist/version.json says dirty == false;
+  2. buildFlags == 2 (semantic hook only; DEV / RPC server / any other bit is refused);
   3. sha256(dist/acnh-agent.nso) == version.json.sha256;
-  4. 派生的 main.npdm 通过 acnh-agent 的 make-minimal-npdm.py --verify;
-  5. profile 的 (titleId, buildId) 与 --content-id/--build-id 一致。
+  4. the derived main.npdm passes acnh-agent's make-minimal-npdm.py --verify;
+  5. the profile's (titleId, buildId) matches --content-id/--build-id.
 
-通过后写入:
-  packaging/agent-lock.json              发布锁(版本/commit/开关/哈希/构建指纹)
-  source/payload/<agentVersion>/...      内嵌 payload(随 NRO 编译时打进 romfs)
-  source/payload/<agentVersion>/manifest.json  内嵌发布清单
+On success it writes three things, all of them assets of this repo, and never touches
+acnh-agent's dist/:
+  packaging/agent-lock.json              release lock (version/commit/knobs/hashes/profile)
+  packaging/agent/<agentVersion>/        release record, original file names kept:
+                                           subsdk9 / main.npdm / acnh-agent.version / manifest.json
+  data/manifest.bin                      embedded release manifest (json text)
+  data/<name>.bin                        embedded payload files (renamed build inputs)
+`data/` is devkitPro's DATA directory: the build turns each file into a symbol of the same
+name (`subsdk9.bin` -> `subsdk9_bin` / `subsdk9_bin_size`) and links it into the NRO's
+.rodata.  That is why the official channel needs neither romfs nor devoptab nor any service,
+and why it installs offline.  Files in DATA must carry the .bin suffix (the build rule is
+`%.bin.o: %.bin`); dots in the name become underscores, so the embedded name is
+`<source from the manifest, dots replaced>.bin`.
 
-用法:
-    python3 tools/import-agent-release.py \
-        --nso ../acnh-agent/dist/acnh-agent.nso \
-        --npdm ../acnh-agent/dist/acnh-3.0.3-frame-hook-self/main.npdm \
-        --version-json ../acnh-agent/dist/version.json \
+Usage (--nso/--npdm/--version-json are all required: a release must come from artifacts
+built just now, never from whatever sits in acnh-agent/dist; run tools/release.sh for the
+whole chain):
+
+    python3 tools/import-agent-release.py \\
+        --nso <build output>/acnh-agent.nso \\
+        --npdm <derived dir>/main.npdm \\
+        --version-json <build output>/version.json \\
         --original-npdm ../acnh-agent/research/acnh-3.0.3/exefs/*/Program\\ #0/0/main.npdm
 """
-
-from __future__ import annotations
 
 import argparse
 import hashlib
@@ -30,14 +40,12 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKSPACE = REPO_ROOT.parent.parent
 AGENT = WORKSPACE / "src" / "acnh-agent"
 
-DEFAULT_NSO = AGENT / "dist" / "acnh-agent.nso"
-DEFAULT_NPDM = AGENT / "dist" / "acnh-3.0.3-frame-hook-self" / "main.npdm"
-DEFAULT_VERSION_JSON = AGENT / "dist" / "version.json"
 DEFAULT_ORIGINAL_NPDM = AGENT / "research" / "acnh-3.0.3" / "exefs"
 DEFAULT_NPDM_TOOL = AGENT / "tools" / "make-minimal-npdm.py"
 DEFAULT_PROFILES = AGENT / "tools" / "profiles.json"
@@ -67,19 +75,29 @@ def fail(message: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--nso", type=pathlib.Path, default=DEFAULT_NSO)
-    parser.add_argument("--npdm", type=pathlib.Path, default=DEFAULT_NPDM)
-    parser.add_argument("--version-json", type=pathlib.Path, default=DEFAULT_VERSION_JSON)
+    parser.add_argument("--nso", type=pathlib.Path,
+                        help="dist/acnh-agent.nso built just now (no stale artifacts)")
+    parser.add_argument("--npdm", type=pathlib.Path,
+                        help="main.npdm derived by make-minimal-npdm.py")
+    parser.add_argument("--version-json", type=pathlib.Path,
+                        help="dist/version.json built just now")
     parser.add_argument("--original-npdm", type=pathlib.Path, default=None,
-                        help="原始 ACNH main.npdm(用于重放校验派生 NPDM)")
+                        help="original ACNH main.npdm (used to replay-check the derived NPDM)")
     parser.add_argument("--npdm-tool", type=pathlib.Path, default=DEFAULT_NPDM_TOOL)
     parser.add_argument("--profiles", type=pathlib.Path, default=DEFAULT_PROFILES)
     parser.add_argument("--content-id", default=DEFAULT_CONTENT_ID)
     parser.add_argument("--build-id", default=DEFAULT_BUILD_ID)
     parser.add_argument("--app-min-version", default="0.1.0")
-    parser.add_argument("--dry-run", action="store_true", help="只跑门控,不落盘")
+    parser.add_argument("--dry-run", action="store_true", help="run the gate only, write nothing")
     args = parser.parse_args(argv)
 
+    missing = [flag for flag, value in (("--nso", args.nso), ("--npdm", args.npdm),
+                                        ("--version-json", args.version_json))
+               if value is None]
+    if missing:
+        print(f"error: {' '.join(missing)} required; run tools/release.sh for the whole chain",
+              file=sys.stderr)
+        return 1
     for path in (args.nso, args.npdm, args.version_json):
         if not path.is_file():
             print(f"error: missing input {path}", file=sys.stderr)
@@ -98,11 +116,29 @@ def main(argv: list[str] | None = None) -> int:
     npdm_sha = sha256_of(args.npdm)
 
     if args.original_npdm is not None:
+        if not args.original_npdm.is_file():
+            return fail(f"original npdm not found: {args.original_npdm}")
+        # Structural check, including "every svc bit we need is granted".
         result = subprocess.run([sys.executable, str(args.npdm_tool), "--verify",
                                  str(args.npdm)], capture_output=True, text=True)
         if result.returncode != 0:
             return fail("make-minimal-npdm.py --verify failed:\n" +
                         (result.stdout + result.stderr).strip())
+        # Replay: derive once more from the same original NPDM and require the result to be
+        # byte-identical to the file we were handed -- so "the derived NPDM matches the
+        # original" is computed, not promised.
+            replay = subprocess.run([sys.executable, str(args.npdm_tool),
+                                     "--input", str(args.original_npdm), "--outdir", tmp],
+                                    capture_output=True, text=True)
+            if replay.returncode != 0:
+                return fail("make-minimal-npdm.py replay failed:\n" +
+                            (replay.stdout + replay.stderr).strip())
+            derived = pathlib.Path(tmp) / "main.npdm"
+            if not derived.is_file():
+                return fail("replay did not produce main.npdm")
+            derived_sha = sha256_of(derived)
+            if derived_sha != npdm_sha:
+                return fail(f"NPDM replay mismatch: derived={derived_sha} given={npdm_sha}")
 
     profile_note = ""
     if args.profiles.is_file():
@@ -142,12 +178,30 @@ def main(argv: list[str] | None = None) -> int:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text(json.dumps(lock, indent=2) + "\n")
 
-    payload_dir = REPO_ROOT / "source" / "payload" / agent_version
-    payload_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(args.nso, payload_dir / "subsdk9")
-    shutil.copyfile(args.npdm, payload_dir / "main.npdm")
-    sidecar = payload_dir / "acnh-agent.version"
-    sidecar.write_bytes(args.version_json.read_bytes())
+    # (1) Release record: original file names, packaging/agent/<version>/, held by this repo
+    #     (these four files are what the guide site will host).
+    record_dir = REPO_ROOT / "packaging" / "agent" / agent_version
+    record_dir.mkdir(parents=True, exist_ok=True)
+    record_files = {
+        "subsdk9": record_dir / "subsdk9",
+        "main.npdm": record_dir / "main.npdm",
+        "acnh-agent.version": record_dir / "acnh-agent.version",
+    }
+    shutil.copyfile(args.nso, record_files["subsdk9"])
+    shutil.copyfile(args.npdm, record_files["main.npdm"])
+    record_files["acnh-agent.version"].write_bytes(args.version_json.read_bytes())
+
+    # (2) Embedded payload: renamed copies of the record above, placed in devkitPro's DATA
+    #     directory so bin2s turns them into .rodata symbols at build time.
+    data_dir = REPO_ROOT / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    payload_files = {
+        "subsdk9": data_dir / "subsdk9.bin",
+        "main.npdm": data_dir / "main_npdm.bin",
+        "acnh-agent.version": data_dir / "acnh_agent_version.bin",
+    }
+    for name, path in payload_files.items():
+        shutil.copyfile(record_files[name], path)
 
     manifest = {
         "schema": 1,
@@ -191,20 +245,30 @@ def main(argv: list[str] | None = None) -> int:
                         "name": "acnh-agent.version",
                         "source": "acnh-agent.version",
                         "target": f"{EXEFS}/acnh-agent.version",
-                        "size": sidecar.stat().st_size,
-                        "sha256": sha256_of(sidecar),
+                        "size": payload_files["acnh-agent.version"].stat().st_size,
+                        "sha256": sha256_of(payload_files["acnh-agent.version"]),
                         "restart": "none",
                     },
                 ],
             }
         ],
     }
-    (payload_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    # The record keeps the original file name; the embedded copy is renamed manifest.bin.
+    manifest_text = json.dumps(manifest, indent=2) + "\n"
+    (record_dir / "manifest.json").write_text(manifest_text)
+    manifest_path = data_dir / "manifest.bin"
+    manifest_path.write_text(manifest_text)
 
     print(f"imported agent {agent_version} (commit {version.get('commit')}, "
           f"buildFlags {version.get('buildFlags')})")
     print(f"  lock:    {lock_path.relative_to(REPO_ROOT)}")
-    print(f"  payload: {payload_dir.relative_to(REPO_ROOT)}")
+    print(f"  record:  {record_dir.relative_to(REPO_ROOT)}/ "
+          f"(subsdk9 / main.npdm / acnh-agent.version / manifest.json)")
+    for name, path in payload_files.items():
+        print(f"  payload: {path.relative_to(REPO_ROOT)}  ({name}, "
+              f"{path.stat().st_size} B)")
+    print(f"  manifest: {manifest_path.relative_to(REPO_ROOT)} "
+          f"({manifest_path.stat().st_size} B)")
     print(f"  nso sha256={nso_sha[:16]}…  npdm sha256={npdm_sha[:16]}…")
     return 0
 

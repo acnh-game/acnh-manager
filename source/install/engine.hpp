@@ -1,10 +1,10 @@
 #pragma once
 
-/* 安装 / 卸载引擎(设备侧)。纯逻辑部分(门控、状态模型、SHA-256、时间格式)在其它模块里,
-   这里只负责"读文件、校验、落盘、记录"这几件必须碰 SD 卡的事。
-
-   落盘约定(见 docs/architecture.md 第 4 节):先写临时文件 → 校验 → 再改名,
-   且每次写入前必须 fsFileSetSize;绝不写半截文件。 */
+/* Install / uninstall engine (device side).  The pure logic (gate, state model, SHA-256,
+   time formatting) lives elsewhere; this file only does what has to touch the SD card:
+   read, verify, write, record.
+   On-disk rules (docs/architecture.md section 4): write a temp file first, verify it, then
+   rename; every write is preceded by fsFileSetSize; never leave a half-written file. */
 
 #include <switch.h>
 
@@ -18,7 +18,8 @@
 
 namespace acnh_manager::install {
 
-/* payload 来源:M2 从 SD 目录读(便于真机干跑),M4 换成 NRO 内嵌 romfs。 */
+/* Payload source: M2 reads a directory on the SD card (for on-device dry runs); the release
+   path embeds the payload in the NRO instead. */
 class PayloadSource {
 public:
     virtual ~PayloadSource() = default;
@@ -53,30 +54,34 @@ struct InstallResult {
     bool dry_run{false};
 };
 
-/* 基础文件操作(公开给 UI 与后续里程碑复用)。 */
+/* Basic file operations (shared with the UI and later milestones). */
+/* fs* requires absolute paths starting with '/'; the manifest target is relative, so every
+   path goes through here before it reaches fs*. */
+std::string AbsolutePath(std::string_view path);
 bool EnsureDirectory(FsFileSystem &sd, const std::string &path, std::string *error);
 bool ReadWholeFile(FsFileSystem &sd, const std::string &path, std::vector<u8> *out,
                    std::string *error);
 bool HashFile(FsFileSystem &sd, const std::string &path, std::string *hex, std::string *error);
-/* 写文件并回读校验:临时文件 → SetSize → 写入 → 回读 sha256 → 原子改名。 */
+/* Write a file and read it back: temp file -> SetSize -> write -> read-back sha256 -> rename. */
 bool WriteFileVerified(FsFileSystem &sd, const std::string &path, const std::vector<u8> &data,
                        const std::string &sha256, std::string *error);
 
 bool ReadStateFile(FsFileSystem &sd, InstallState *state, bool *found, std::string *error);
 bool WriteStateFile(FsFileSystem &sd, const InstallState &state, std::string *error);
 
-/* 读取指定的清单文件(M2 阶段用 SD 上的开发用清单;M4 换成内嵌 romfs)。
-   found=false 表示文件不存在(不是错误)。 */
+/* Read a manifest file (the SD dev manifest during M2; the embedded one on the release path).
+   found=false means the file is absent, which is not an error. */
 bool ReadManifestFile(FsFileSystem &sd, const std::string &path, std::string_view app_version,
                       bool require_release_build, manifest::Manifest *out, bool *found,
                       std::string *error);
 
-/* 完整安装。dry_run=true 时只做校验与回报,不写任何文件。 */
+/* Full install.  dry_run=true verifies and reports only; nothing is written. */
 InstallResult Install(FsFileSystem &sd, const manifest::Manifest &manifest,
                       const manifest::GameEntry &game, PayloadSource &source, bool dry_run,
                       const ProgressCallback &progress);
 
-/* 卸载:按 state.json 记录逐个校验 sha256 后删除,最后删记录与空目录。 */
+/* Uninstall: verify each file from state.json by sha256, delete it, then drop the record and
+   the now-empty directory. */
 InstallResult Uninstall(FsFileSystem &sd, bool dry_run, const ProgressCallback &progress);
 
 }  // namespace acnh_manager::install

@@ -1,9 +1,12 @@
-/* 主机侧单元测试:清单解析/校验、门控判定、安装决策与 state.json 往返。
-   这些模块刻意不依赖 libnx,所以能直接在开发机上跑:
+/* Host-side unit tests: manifest parsing/validation, gate verdicts, install decisions and
+   the state.json round trip.  These modules deliberately avoid libnx, so they run on a
+   development machine:
        make -C tests
-   测试用例里的数值取自真机实测(见 docs/architecture.md 第 5 节)。 */
+   The numbers in the cases below come from real hardware (docs/architecture.md section 5). */
 
 #include <cstdio>
+#include <regex>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -13,6 +16,7 @@
 #include "manifest/json.hpp"
 #include "manifest/manifest.hpp"
 #include "util/sha256.hpp"
+#include "util/text_wrap.hpp"
 #include "util/time.hpp"
 
 namespace {
@@ -30,7 +34,22 @@ void Check(bool condition, const char *expr, const char *file, int line) {
 
 #define CHECK(expr) Check((expr), #expr, __FILE__, __LINE__)
 
-/* 真机实测值:title/version/content id/build id。 */
+/* printf conversions of a string, with the literal %% escape ignored: used to prove the i18n
+   columns agree, so a translation can never drop an argument the caller still passes. */
+std::multiset<std::string> Conversions(const std::string &text) {
+    static const std::regex pattern(R"(%[-#+ 0-9.]*(?:ll|l|h|z|j|t)?[diouxXeEfFgGaAcspn%])");
+    std::multiset<std::string> found;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), pattern);
+         it != std::sregex_iterator(); ++it) {
+        const std::string token = it->str();
+        if (token != "%%") {
+            found.insert(token);
+        }
+    }
+    return found;
+}
+
+/* Measured on real hardware: title / version / content id / build id. */
 constexpr const char *kTitleId = "01006F8002326000";
 constexpr const char *kContentId = "E10617820DB06889E1638499478DA0DE";
 constexpr const char *kBuildId = "FF1D1C05670DB6021C85B624A710B963";
@@ -95,7 +114,7 @@ void TestJsonBasics() {
     CHECK(b->At(3)->StringOr(std::string()) == "x\ny");
     const auto *c = root.Find("c");
     CHECK(c != nullptr && c->Find("d")->NumberOr(0.0) == -2500.0);
-    /* \u00e9 = é(2 字节),代理对 = 😀(4 字节),合计 6 字节。 */
+    /* \u00e9 = e-acute (2 bytes) and a surrogate pair (4 bytes), 6 bytes together. */
     CHECK(c->Find("e")->StringOr(std::string()).size() == 6);
 }
 
@@ -253,7 +272,7 @@ void TestGate() {
 
     CHECK(Evaluate(manifest, Detected()).status == GateStatus::Supported);
 
-    auto game_closed = Detected(); /* 游戏没运行:ModuleId 未知,不应因此被拒 */
+    auto game_closed = Detected(); /* game not running: ModuleId unknown, must not be refused */
     game_closed.module_id_known = false;
     game_closed.module_id.clear();
     CHECK(Evaluate(manifest, game_closed).status == GateStatus::Supported);
@@ -325,7 +344,14 @@ void TestOverrideConfig() {
     using acnh_manager::env::ParseOverrideConfig;
     using acnh_manager::env::ParseTitleConfig;
 
-    /* 真机现状:`[default_config] override_key=!L` → 默认生效,按住 L 会关闭覆盖。 */
+    /* What the console actually has: `[default_config] override_key=!L` -> applies by
+       default, holding L turns the override off.  Expected sentences are built from the i18n
+       table, so this test never hard-codes product text (source stays English). */
+    using acnh_manager::i18n::Format;
+    using acnh_manager::i18n::Language;
+    using acnh_manager::i18n::SetLanguage;
+    using acnh_manager::i18n::StringId;
+    SetLanguage(Language::ZhHans);
     const auto current = ParseOverrideConfig(R"(
 [hbl_config]
 program_id_1=01AADD1ACA618000
@@ -340,52 +366,56 @@ override_key=!L
     const auto current_advice = Advise(current, OverrideKey{});
     CHECK(current_advice.effective_by_default);
     CHECK(!current_advice.never_applies);
-    CHECK(current_advice.text.find("不要按住 L") != std::string::npos);
-    CHECK(current_advice.text.find("进入 hbmenu") != std::string::npos);
+    CHECK(current_advice.text == Format(StringId::OverrideOnByDefault, "L") +
+                                     Format(StringId::OverrideHbmenuNote, "R"));
 
-    /* 不带感叹号:默认关闭,必须按住 L */
+    /* No exclamation mark: off by default, L has to be held. */
     const auto must_hold = ParseOverrideConfig("[default_config]\noverride_key=L\n");
     CHECK(!must_hold.global_default.by_default);
     const auto hold_advice = Advise(must_hold, OverrideKey{});
     CHECK(!hold_advice.effective_by_default);
-    CHECK(hold_advice.text.find("需要按住 L") != std::string::npos);
+    /* The hbmenu note is appended too: override_any_app defaults to true with key R. */
+    CHECK(hold_advice.text == Format(StringId::OverrideOffByDefault, "L") +
+                                  Format(StringId::OverrideHbmenuNote, "R"));
 
-    /* 没有配置文件:代码默认 {L, by_default=true} */
+    /* No config file: the code default is {L, by_default=true}. */
     const auto defaults = ParseOverrideConfig("");
     CHECK(defaults.global_default.key == "L");
     CHECK(defaults.global_default.by_default);
     CHECK(!defaults.global_default.specified);
 
-    /* 显式空值:组合键为空 + by_default=false → 永不生效 */
+    /* Explicitly empty: no combination and by_default=false -> never applies. */
     const auto empty_value = ParseOverrideConfig("[default_config]\noverride_key=\n");
     const auto never = Advise(empty_value, OverrideKey{});
     CHECK(never.never_applies);
     CHECK(!never.effective_by_default);
 
-    /* 空值带感叹号:组合键为空 + by_default=true → 始终生效 */
+    /* Empty with an exclamation mark: no combination but by_default=true -> always applies. */
     const auto always_value = ParseOverrideConfig("[default_config]\noverride_key=!\n");
     const auto always = Advise(always_value, OverrideKey{});
     CHECK(!always.never_applies);
     CHECK(always.effective_by_default);
-    CHECK(always.text.find("始终生效") != std::string::npos);
+    CHECK(always.text == Text(StringId::OverrideAlwaysOn, Language::ZhHans));
 
-    /* 无法识别的键名:与 Atmosphere 的 ParseOverrideKey 行为一致(组合键为 0) */
+    /* Unknown key name: same behaviour as Atmosphere's ParseOverrideKey (combination 0). */
     const auto unknown = ParseOverrideConfig("[default_config]\noverride_key=FOO\n");
     CHECK(Advise(unknown, OverrideKey{}).never_applies);
 
-    /* 关闭 override_any_app 后不再提示 hbmenu */
+    /* With override_any_app off, the hbmenu note disappears. */
     const auto no_hbl = ParseOverrideConfig(
         "[hbl_config]\noverride_any_app=false\n[default_config]\noverride_key=!L\n");
-    CHECK(Advise(no_hbl, OverrideKey{}).text.find("hbmenu") == std::string::npos);
+    CHECK(Advise(no_hbl, OverrideKey{}).text ==
+          Format(StringId::OverrideOnByDefault, "L"));
 
-    /* per-title 配置覆盖全局默认 */
+    /* A per-title config overrides the global default. */
     const auto title_key = ParseTitleConfig("[override_config]\noverride_key=!R\n");
     CHECK(title_key.specified);
     CHECK(title_key.key == "R");
     CHECK(title_key.by_default);
     const auto title_advice = Advise(current, title_key);
     CHECK(title_advice.key == "R");
-    CHECK(title_advice.text.find("不要按住 R") != std::string::npos);
+    CHECK(title_advice.text == Format(StringId::OverrideOnByDefault, "R") +
+                                  Format(StringId::OverrideHbmenuNote, "R"));
 }
 
 void TestStrings() {
@@ -393,7 +423,7 @@ void TestStrings() {
     using acnh_manager::i18n::StringId;
     using acnh_manager::i18n::StringCount;
     using acnh_manager::i18n::Text;
-    /* 表项数量必须与枚举一一对应,否则新文案容易漏一边。 */
+    /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     CHECK(StringCount() == static_cast<unsigned>(StringId::ExitHint) + 1u);
     for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ExitHint); ++i) {
         const auto id = static_cast<StringId>(i);
@@ -401,13 +431,16 @@ void TestStrings() {
         CHECK(Text(id, Language::English) != nullptr);
         CHECK(std::string(Text(id, Language::ZhHans)).size() > 0);
         CHECK(std::string(Text(id, Language::English)).size() > 0);
+        /* Both columns must carry the same printf conversions: a translation that drops a
+           %s would reach vsnprintf and read an argument that is not there. */
+        CHECK(Conversions(Text(id, Language::ZhHans)) == Conversions(Text(id, Language::English)));
     }
 }
 
 void TestSha256() {
     using acnh_manager::util::Sha256;
     using acnh_manager::util::Sha256Hex;
-    /* 标准测试向量。 */
+    /* Standard test vectors. */
     CHECK(Sha256Hex("") ==
           "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     CHECK(Sha256Hex("abc") ==
@@ -416,7 +449,8 @@ void TestSha256() {
           "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a");
     CHECK(Sha256Hex(std::string(64, 'a')) ==
           "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
-    /* 分块更新与一次性计算一致(引擎按 64 KiB 分块读大文件)。 */
+    /* Chunked updates agree with a one-shot hash (the engine reads big files in 64 KiB
+       chunks). */
     const std::string payload(200000, 'x');
     Sha256 streaming;
     for (std::size_t offset = 0; offset < payload.size(); offset += 65536) {
@@ -429,9 +463,52 @@ void TestSha256() {
 void TestTimeFormat() {
     using acnh_manager::util::FormatUnixTimeUtc;
     CHECK(FormatUnixTimeUtc(0) == "1970-01-01T00:00:00Z");
-    CHECK(FormatUnixTimeUtc(951782400) == "2000-02-29T00:00:00Z"); /* 闰日 */
+    CHECK(FormatUnixTimeUtc(951782400) == "2000-02-29T00:00:00Z"); /* leap day */
     CHECK(FormatUnixTimeUtc(1758000000) == "2025-09-16T05:20:00Z");
     CHECK(FormatUnixTimeUtc(1757999999) == "2025-09-16T05:19:59Z");
+}
+
+/* Line breaking: the console showed "Note: hol" / "ding R" before this existed, so pin the
+   rule that Latin text breaks at spaces while CJK still breaks per character.  Every code
+   point is 10 px wide here, spaces included, so a 70 px line holds 7 characters. */
+void TestTextWrap() {
+    using acnh_manager::util::WrapText;
+    const auto advance = [](std::uint32_t code) { return code == '\n' ? 0 : 10; };
+    const auto slice = [](const char *text, const acnh_manager::util::TextLine &line) {
+        return std::string_view(text).substr(line.begin, line.end - line.begin);
+    };
+
+    /* A 70 px line holds "aaa bbb" exactly; the space after it is dropped and "ccc" starts
+       the next line. */
+    auto lines = WrapText("aaa bbb ccc", 70, advance);
+    CHECK(lines.size() == 2);
+    CHECK(slice("aaa bbb ccc", lines[0]) == "aaa bbb");
+    CHECK(slice("aaa bbb ccc", lines[1]) == "ccc");
+
+    /* The exact shape from the console: a word must not be split just because "holding"
+       straddles the limit. */
+    lines = WrapText("Note: holding", 70, advance);
+    CHECK(lines.size() == 2);
+    CHECK(slice("Note: holding", lines[0]) == "Note:");
+    CHECK(slice("Note: holding", lines[1]) == "holding");
+
+    /* A single word longer than the line still breaks mid-word instead of overflowing. */
+    lines = WrapText("abcdefgh", 50, advance);
+    CHECK(lines.size() == 2);
+    CHECK(lines[0].width == 50);
+    CHECK(lines[1].width == 30);
+
+    /* CJK has no spaces: it keeps breaking per character and every line stays inside. */
+    lines = WrapText("\xE8\xA6\x86\xE7\x9B\x96\xE9\xBB\x98\xE8\xAE\xA4", 30, advance);
+    CHECK(lines.size() == 2);
+    CHECK(lines[0].width == 30);
+    CHECK(lines[1].width == 10);
+
+    /* An explicit newline always starts a new line. */
+    lines = WrapText("ab\ncd", 0, advance);
+    CHECK(lines.size() == 2);
+    CHECK(lines[0].width == 20);
+    CHECK(lines[1].width == 20);
 }
 
 }  // namespace
@@ -449,6 +526,7 @@ int main() {
     TestStrings();
     TestSha256();
     TestTimeFormat();
+    TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

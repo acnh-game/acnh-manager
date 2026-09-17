@@ -28,7 +28,8 @@ struct Font::Impl {
 
 namespace {
 
-/* 依次尝试主机共享字体:Standard(日/英/欧)、简中、扩展简中、繁中、韩文。 */
+/* Try the console's shared fonts in order: Standard (JP/EN/EU), Simplified Chinese,
+   Extended Simplified Chinese, Traditional Chinese, Korean. */
 constexpr PlSharedFontType kFontTypes[] = {
     PlSharedFontType_Standard,
     PlSharedFontType_ChineseSimplified,
@@ -58,8 +59,31 @@ std::uint32_t NextCodepoint(std::string_view text, std::size_t *index) {
     return code;
 }
 
+/* UTF-8 encoding of the ellipsis (U+2026). */
+constexpr const char *kEllipsis = "\xE2\x80\xA6";
+
+/* Start byte of the code point before index (used to step back through a string). */
+std::size_t PrevCodepointStart(std::string_view text, std::size_t index) {
+    if (index == 0) {
+        return 0;
+    }
+    std::size_t at = index - 1;
+    while (at > 0 && (static_cast<unsigned char>(text[at]) & 0xC0) == 0x80) {
+        --at;
+    }
+    return at;
+}
+
 }  // namespace
 
+std::vector<util::TextLine> Font::Wrap(std::string_view utf8, int size, int max_width) {
+    /* A missing glyph is skipped by Draw, so it must take no width here either (otherwise a
+       line could "measure as one line but paint as two"). */
+    return util::WrapText(utf8, max_width, [this, size](std::uint32_t code) {
+        const Glyph *glyph = FindGlyph(code, size);
+        return glyph != nullptr ? glyph->advance : 0;
+    });
+}
 bool Font::Init(acnh_manager::Log *log, std::string *error) {
     m_log = log;
     if (m_impl != nullptr) {
@@ -162,11 +186,13 @@ const Font::Glyph *Font::FindGlyph(std::uint32_t codepoint, int size) {
     }
     for (void *handle : m_faces) {
         FT_Face face = static_cast<FT_Face>(handle);
-        if (FT_Set_Char_Size(face, 0, static_cast<FT_F26Dot6>(size) * 64, 300, 300) != 0) {
+        /* Use **pixel** sizes: FT_Set_Char_Size(..., 300, 300) scales the point size by
+           300 DPI (x300/72 ~ 4.17), which is what made the text huge and overlapping. */
+        if (FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(size)) != 0) {
             continue;
         }
         if (FT_Get_Char_Index(face, codepoint) == 0) {
-            continue; /* 该字体没有这个字,换下一个 */
+            continue; /* this face has no such character; try the next one */
         }
         if (FT_Load_Char(face, codepoint, FT_LOAD_RENDER) != 0) {
             continue;
@@ -177,6 +203,8 @@ const Font::Glyph *Font::FindGlyph(std::uint32_t codepoint, int size) {
         glyph.height = static_cast<int>(slot->bitmap.rows);
         glyph.left = slot->bitmap_left;
         glyph.top = slot->bitmap_top;
+        glyph.ascender =
+            face->size != nullptr ? static_cast<int>(face->size->metrics.ascender >> 6) : size;
         glyph.advance = static_cast<int>(slot->advance.x >> 6);
         glyph.bitmap.assign(static_cast<std::size_t>(glyph.width) * glyph.height, 0);
         for (int row = 0; row < glyph.height; ++row) {
@@ -187,35 +215,46 @@ const Font::Glyph *Font::FindGlyph(std::uint32_t codepoint, int size) {
         cache->glyphs.emplace_back(codepoint, std::move(glyph));
         return &cache->glyphs.back().second;
     }
-    /* 没找到:记录一个空字形,避免每次重试。 */
+    /* Not found: cache an empty glyph so we do not retry on every lookup. */
     cache->glyphs.emplace_back(codepoint, Glyph{});
     return &cache->glyphs.back().second;
 }
 
 int Font::Measure(std::string_view utf8, int size, int max_width) {
-    int width = 0;
-    int line = 0;
-    int lines = 1;
-    std::size_t index = 0;
-    while (index < utf8.size()) {
-        const std::uint32_t code = NextCodepoint(utf8, &index);
-        if (code == '\n') {
-            width = std::max(width, line);
-            line = 0;
-            ++lines;
-            continue;
-        }
-        const Glyph *glyph = FindGlyph(code, size);
-        const int advance = glyph != nullptr ? glyph->advance : size / 2;
-        if (max_width > 0 && line + advance > max_width && line > 0) {
-            width = std::max(width, line);
-            line = 0;
-            ++lines;
-        }
-        line += advance;
+    if (!Ready()) {
+        return 0;
     }
-    width = std::max(width, line);
+    int width = 0;
+    for (const util::TextLine &line : Wrap(utf8, size, max_width)) {
+        width = std::max(width, line.width);
+    }
     return width;
+}
+
+int Font::LineCount(std::string_view utf8, int size, int max_width) {
+    if (!Ready()) {
+        return 1;
+    }
+    return static_cast<int>(Wrap(utf8, size, max_width).size());
+}
+
+std::string Font::Fit(std::string_view utf8, int size, int max_width, int max_lines) {
+    if (!Ready() || max_width <= 0 || max_lines <= 0) {
+        return std::string(utf8);
+    }
+    const std::vector<util::TextLine> lines = Wrap(utf8, size, max_width);
+    if (static_cast<int>(lines.size()) <= max_lines) {
+        return std::string(utf8);
+    }
+    /* Keep the first max_lines-1 lines and shrink the last one until the ellipsis fits. */
+    const util::TextLine &last = lines[static_cast<std::size_t>(max_lines) - 1];
+    std::string head(utf8.substr(0, last.begin));
+    std::string tail(utf8.substr(last.begin, last.end - last.begin));
+    const int ellipsis = Measure(kEllipsis, size);
+    while (!tail.empty() && Measure(tail, size) + ellipsis > max_width) {
+        tail.resize(PrevCodepointStart(tail, tail.size()));
+    }
+    return head + tail + kEllipsis;
 }
 
 int Font::Draw(Surface surface, int x, int y, int size, Color color, std::string_view utf8,
@@ -224,44 +263,39 @@ int Font::Draw(Surface surface, int x, int y, int size, Color color, std::string
         return 0;
     }
     const int line_height = LineHeight(size);
-    int pen_x = x;
-    int pen_y = y;
     int block_width = 0;
-    std::size_t index = 0;
-    while (index < utf8.size()) {
-        const std::uint32_t code = NextCodepoint(utf8, &index);
-        if (code == '\n') {
-            block_width = std::max(block_width, pen_x - x);
-            pen_x = x;
-            pen_y += line_height;
-            continue;
-        }
-        const Glyph *glyph = FindGlyph(code, size);
-        if (glyph == nullptr) {
-            continue;
-        }
-        if (max_width > 0 && pen_x - x + glyph->advance > max_width && pen_x > x) {
-            block_width = std::max(block_width, pen_x - x);
-            pen_x = x;
-            pen_y += line_height;
-        }
-        const int origin_x = pen_x + glyph->left;
-        const int origin_y = pen_y + (line_height - size) / 2 + (size - glyph->top);
-        for (int row = 0; row < glyph->height; ++row) {
-            for (int col = 0; col < glyph->width; ++col) {
-                const std::uint8_t cover = glyph->bitmap[static_cast<std::size_t>(row) *
-                                                              glyph->width + col];
-                if (cover == 0) {
-                    continue;
-                }
-                Color blended = color;
-                blended.a = static_cast<u8>(cover * color.a / 255);
-                BlendPixel(surface, origin_x + col, origin_y + row, blended);
+    const std::vector<util::TextLine> lines = Wrap(utf8, size, max_width);
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        /* Glyphs sit on the baseline: the caller's y is the line's top,
+           baseline = y + ascender. */
+        const int line_y = y + static_cast<int>(i) * line_height;
+        int pen_x = x;
+        std::size_t index = lines[i].begin;
+        while (index < lines[i].end) {
+            const std::uint32_t code = NextCodepoint(utf8, &index);
+            const Glyph *glyph = FindGlyph(code, size);
+            if (glyph == nullptr) {
+                continue;
             }
+            const int origin_x = pen_x + glyph->left;
+            const int origin_y = line_y + glyph->ascender - glyph->top;
+            for (int row = 0; row < glyph->height; ++row) {
+                for (int col = 0; col < glyph->width; ++col) {
+                    const std::uint8_t cover = glyph->bitmap[static_cast<std::size_t>(row) *
+                                                                  glyph->width + col];
+                    if (cover == 0) {
+                        continue;
+                    }
+                    Color blended = color;
+                    blended.a = static_cast<u8>(cover * color.a / 255);
+                    BlendPixel(surface, origin_x + col, origin_y + row, blended);
+                }
+            }
+            pen_x += glyph->advance;
         }
-        pen_x += glyph->advance;
+        block_width = std::max(block_width, pen_x - x);
     }
-    return std::max(block_width, pen_x - x);
+    return block_width;
 }
 
 }  // namespace acnh_manager::ui

@@ -1,0 +1,16 @@
+{
+  "agentVersion": "0.11.0",
+  "commit": "c15e41858935",
+  "dirty": false,
+  "buildFlags": 2,
+  "nsoSha256": "c47d2b4783a15978aa863d71a4b82f384b7abae636f085a88b4bf041f404c0ba",
+  "npdmSha256": "23eea4eda50c345ee97c971708dcb16efdf091c5bc852fa57c152669104d05ba",
+  "game": {
+    "profile": "v3_0_3",
+    "titleId": "01006F8002326000",
+    "version": 2228224,
+    "displayVersion": "3.0.3",
+    "contentId": "E10617820DB06889E1638499478DA0DE",
+    "buildId": "FF1D1C05670DB6021C85B624A710B963"
+  }
+}

@@ -22,9 +22,10 @@ constexpr const char *kAppDir = "/switch/ACNH-Manager";
 constexpr const char *kLogPath = "/switch/ACNH-Manager/log.txt";
 constexpr const char *kLogHistoryPath = "/switch/ACNH-Manager/log-history.log";
 constexpr const char *kProbeFlagPath = "/switch/ACNH-Manager/dev-probe";
+constexpr const char *kWriteProbeFlagPath = "/switch/ACNH-Manager/dev-writeprobe";
 constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
 constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
-/* 与 Makefile 的 APP_VERSION 保持一致。 */
+/* Kept in sync with APP_VERSION in the Makefile. */
 constexpr const char *kAppVersion = "0.1.0";
 
 const char *AppletTypeName(int type) {
@@ -71,37 +72,13 @@ bool FileExists(FsFileSystem &sd, const char *path) {
     return true;
 }
 
-/* 与 EdiZon-SE 的做法对齐:进界面之前把常用服务与时钟准备好,并把 stdout/stderr
-   重定向到 SD 上的文件(避免任何库输出落到未初始化的控制台上)。
-   失败不致命,逐项记录到日志。 */
+/* Environment setup: we only use the raw fs* / ns / ncm / pl / time / pad interfaces and
+   deliberately avoid mounting devoptab (fsdevMountSdmc), redirecting stdio, or bringing up
+   extra services.  Inside hbl we share the process with the loader, and touching stdio,
+   devoptab or extra services can bite us (the crash we chased landed in the loader's
+   devoptab buffer path).  Diagnostics always go to the Log file instead. */
 void PrepareEnvironment(acnh_manager::Log *log) {
-    fsdevMountSdmc();
-    /* 注意:**不要**动 STDOUT/STDERR 的 fd:我们与 hbl 加载器同进程,dup2 会改到它的
-       stdio 状态(实测会导致加载器在 stdio 缓冲路径里崩溃)。诊断一律走 Log 的文件写入。 */
-    (void)kStdioPath;
-
-    struct Step {
-        const char *name;
-        Result (*init)();
-    };
-    const Step steps[] = {
-        {"setsysInitialize", setsysInitialize},
-        {"socketInitializeDefault", socketInitializeDefault},
-        {"plInitialize", []() { return plInitialize(PlServiceType_User); }},
-        {"psmInitialize", psmInitialize},
-        {"pminfoInitialize", pminfoInitialize},
-        {"pmdmntInitialize", pmdmntInitialize},
-        {"romfsInit", romfsInit},
-        {"hidsysInitialize", hidsysInitialize},
-        {"pcvInitialize", pcvInitialize},
-        {"clkrstInitialize", clkrstInitialize},
-    };
-    for (const Step &step : steps) {
-        const Result rc = step.init();
-        if (log != nullptr) {
-            log->Line("env: %s rc=0x%08X", step.name, rc);
-        }
-    }
+    (void)log;
 }
 
 void ReportEnvironment(acnh_manager::Log &log,
@@ -127,17 +104,17 @@ void ReportEnvironment(acnh_manager::Log &log,
         log.Line("  %s (%llu B)", file.name.c_str(), static_cast<unsigned long long>(file.size));
     }
     if (report.legacy_cheat_present) {
-        log.Line("legacy cheat present: %s(与 agent 可能冲突,建议移入备份)",
+        log.Line("legacy cheat present: %s (may conflict with the agent; move it to a backup)",
                  report.legacy_cheat_name.c_str());
     }
     if (!report.problems.empty()) {
         log.Line("problems: %s", report.problems.c_str());
     }
 
-    /* M1 阶段没有内置清单:门控会落回 NoManifest,这里如实显示。 */
+    /* No embedded manifest yet: the gate falls back to NoManifest, and we say so. */
     const auto gate = Evaluate(nullptr, report.build);
     log.Line("gate: %s (%s)", GateStatusName(gate.status), gate.reason.c_str());
-    log.Line("manifest: 未内置发布清单,等待 M4 的发布导入工具生成");
+    log.Line("manifest: no embedded release manifest (waiting for the release import tool)");
 }
 
 }  // namespace
@@ -146,8 +123,9 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    /* 刻意不使用 libnx 控制台:在 hbl 环境里它会占用默认窗口,与界面 framebuffer 抢同一份状态
-       (实测会引起加载器进程崩溃)。所有诊断写 log.txt,界面自己负责显示。 */
+    /* libnx's console is deliberately not used: inside hbl it takes the default window and
+       fights the UI framebuffer for the same state (crashed the loader process on real
+       hardware).  Diagnostics go to log.txt; the UI paints its own framebuffer. */
     const Result rc_fs = fsInitialize();
     FsFileSystem sd{};
     const Result rc_sd = R_SUCCEEDED(rc_fs) ? fsOpenSdCardFileSystem(&sd) : rc_fs;
@@ -172,20 +150,25 @@ int main(int argc, char **argv) {
             log.Line("dev-probe flag present: running the M0 environment probe as well");
             acnh_manager::probe::Run(log, sd);
         }
+        if (FileExists(sd, kWriteProbeFlagPath)) {
+            log.Line("dev-writeprobe flag present: running the SD write probe");
+            acnh_manager::probe::RunWriteProbe(log, sd);
+        }
         log.Line("=== done: press + to exit ===");
         log.Sync();
     }
 
-    /* 环境准备(对齐 EdiZon-SE 的 serviceInitialize + stdio 重定向)。 */
+    /* Environment setup (aligned with EdiZon-SE's serviceInitialize + stdio redirect). */
     if (R_SUCCEEDED(rc_log)) {
-        log.Line("env: preparing services");
+        log.Line("env: minimal (no devoptab, no stdio redirect, no extra services)");
         log.Sync();
-        /* 图形路径不再往控制台/stdio 回显:避免触碰同进程内 hbl 的 stdio。 */
-        log.SetEcho(false);
+        /* The graphics path no longer echoes to the console or stdio: avoid touching the
+           loader's stdio inside the same process. */
     }
     PrepareEnvironment(R_SUCCEEDED(rc_log) ? &log : nullptr);
 
-    /* 界面模式:默认图形界面;`/switch/ACNH-Manager/ui-text` 存在时退回控制台文本界面。 */
+    /* UI mode: graphics by default; `/switch/ACNH-Manager/ui-text` falls back to the
+       console text UI. */
     const bool want_text_ui = FileExists(sd, kTextUiFlagPath);
     if (want_text_ui) {
         if (R_SUCCEEDED(rc_log)) {
@@ -205,7 +188,8 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    /* 图形界面路径(实验性):日志保持打开,各阶段都记录,便于崩溃后取证。 */
+    /* Graphics path: the log stays open and every stage is recorded, so a crash leaves
+       evidence behind. */
     {
         acnh_manager::ui::App app;
         std::string ui_error;
@@ -227,7 +211,7 @@ int main(int argc, char **argv) {
             if (R_SUCCEEDED(rc_log)) {
                 log.Line("ui init failed: %s", ui_error.c_str());
             }
-            /* 没有控制台可用,只能等用户按 + 退出;失败原因已写进 log.txt。 */
+            /* No console available: wait for + and exit; the reason is already in log.txt. */
             PadState pad;
             padConfigureInput(1, HidNpadStyleSet_NpadStandard);
             padInitializeDefault(&pad);

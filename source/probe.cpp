@@ -4,16 +4,19 @@
 #include <cstdio>
 #include <cstring>
 
-/* M0 环境探测。这里的每条探针都在真机上跑过并把结果写进了 docs/architecture.md:
- *   - ProbeNcm / ProbeSdState / dmnt 探针 = 现在的判据来源,会在 M1 演进取环境检查模块;
- *   - ProbeServiceAccess / ProbeFspLdrSteps / ProbeCodeFs / ProbeFsVariants 记录了被否掉的路线
- *     (fsp-ldr 与按 id 挂载 code FS),保留是为了让"为什么不用它"这件事可复现,不要照抄进 App。
- * 日志里的结果码一律按 0x%08X 打印,便于与文档里的错误码逐字对照。 */
+/* M0 environment probes.  Every probe here ran on real hardware and its result is recorded
+ * in docs/architecture.md:
+ *   - ProbeNcm / ProbeSdState / dmnt probes are the source of today's verdicts and evolve
+ *     into the environment-check module;
+ *   - ProbeServiceAccess / ProbeFspLdrSteps / ProbeCodeFs / ProbeFsVariants record routes we
+ *     rejected (fsp-ldr and mounting the code FS by id).  They stay so that "why not this"
+ *     remains reproducible -- do not copy them into the app.  Result codes are always logged
+ *     as 0x%08X so they can be matched against the docs verbatim. */
 namespace acnh_manager::probe {
 namespace {
 
-/* Atmosphere 的 dmnt:cht 元数据布局:process_id、program_id、四个内存区间、
-   最后是 main 的 ModuleId;sizeof == 0x70。 */
+/* Atmosphere's dmnt:cht metadata layout: process_id, program_id, four memory ranges and
+   finally main's ModuleId; sizeof == 0x70. */
 struct CheatProcessMetadata {
     u64 process_id;
     u64 program_id;
@@ -55,7 +58,7 @@ const char *AppletTypeName(AppletType type) {
     }
 }
 
-/* 列出 code FS 根目录条目,确认能看到 main / rtld / sdk / main.npdm。 */
+/* List the code FS root to confirm main / rtld / sdk / main.npdm are visible. */
 void ListRoot(Log &log, const char *label, FsFileSystem &fs) {
     FsDir dir{};
     const u32 mode = FsDirOpenMode_ReadFiles | FsDirOpenMode_ReadDirs;
@@ -86,7 +89,8 @@ void ListRoot(Log &log, const char *label, FsFileSystem &fs) {
     fsDirClose(&dir);
 }
 
-/* 读 /main 头部 0x60 字节,校验 NSO0 并打印 ModuleId(+0x40, 0x20 字节)。 */
+/* Read the first 0x60 bytes of /main, check the NSO0 magic and print the ModuleId
+   (+0x40, 0x20 bytes). */
 void ReadMainModuleId(Log &log, const char *label, FsFileSystem &fs) {
     FsFile file{};
     if (R_FAILED(fsFsOpenFile(&fs, "/main", FsOpenMode_Read, &file))) {
@@ -111,7 +115,7 @@ void ReadMainModuleId(Log &log, const char *label, FsFileSystem &fs) {
     log.Line("%s: /main NSO0 module_id=%s", label, hex);
 }
 
-/* 读 /main.npdm,打印大小与 sha256(与发布 payload 的派生 NPDM 对照)。 */
+/* Read /main.npdm and print its size and sha256 (cross-check against the released NPDM). */
 void ReadNpdm(Log &log, const char *label, FsFileSystem &fs) {
     FsFile file{};
     if (R_FAILED(fsFsOpenFile(&fs, "/main.npdm", FsOpenMode_Read, &file))) {
@@ -152,7 +156,8 @@ void ProbeCodeFs(Log &log, const char *label, u64 tid, NcmStorageId storage,
     fsFsClose(&fs);
 }
 
-/* 哪些服务能拿到、能否转 domain ——用来区分"访问被拒"与"服务本身特殊"。 */
+/* Which services can be opened and whether they convert to domains -- this separates
+   "access denied" from "this service is special". */
 void ProbeServiceAccess(Log &log) {
     const char *names[] = {"fsp-ldr", "fsp-srv", "lr", "ncm", "pl:u", "dmnt:cht", "spl:"};
     for (const char *name : names) {
@@ -168,7 +173,7 @@ void ProbeServiceAccess(Log &log) {
     }
 }
 
-/* 把 libnx fsldrInitialize 的四步拆开:定位 0x615 到底出在哪一步。 */
+/* Split libnx's fsldrInitialize into its four steps to find out where 0x615 comes from. */
 void ProbeFspLdrSteps(Log &log, u64 tid, NcmStorageId storage) {
     Service ldr{};
     Result rc = smGetService(&ldr, "fsp-ldr");
@@ -209,7 +214,8 @@ void ProbeFspLdrSteps(Log &log, u64 tid, NcmStorageId storage) {
     serviceClose(&ldr);
 }
 
-/* 备选路径:lr 解析出的 content path + fsp-srv 的 OpenFileSystemWithId / WithPatch。 */
+/* Alternative route: the content path resolved by lr plus fsp-srv's OpenFileSystemWithId /
+   WithPatch. */
 void ProbeFsVariants(Log &log, u64 tid, NcmStorageId storage) {
     char resolved[FS_MAX_PATH] = {0};
     if (R_SUCCEEDED(lrInitialize())) {
@@ -260,7 +266,8 @@ void ProbeFsVariants(Log &log, u64 tid, NcmStorageId storage) {
     }
 }
 
-/* ncm:列出某个标题的最新 content meta 与它的内容 id(与 lr 路径里的 id 交叉复核)。 */
+/* ncm: list one title's latest content meta and its content id (cross-checked against the
+   id in the lr path). */
 void ProbeNcm(Log &log, u64 tid, const char *label) {
     const Result rc_init = ncmInitialize();
     log.Line("ncm[%s]: initialize rc=0x%08X", label, rc_init);
@@ -292,7 +299,7 @@ void ProbeNcm(Log &log, u64 tid, const char *label) {
     serviceClose(&db.s);
 }
 
-/* 游戏进程存在时,用 dmnt:cht 读 main 的 ModuleId 做交叉校验。 */
+/* While the game process exists, read main's ModuleId through dmnt:cht as a cross-check. */
 void ProbeDmnt(Log &log) {
     Service service{};
     const Result rc = smGetService(&service, "dmnt:cht");
@@ -313,7 +320,7 @@ void ProbeDmnt(Log &log) {
     serviceClose(&service);
 }
 
-/* SD 上现有 exefs 覆盖状态的只读快照。 */
+/* Read-only snapshot of the exefs override currently on the SD card. */
 void ProbeSdState(Log &log, FsFileSystem &sd) {
     const char *dir = "/atmosphere/contents/01006F8002326000/exefs";
     FsDir handle{};
@@ -430,6 +437,71 @@ void Run(Log &log, FsFileSystem &sd) {
     }
 
     log.Line("=== spike done ===");
+}
+
+/* Write probe: run create->SetSize->write->flush->read->delete on one path and log every
+   step's return code.  Both a relative and an absolute form are tried, which separates
+   "FS refuses relative paths" from "this directory is not writable". */
+void ProbeWritePath(Log &log, FsFileSystem &sd, const char *label, const char *path) {
+    log.Line("wprobe[%s] path=%s", label, path);
+    fsFsDeleteFile(&sd, path);
+
+    const Result rc_create = fsFsCreateFile(&sd, path, 4, 0);
+    log.Line("wprobe[%s]   create rc=0x%08X", label, rc_create);
+    if (R_FAILED(rc_create)) {
+        return;
+    }
+    FsFile file{};
+    Result rc = fsFsOpenFile(&sd, path, FsOpenMode_Write, &file);
+    log.Line("wprobe[%s]   open rc=0x%08X", label, rc);
+    if (R_SUCCEEDED(rc)) {
+        rc = fsFileSetSize(&file, 4);
+        log.Line("wprobe[%s]   setsize rc=0x%08X", label, rc);
+    }
+    const u8 payload[4] = {'A', 'C', 'N', 'H'};
+    if (R_SUCCEEDED(rc)) {
+        rc = fsFileWrite(&file, 0, payload, sizeof(payload), FsWriteOption_Flush);
+        log.Line("wprobe[%s]   write rc=0x%08X", label, rc);
+    }
+    if (R_SUCCEEDED(rc)) {
+        rc = fsFileFlush(&file);
+        log.Line("wprobe[%s]   flush rc=0x%08X", label, rc);
+    }
+    fsFileClose(&file);
+    if (R_SUCCEEDED(rc)) {
+        rc = fsFsOpenFile(&sd, path, FsOpenMode_Read, &file);
+        log.Line("wprobe[%s]   reopen rc=0x%08X", label, rc);
+        if (R_SUCCEEDED(rc)) {
+            u8 read_back[4] = {0};
+            u64 read = 0;
+            const Result rc_read = fsFileRead(&file, 0, read_back, sizeof(read_back), 0, &read);
+            fsFileClose(&file);
+            const bool match = rc_read == 0 && read == sizeof(payload) &&
+                               std::memcmp(read_back, payload, sizeof(payload)) == 0;
+            log.Line("wprobe[%s]   read rc=0x%08X read=%llu match=%s", label, rc_read,
+                     static_cast<unsigned long long>(read), match ? "yes" : "no");
+        }
+    }
+    const Result rc_delete = fsFsDeleteFile(&sd, path);
+    log.Line("wprobe[%s]   delete rc=0x%08X", label, rc_delete);
+}
+
+void RunWriteProbe(Log &log, FsFileSystem &sd) {
+    const char *kExefs = "/atmosphere/contents/01006F8002326000/exefs";
+    log.Line("=== write probe ===");
+    ProbeWritePath(log, sd, "home-abs", "/switch/ACNH-Manager/probe-abs.tmp");
+    ProbeWritePath(log, sd, "home-rel", "switch/ACNH-Manager/probe-rel.tmp");
+    {
+        char path[160];
+        std::snprintf(path, sizeof(path), "%s/.acnh-probe-abs.tmp", kExefs);
+        ProbeWritePath(log, sd, "exefs-abs", path);
+    }
+    {
+        char path[160];
+        std::snprintf(path, sizeof(path), "%s/.acnh-probe-rel.tmp", kExefs + 1);
+        ProbeWritePath(log, sd, "exefs-rel", path);
+    }
+    log.Line("=== write probe done ===");
 }
 
 }  // namespace acnh_manager::probe

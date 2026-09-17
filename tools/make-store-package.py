@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""生成 Homebrew App Store 的上架材料与本地测试仓库。
+"""Build the Homebrew App Store submission files plus a local test repository.
 
-产物(默认写到 `build/scratch/store/`):
-    packages/<name>/pkgbuild.json   提交给官方数据仓库(switch-hbas-repo)的元数据
-    packages/<name>/icon.png        商店图标(取自 assets/icon.png)
-    packages/<name>/screen.png      横幅(存在 assets/screen.png 时才生成)
+Outputs (written to `build/scratch/store/` by default):
+    packages/<name>/pkgbuild.json   metadata for the official data repo (switch-hbas-repo)
+    packages/<name>/icon.png        store icon (copied from assets/icon.png)
+    packages/<name>/screen.png      banner (only when assets/screen.png exists)
     zips/<name>.zip                 NRO + info.json + manifest.install
-    repo.json                       本地测试仓库(与官方 CDN 同布局,供 Sphaira 自定义商店源)
+    repo.json                       local test repository (official CDN layout; usable as a custom shop source in Sphaira)
 
-用法:
-    python3 tools/make-store-package.py            # 用已构建的 acnh-manager.nro
+Usage:
+    python3 tools/make-store-package.py            # uses the already-built acnh-manager.nro
     python3 tools/make-store-package.py --nro build/acnh-manager.nro --out /tmp/store
 """
 
@@ -51,7 +51,7 @@ def build_zip(root: pathlib.Path, nro: pathlib.Path, name: str, version: str,
     nro_remote = f"switch/ACNH-Manager/{nro.name}"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(info["install_path"], nro.read_bytes())
-        # Sphaira/hb-appstore 只认 E/U/G 开头的行;U = 覆盖写入。
+        # Sphaira/hb-appstore only understands lines starting with E/U/G; U means overwrite.
         archive.writestr(MANIFEST_INSTALL, f"U {info['install_path']}\nG info.json\nG manifest.install\n")
         archive.writestr(info["info_path"], json.dumps(
             {"name": name, "title": info["title"], "author": info["author"],
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=pathlib.Path, default=DEFAULT_OUT)
     parser.add_argument("--listing", type=pathlib.Path,
                         default=REPO_ROOT / "packaging" / "listing.json")
-    parser.add_argument("--version", default=None, help="默认取 Makefile 的 APP_VERSION")
+    parser.add_argument("--version", default=None, help="defaults to APP_VERSION from the Makefile")
     args = parser.parse_args(argv)
 
     if not args.nro.is_file():
@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     if banner.is_file():
         (package_dir / "screen.png").write_bytes(banner.read_bytes())
 
-    # 官方数据仓库的 pkgbuild.json:资产直接指向 GitHub Release(发布前先打 tag)。
+    # pkgbuild.json for the official data repo: assets point straight at a GitHub release (tag first).
     release_url = (f"https://github.com/leolovenet/acnh-manager/releases/download/"
                    f"v{version}/{args.nro.name}")
     pkgbuild = {
@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         pkgbuild["assets"].append({"type": "banner", "url": "screen.png"})
     (package_dir / "pkgbuild.json").write_text(json.dumps(pkgbuild, indent=2) + "\n")
 
-    # 本地测试仓库:官方 CDN 的同布局,可直接当 Sphaira 自定义商店源。
+    # Local test repository: same layout as the official CDN, usable as a custom shop source.
     repo = {
         "packages": [
             {

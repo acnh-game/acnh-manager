@@ -1,8 +1,8 @@
 #pragma once
 
-/* 真机环境采集(只读):把判据链需要的数字与"玩家会不会踩坑"的配置读出来。
-   取数接口的选择依据见 docs/architecture.md 第 3、5 节(ns / ncm / dmnt:cht 可用;fsp-ldr 被拒)。 */
-
+/* On-device environment collection (read-only): the numbers the verdict chain needs, plus
+   the configuration gotchas a player can hit.  Why these interfaces: docs/architecture.md
+   sections 3 and 5 (ns / ncm / dmnt:cht are usable; fsp-ldr is refused). */
 #include <switch.h>
 
 #include <cstdint>
@@ -30,35 +30,35 @@ struct ExefsFile {
 };
 
 struct EnvironmentReport {
-    /* 运行环境 */
-    std::string hos_version; /* 形如 "22.1.0" */
+    /* Runtime environment */
+    std::string hos_version; /* e.g. "22.1.0" */
     int applet_type{0};
     bool application_running{false};
 
-    /* 游戏安装信息(判据 ① 与 ③ 的来源) */
+    /* Game installation info (sources of verdict 1 and 3) */
     std::vector<MetaEntry> metas;
     bool patch_found{false};
     std::uint8_t patch_storage{0};
     install::DetectedBuild build;
 
-    /* 覆盖配置(启动游戏时要不要按键) */
+    /* Override configuration (whether a key must be held when launching the game) */
     bool have_override_config{false};
     bool have_title_config{false};
     OverrideAdvice advice;
 
-    /* 安装现状 */
+    /* Current install state */
     std::vector<ExefsFile> exefs;
     bool legacy_cheat_present{false};
     std::string legacy_cheat_name;
 
-    /* 失败诊断:为空表示所有取数都成功 */
+    /* Failure diagnostics: empty means every reading succeeded */
     std::string problems;
 };
 
-/* 采集环境报告。只读:不写任何文件、不改任何配置。 */
+/* Collect the environment report.  Read-only: writes no file, changes no config. */
 EnvironmentReport Collect(FsFileSystem &sd);
 
-/* 列出目录里的文件(名字 + 大小);目录不存在时返回空表。 */
+/* List a directory's files (name + size); a missing directory yields an empty list. */
 std::vector<ExefsFile> ListDirectory(FsFileSystem &sd, const char *path);
 
 }  // namespace acnh_manager::env

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""把构建好的 NRO 推到 Switch 的 SD 卡上(sys-agent 内置 FTP,默认端口 6001)。
+"""Push a built NRO to the Switch SD card (sys-agent's built-in FTP, default port 6001).
 
-开发期迭代用:构建 -> 部署 -> 在相册/hbmenu 里启动 -> 回读日志。
-不写任何游戏目录,也不重启任何东西。
+For the development loop: build -> deploy -> launch from the album/hbmenu -> read the log back.
+It never writes a game directory and never reboots anything.
 
-用法:
-    python3 tools/deploy-nro.py                    # 部署 acnh-manager.nro
-    python3 tools/deploy-nro.py --fetch-log        # 只取回 spike.log / log.txt
+Usage:
+    python3 tools/deploy-nro.py                    # deploy acnh-manager.nro
+    python3 tools/deploy-nro.py --fetch-log        # only fetch spike.log / log.txt
     python3 tools/deploy-nro.py --host switch --port 6001
     python3 tools/deploy-nro.py --file build/other.nro --remote-name other.nro
 """
@@ -26,7 +26,7 @@ LOG_NAMES = ("spike.log", "spike-history.log", "log.txt")
 
 
 def ensure_dir(ftp: ftplib.FTP, path: str) -> None:
-    """逐级创建目录(已存在时忽略失败)。"""
+    """Create each directory level (an existing level is not an error)."""
     current = ""
     for part in (p for p in path.split("/") if p):
         current += "/" + part
@@ -47,13 +47,13 @@ def deploy(ftp: ftplib.FTP, local: pathlib.Path, remote_name: str) -> None:
     remote_size = ftp.size(remote)
     if remote_size != size:
         raise RuntimeError(f"size mismatch after upload: local={size} remote={remote_size}")
-    # 回读校验:把远端文件读回来比对 sha256,确认"卡上的就是刚构建的这份"。
+    # Read-back check: pull the file back and compare sha256, so "on the card is exactly
     readback = bytearray()
     ftp.retrbinary(f"RETR {remote}", readback.extend)
     remote_sha = hashlib.sha256(bytes(readback)).hexdigest()
     if remote_sha != local_sha:
         raise RuntimeError(f"sha256 mismatch after upload: local={local_sha[:16]} "
-                           f"remote={remote_sha[:16]} (程序正在运行时会写不进去,请先退出)")
+                           f"remote={remote_sha[:16]} (a running instance keeps the file busy; exit it first)")
     print(f"deployed {local.name} ({size} B) -> {remote} (sha256 {local_sha[:16]}… verified)")
 
 
@@ -67,7 +67,7 @@ def fetch_logs(ftp: ftplib.FTP, out_dir: pathlib.Path) -> None:
         except ftplib.error_perm:
             print(f"log {name}: not present")
             continue
-        # 先完整取回再落盘:取不到时不留下 0 字节残留文件。
+        # Fetch fully before writing to disk: a failed fetch leaves no 0-byte leftover.
         target.write_bytes(bytes(payload))
         print(f"fetched {REMOTE_DIR}/{name} -> {target} ({target.stat().st_size} B)")
 
@@ -80,8 +80,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--remote-name", default=None)
     parser.add_argument("--fetch-log", action="store_true")
     parser.add_argument("--push-file", type=pathlib.Path,
-                        help="把任意本地文件推到 SD(--remote 指定相对路径,如 payload/subsdk9)")
-    parser.add_argument("--remote", default=None, help="配合 --push-file 的远端相对路径")
+                        help="push any local file to the SD card (--remote names the relative path, e.g. payload/subsdk9)")
+    parser.add_argument("--remote", default=None, help="relative remote path used with --push-file")
     parser.add_argument("--log-dir", type=pathlib.Path,
                         default=REPO_ROOT / "build" / "scratch")
     args = parser.parse_args(argv)

@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "channel": "stable",
+  "generated": "",
+  "app": {
+    "minVersion": "0.1.0"
+  },
+  "agent": {
+    "version": "0.11.0",
+    "commit": "c15e41858935",
+    "dirty": false,
+    "buildFlags": 2
+  },
+  "baseUrl": "https://lextuo.com/acnh-chat-code/guide/agent/0.11.0/",
+  "changelog": "",
+  "games": [
+    {
+      "profile": "v3_0_3",
+      "titleId": "01006F8002326000",
+      "version": 2228224,
+      "displayVersion": "3.0.3",
+      "contentId": "E10617820DB06889E1638499478DA0DE",
+      "buildId": "FF1D1C05670DB6021C85B624A710B963",
+      "files": [
+        {
+          "name": "subsdk9",
+          "source": "subsdk9",
+          "target": "atmosphere/contents/01006F8002326000/exefs/subsdk9",
+          "size": 73986,
+          "sha256": "c47d2b4783a15978aa863d71a4b82f384b7abae636f085a88b4bf041f404c0ba",
+          "restart": "game"
+        },
+        {
+          "name": "main.npdm",
+          "source": "main.npdm",
+          "target": "atmosphere/contents/01006F8002326000/exefs/main.npdm",
+          "size": 1652,
+          "sha256": "23eea4eda50c345ee97c971708dcb16efdf091c5bc852fa57c152669104d05ba",
+          "restart": "game"
+        },
+        {
+          "name": "acnh-agent.version",
+          "source": "acnh-agent.version",
+          "target": "atmosphere/contents/01006F8002326000/exefs/acnh-agent.version",
+          "size": 219,
+          "sha256": "3eb52d5d7912df914b76bc91f0bd786dcbd040ff4fcf899f06d494778c6540d8",
+          "restart": "none"
+        }
+      ]
+    }
+  ]
+}

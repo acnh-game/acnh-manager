@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <utility>
 
+#include "i18n/strings.hpp"
 #include "util/sha256.hpp"
 #include "util/time.hpp"
 
@@ -30,19 +31,32 @@ std::string Upper(std::string text) {
 }
 
 bool DeleteIfPresent(FsFileSystem &sd, const std::string &path) {
-    const Result rc = fsFsDeleteFile(&sd, path.c_str());
+    const std::string absolute = AbsolutePath(path);
+    const Result rc = fsFsDeleteFile(&sd, absolute.c_str());
     return R_SUCCEEDED(rc) || rc == 0x00000202; /* 202 = PathNotFound */
 }
 
 }  // namespace
 
+/* Every path handed to fs* starts with '/': the manifest target is relative ("atmosphere/...",
+   and manifest::IsSafeTarget guarantees there is no leading '/'), and FS refuses a relative
+   path (measured rc=0x2EEA02 on create).  This is the single place that adds the prefix. */
+std::string AbsolutePath(std::string_view path) {
+    if (!path.empty() && path.front() == '/') {
+        return std::string(path);
+    }
+    return "/" + std::string(path);
+}
+
 bool EnsureDirectory(FsFileSystem &sd, const std::string &path, std::string *error) {
+    const std::string absolute = AbsolutePath(path);
     std::string current;
     std::size_t start = 0;
-    while (start <= path.size()) {
-        const std::size_t slash = path.find('/', start);
+    while (start <= absolute.size()) {
+        const std::size_t slash = absolute.find('/', start);
         const std::string segment =
-            slash == std::string::npos ? path.substr(start) : path.substr(start, slash - start);
+            slash == std::string::npos ? absolute.substr(start)
+                                       : absolute.substr(start, slash - start);
         if (!segment.empty()) {
             current += "/" + segment;
             const Result rc = fsFsCreateDirectory(&sd, current.c_str());
@@ -63,11 +77,12 @@ bool EnsureDirectory(FsFileSystem &sd, const std::string &path, std::string *err
 
 bool ReadWholeFile(FsFileSystem &sd, const std::string &path, std::vector<u8> *out,
                    std::string *error) {
+    const std::string absolute = AbsolutePath(path);
     FsFile file{};
-    Result rc = fsFsOpenFile(&sd, path.c_str(), FsOpenMode_Read, &file);
+    Result rc = fsFsOpenFile(&sd, absolute.c_str(), FsOpenMode_Read, &file);
     if (R_FAILED(rc)) {
         if (error != nullptr) {
-            *error = Describe("open " + path, rc);
+            *error = Describe("open " + absolute, rc);
         }
         return false;
     }
@@ -94,11 +109,12 @@ bool ReadWholeFile(FsFileSystem &sd, const std::string &path, std::vector<u8> *o
 }
 
 bool HashFile(FsFileSystem &sd, const std::string &path, std::string *hex, std::string *error) {
+    const std::string absolute = AbsolutePath(path);
     FsFile file{};
-    Result rc = fsFsOpenFile(&sd, path.c_str(), FsOpenMode_Read, &file);
+    Result rc = fsFsOpenFile(&sd, absolute.c_str(), FsOpenMode_Read, &file);
     if (R_FAILED(rc)) {
         if (error != nullptr) {
-            *error = Describe("open " + path, rc);
+            *error = Describe("open " + absolute, rc);
         }
         return false;
     }
@@ -130,9 +146,10 @@ bool HashFile(FsFileSystem &sd, const std::string &path, std::string *hex, std::
 
 bool WriteFileVerified(FsFileSystem &sd, const std::string &path, const std::vector<u8> &data,
                        const std::string &sha256, std::string *error) {
-    const std::string temp = path + kTempSuffix;
-    const std::string backup = path + kOldSuffix;
-    if (!EnsureDirectory(sd, path.substr(0, path.find_last_of('/')), error)) {
+    const std::string target = AbsolutePath(path);
+    const std::string temp = target + kTempSuffix;
+    const std::string backup = target + kOldSuffix;
+    if (!EnsureDirectory(sd, target.substr(0, target.find_last_of('/')), error)) {
         return false;
     }
     DeleteIfPresent(sd, temp);
@@ -163,7 +180,7 @@ bool WriteFileVerified(FsFileSystem &sd, const std::string &path, const std::vec
         return false;
     }
 
-    /* 回读校验:确认落盘内容与预期一致,再谈替换。 */
+    /* Read back: only replace the old file once what is on the card matches. */
     std::string actual;
     if (!HashFile(sd, temp, &actual, error)) {
         DeleteIfPresent(sd, temp);
@@ -171,29 +188,29 @@ bool WriteFileVerified(FsFileSystem &sd, const std::string &path, const std::vec
     }
     if (!sha256.empty() && Upper(actual) != Upper(sha256)) {
         if (error != nullptr) {
-            *error = "verification failed for " + path + ": got " + actual;
+            *error = "verification failed for " + target + ": got " + actual;
         }
         DeleteIfPresent(sd, temp);
         return false;
     }
 
-    /* 原子替换:旧文件先挪到 .acnh-old,再改名,最后删掉旧文件。 */
+    /* Atomic replace: move the old file to .acnh-old, rename, then drop the old file. */
     DeleteIfPresent(sd, backup);
-    const Result rc_backup = fsFsRenameFile(&sd, path.c_str(), backup.c_str());
+    const Result rc_backup = fsFsRenameFile(&sd, target.c_str(), backup.c_str());
     if (R_FAILED(rc_backup) && rc_backup != 0x00000202) {
         if (error != nullptr) {
-            *error = Describe("backup " + path, rc_backup);
+            *error = Describe("backup " + target, rc_backup);
         }
         DeleteIfPresent(sd, temp);
         return false;
     }
-    rc = fsFsRenameFile(&sd, temp.c_str(), path.c_str());
+    rc = fsFsRenameFile(&sd, temp.c_str(), target.c_str());
     if (R_FAILED(rc)) {
         if (error != nullptr) {
-            *error = Describe("rename into " + path, rc);
+            *error = Describe("rename into " + target, rc);
         }
-        /* 尽力恢复旧文件。 */
-        fsFsRenameFile(&sd, backup.c_str(), path.c_str());
+        /* Best effort: put the old file back. */
+        fsFsRenameFile(&sd, backup.c_str(), target.c_str());
         DeleteIfPresent(sd, temp);
         return false;
     }
@@ -214,7 +231,7 @@ bool ReadStateFile(FsFileSystem &sd, InstallState *state, bool *found, std::stri
         if (found != nullptr) {
             *found = false;
         }
-        return true; /* 没有记录不是错误 */
+        return true; /* no record is not an error */
     }
     if (found != nullptr) {
         *found = true;
@@ -279,25 +296,24 @@ InstallResult Install(FsFileSystem &sd, const manifest::Manifest &manifest,
         std::vector<u8> payload;
         std::string error;
         if (!source.Read(entry.source, &payload, &error)) {
-            result.error = "payload 读取失败: " + error;
+            result.error = i18n::Format(i18n::StringId::InstallErrPayloadRead, error.c_str());
             return result;
         }
         if (payload.size() != entry.size) {
-            char buf[160];
-            std::snprintf(buf, sizeof(buf), "payload %s 大小不符: %llu != %llu",
-                          entry.name.c_str(), static_cast<unsigned long long>(payload.size()),
-                          static_cast<unsigned long long>(entry.size));
-            result.error = buf;
+            result.error = i18n::Format(i18n::StringId::InstallErrPayloadSize, entry.name.c_str(),
+                                        static_cast<unsigned long long>(payload.size()),
+                                        static_cast<unsigned long long>(entry.size));
             return result;
         }
         const std::string actual = util::Sha256Hex(payload.data(), payload.size());
         if (Upper(actual) != entry.sha256) {
-            result.error = "payload " + entry.name + " sha256 不符: " + actual;
+            result.error = i18n::Format(i18n::StringId::InstallErrPayloadSha, entry.name.c_str(),
+                                        actual.c_str());
             return result;
         }
         if (!dry_run) {
             if (!WriteFileVerified(sd, entry.target, payload, entry.sha256, &error)) {
-                result.error = "写入失败: " + error;
+                result.error = i18n::Format(i18n::StringId::InstallErrWrite, error.c_str());
                 return result;
             }
             ++result.files_written;
@@ -314,7 +330,7 @@ InstallResult Install(FsFileSystem &sd, const manifest::Manifest &manifest,
     if (!dry_run) {
         std::string error;
         if (!WriteStateFile(sd, state, &error)) {
-            result.error = "写入 state.json 失败: " + error;
+            result.error = i18n::Format(i18n::StringId::InstallErrStateWrite, error.c_str());
             return result;
         }
     }
@@ -330,11 +346,11 @@ InstallResult Uninstall(FsFileSystem &sd, bool dry_run, const ProgressCallback &
     bool found = false;
     std::string error;
     if (!ReadStateFile(sd, &state, &found, &error)) {
-        result.error = "state.json 解析失败: " + error;
+        result.error = i18n::Format(i18n::StringId::InstallErrStateParse, error.c_str());
         return result;
     }
     if (!found) {
-        result.error = "没有安装记录,无需卸载";
+        result.error = i18n::Text(i18n::StringId::UninstallNoRecord, i18n::Current());
         return result;
     }
     const int total = static_cast<int>(state.files.size());
@@ -345,15 +361,15 @@ InstallResult Uninstall(FsFileSystem &sd, bool dry_run, const ProgressCallback &
         }
         std::string actual;
         if (!HashFile(sd, file.target, &actual, &error)) {
-            /* 文件已不在:视为已删除,继续。 */
+            /* Not there any more: treat as already removed and keep going. */
             continue;
         }
         if (Upper(actual) != file.sha256) {
-            result.error = "文件被修改过,拒绝删除: " + file.target;
+            result.error = i18n::Format(i18n::StringId::UninstallModified, file.target.c_str());
             return result;
         }
         if (!dry_run) {
-            const Result rc = fsFsDeleteFile(&sd, file.target.c_str());
+            const Result rc = fsFsDeleteFile(&sd, AbsolutePath(file.target).c_str());
             if (R_FAILED(rc)) {
                 result.error = Describe("delete " + file.target, rc);
                 return result;
@@ -362,7 +378,8 @@ InstallResult Uninstall(FsFileSystem &sd, bool dry_run, const ProgressCallback &
         ++result.files_written;
     }
     if (!dry_run) {
-        /* 目录空了才删;删除失败说明还有别人的文件,保留。 */
+        /* Only remove the directory when it is empty; a failure means someone else's files
+           live there, so keep it. */
         const std::string dir = "/atmosphere/contents/01006F8002326000/exefs";
         fsFsDeleteDirectory(&sd, dir.c_str());
         const Result rc = fsFsDeleteFile(&sd, kStatePath);

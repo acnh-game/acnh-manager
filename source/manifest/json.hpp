@@ -1,10 +1,10 @@
 #pragma once
 
-/* 极简 JSON(仅覆盖本项目自有数据:安装清单与 state.json)。
-   刻意不依赖 libnx 或第三方库,便于主机侧直接跑测试。
-   支持:对象 / 数组 / 字符串(含 \" \\ \/ \b \f \n \r \t \uXXXX)/ 数字 / true / false / null。
-   不支持:注释、尾随逗号、NaN/Infinity、超长数字的精度保证(>2^53 会丢精度)。
-   对象保持插入顺序,便于"写回时键顺序稳定"。 */
+/* Minimal JSON: just what this project's own data needs (the install manifest and state.json).
+   Deliberately free of libnx and third-party code so the host tests can run it directly.
+   Supports: object / array / string (with \" \\ \/ \b \f \n \r \t \uXXXX) / number / true / false / null.
+   Does not support: comments, trailing commas, NaN/Infinity, and it makes no precision
+   promise beyond 2^53.  Objects keep insertion order, so writing back is order-stable. */
 
 #include <cstdint>
 #include <string>
@@ -31,7 +31,7 @@ struct Value {
     bool IsArray() const { return type == Type::Array; }
     bool IsObject() const { return type == Type::Object; }
 
-    /* 缺键 / 类型不符时返回 nullptr。 */
+    /* Returns nullptr when the key is missing or has the wrong type. */
     const Value *Find(std::string_view key) const {
         if (type != Type::Object) {
             return nullptr;
@@ -53,7 +53,7 @@ struct Value {
 
     std::size_t Size() const { return type == Type::Array ? array.size() : 0; }
 
-    /* 取标量:类型不符时返回 fallback。 */
+    /* Scalar accessors: wrong type returns the fallback. */
     const std::string &StringOr(const std::string &fallback) const {
         return type == Type::String ? string : fallback;
     }
@@ -81,13 +81,13 @@ struct Value {
     }
 };
 
-/* 解析失败时返回 false 并给出首个错误的位置说明。 */
+/* Returns false with the position of the first error when parsing fails. */
 bool Parse(std::string_view text, Value *out, std::string *error);
 
-/* 紧凑输出(不换行、不排序);字符串按 JSON 规则转义。 */
+/* Compact output (no newlines, no reordering); strings escaped per JSON rules. */
 std::string Dump(const Value &value);
 
-/* 数字的整数读取:非整数或超出范围返回 fallback。 */
+/* Integer accessor: a non-integer or out-of-range value returns the fallback. */
 std::int64_t IntOr(const Value &value, std::int64_t fallback);
 
 }  // namespace acnh_manager::json

@@ -1,26 +1,28 @@
 #pragma once
 
-/* Atmosphere `override_config.ini` 与 per-title `config.ini` 的语义解析(纯逻辑,可主机测试)。
-
-   背景(源码依据见 docs/architecture.md 与 ../../../docs/acnh_manager_plan.md):
-   - exefs 覆盖是否生效由 OverrideStatus 决定,而它来自 `override_key`:
-       `!L` → by_default=true(默认生效,按住 L 反而关闭)
-       `L`  → by_default=false(默认关闭,必须按住 L 才生效)
-       缺省 → 代码默认 {key=L, by_default=true}
-       显式空值 → key_combination=0、by_default=false → 永不生效
-   - per-title `[override_config] override_key` 覆盖全局默认;
-   - `[hbl_config] override_any_app` + `override_any_app_key`(默认 R)表示"按住该键启动任何应用会进 hbmenu"。 */
-
 #include <cstdint>
+
+/* Semantic parsing of Atmosphere's `override_config.ini` and per-title `config.ini`
+   (pure logic, host-testable).
+   Background (sources: docs/architecture.md and ../../../docs/acnh_manager_plan.md):
+   - whether the exefs override applies is decided by OverrideStatus, which comes from
+     `override_key`:
+       `!L` -> by_default=true (applies unless L is held)
+       `L`  -> by_default=false (does not apply unless L is held)
+       missing -> code default {key=L, by_default=true}
+       explicitly empty -> key_combination=0, by_default=false -> never applies
+   - a per-title `[override_config] override_key` overrides the global default;
+   - `[hbl_config] override_any_app` + `override_any_app_key` (default R) mean "holding this
+     key while launching anything opens hbmenu". */
 #include <string>
 #include <string_view>
 
 namespace acnh_manager::env {
 
 struct OverrideKey {
-    std::string key;          /* "L"、"R"…;空表示没有可用组合键 */
-    bool by_default{true};    /* true: 默认生效,按住键关闭 */
-    bool specified{false};    /* 文件里是否显式写了这一项 */
+    std::string key;          /* "L", "R", ...; empty means no usable combination */
+    bool by_default{true};    /* true: applies by default, hold the key to disable */
+    bool specified{false};    /* whether the file set this entry explicitly */
 };
 
 struct OverrideConfig {
@@ -30,18 +32,18 @@ struct OverrideConfig {
     OverrideKey hbl_any_app_key;   /* [hbl_config] override_any_app_key */
 };
 
-/* 解析 Atmosphere 的 override_config.ini 文本(只取上面用到的键)。 */
+/* Parse Atmosphere's override_config.ini text (only the keys used above). */
 OverrideConfig ParseOverrideConfig(std::string_view text);
 
-/* 解析 per-title config.ini(只取 [override_config] override_key)。 */
+/* Parse a per-title config.ini (only [override_config] override_key). */
 OverrideKey ParseTitleConfig(std::string_view text);
 
-/* 把"覆盖是否生效、要不要按键"翻译成人话,给状态页直接用。 */
+/* Turn "does the override apply, and which key matters" into a sentence for the status page. */
 struct OverrideAdvice {
-    bool effective_by_default{true}; /* 不按键时覆盖是否生效 */
-    std::string key;                 /* 需要/需要避免按住的键 */
-    bool never_applies{false};       /* override_key 显式为空 */
-    std::string text;                /* 面向玩家的中文说明 */
+    bool effective_by_default{true}; /* does the override apply without holding anything */
+    std::string key;                 /* key to hold (or avoid holding) */
+    bool never_applies{false};       /* override_key explicitly empty */
+    std::string text;                /* player-facing sentence (localized by the i18n table) */
 };
 
 OverrideAdvice Advise(const OverrideConfig &config, const OverrideKey &title);

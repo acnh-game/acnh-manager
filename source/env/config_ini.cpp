@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 
+#include "i18n/strings.hpp"
+
 namespace acnh_manager::env {
 namespace {
 
@@ -68,7 +70,7 @@ OverrideKey ParseKey(std::string_view value) {
     } else if (name == "ddown") {
         key.key = "DDOWN";
     } else {
-        /* 未知/空值:没有可用组合键。 */
+        /* Unknown or empty value: no usable combination. */
         key.key.clear();
     }
     return key;
@@ -113,9 +115,9 @@ void ForEachEntry(std::string_view text, Handler handler) {
 
 OverrideConfig ParseOverrideConfig(std::string_view text) {
     OverrideConfig config;
-    /* 代码默认值:按住 L 关闭覆盖(即默认生效)。 */
+    /* Code default: hold L to disable the override (so it applies by default). */
     config.global_default = OverrideKey{"L", true, false};
-    config.hbl_any_app = true; /* Atmosphere 代码默认 override_any_app = true */
+    config.hbl_any_app = true; /* Atmosphere's code default is override_any_app = true */
     config.hbl_any_app_key = OverrideKey{"R", false, false};
     ForEachEntry(text, [&config](const SectionKey &entry) {
         if (entry.section == "default_config") {
@@ -148,23 +150,22 @@ OverrideAdvice Advise(const OverrideConfig &config, const OverrideKey &title) {
     const OverrideKey &key = title.specified ? title : config.global_default;
     OverrideAdvice advice;
     if (key.key.empty()) {
-        /* 组合键为空时,结果完全由 by_default 决定:true = 始终生效、false = 永不生效。 */
+        /* With no key combination, by_default decides everything: always on, or never. */
         advice.effective_by_default = key.by_default;
         advice.never_applies = !key.by_default;
-        advice.text = key.by_default
-                          ? "覆盖始终生效(override_key 没有有效按键)"
-                          : "覆盖永不生效(override_key 为空或按键名无法识别):请改成 !L 或删除该项";
+        advice.text = i18n::Text(key.by_default ? i18n::StringId::OverrideAlwaysOn
+                                                : i18n::StringId::OverrideNeverApplies,
+                                 i18n::Current());
         return advice;
     }
     advice.key = key.key;
     advice.effective_by_default = key.by_default;
-    if (key.by_default) {
-        advice.text = "覆盖默认生效;启动游戏时不要按住 " + key.key;
-    } else {
-        advice.text = "覆盖默认关闭;启动游戏时需要按住 " + key.key;
-    }
+    advice.text = i18n::Format(key.by_default ? i18n::StringId::OverrideOnByDefault
+                                              : i18n::StringId::OverrideOffByDefault,
+                               key.key.c_str());
     if (config.hbl_any_app && !config.hbl_any_app_key.key.empty()) {
-        advice.text += "。注意:按住 " + config.hbl_any_app_key.key + " 启动任何应用会进入 hbmenu";
+        advice.text +=
+            i18n::Format(i18n::StringId::OverrideHbmenuNote, config.hbl_any_app_key.key.c_str());
     }
     return advice;
 }

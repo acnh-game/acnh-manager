@@ -16,7 +16,8 @@
    `dmnt:cht` 读 `main` 的 ModuleId 做字节级复核。
 2. 校验并写入 `atmosphere/contents/01006F8002326000/exefs/{subsdk9, main.npdm, acnh-agent.version}`,
    记录安装状态;支持一键卸载回滚。
-3. 启动时静默检查一次发布清单,有新版才提示并可一键更新;断网时静默使用内置 payload。
+3. 内嵌发布清单与 payload,离线也能安装;联网检查目前是**设置页手动按 `+`**,"启动时静默检查
+   + 一键更新"属于 M5 计划(断网时静默使用内置 payload 这一点已经成立)。
 
 判据链、实测证据与 SD 布局见 `docs/architecture.md`(改行为前必读);产品侧决策见
 `../../docs/acnh_manager_plan.md`。

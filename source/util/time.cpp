@@ -15,7 +15,7 @@ std::string FormatUnixTimeUtc(std::int64_t unix_seconds) {
     const int minute = static_cast<int>((remainder % 3600) / 60);
     const int second = static_cast<int>(remainder % 60);
 
-    /* Howard Hinnant 的 civil_from_days:把"1970-01-01 起的天数"换算成年月日。 */
+    /* Howard Hinnant's civil_from_days: turn "days since 1970-01-01" into a calendar date. */
     std::int64_t z = days + 719468;
     const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
     const unsigned doe = static_cast<unsigned>(z - era * 146097);
@@ -27,7 +27,7 @@ std::string FormatUnixTimeUtc(std::int64_t unix_seconds) {
     const unsigned m = mp < 10 ? mp + 3 : mp - 9;
     const std::int64_t year = y + (m <= 2 ? 1 : 0);
 
-    /* 年份是 long long,给足余量以避开 -Wformat-truncation。 */
+    /* The year is long long: plenty of headroom to silence -Wformat-truncation. */
     char buffer[64];
     std::snprintf(buffer, sizeof(buffer), "%04lld-%02u-%02uT%02d:%02d:%02dZ",
                   static_cast<long long>(year), m, d, hour, minute, second);

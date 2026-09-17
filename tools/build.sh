@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# 在固定镜像里构建 NRO。Docker socket 受沙盒限制,运行前需提权。
+# Build the NRO in the pinned image.  The docker socket is sandboxed, so this needs
+# escalation.
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 image="devkitpro/devkita64:20260219"
 
-# 构建戳:UTC 时间 + commit + **源码树哈希**。写进二进制并在日志/界面上显示,
-# 用来回答"现在跑的是不是最新构建":源码一变,戳必变。
+# Build stamp = UTC time + commit + source-tree hash.  It is written into the binary and
+# shown in the log and in the UI footer, so "is this the build I just made?" has an answer:
+# change any file under source/ and the stamp changes.
 stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if commit="$(git -C "${repo_dir}" rev-parse --short HEAD 2>/dev/null)"; then
     stamp="${stamp}+${commit}"

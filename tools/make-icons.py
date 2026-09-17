@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""从设计主图生成自制程序与商店要用的两份图标。
+"""Derive the two icons this project needs (homebrew NACP and store listing) from the master image.
 
-产物(都提交进仓库,体积很小):
-    assets/icon.jpg   256×256 JPEG —— elf2nro 嵌进 NACP,hbmenu/相册里显示的图标
-    assets/icon.png   256×256 PNG  —— Homebrew App Store 商店条目图标(打包时上传)
+Outputs (both committed; they are small):
+    assets/icon.jpg   256x256 JPEG -- embedded into the NACP, shown by hbmenu/album
+    assets/icon.png   256x256 PNG  -- Homebrew App Store listing icon (uploaded when packaging)
 
-主图是 `assets/icon-org.png`(设计稿,提交进仓库,作为唯一来源);换图标时替换主图后重跑本工具。
-历史:第一版沿用微信小程序图标(`src/acnh-chat-code-miniapp/resources/app-icon/app-icon-1024.png`),
-上架前改为专用设计稿;需要时可用 `--source` 指回小程序图标。
+The master image is assets/icon-org.png (the design source, committed, single source of truth):
+replace it and re-run this tool to change the icons.  History: the first version reused the
+WeChat mini-app icon; a dedicated design replaced it before release (--source points back).
 
-依赖 Pillow,用 Codex 自带运行时(路径以 load_workspace_dependencies 的返回为准),例如:
+Needs Pillow, via the Codex-bundled runtime (see load_workspace_dependencies), for example:
     /Users/leo/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 \
         tools/make-icons.py
 """
