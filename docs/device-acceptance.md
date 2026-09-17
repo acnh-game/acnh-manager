@@ -59,3 +59,20 @@ agent 版本、观察到什么、失败用例的原始现象。
 - 装完后 `exefs/` 三个文件的 sha256 与发布清单逐字一致(`subsdk9` 74 062 B、
   `main.npdm` 1 652 B、`acnh-agent.version` 219 B),`/switch/ACNH-Manager/state.json` 记录了
   agent 版本/commit/contentId/buildId 与三个文件的 size+sha256,可用于卸载回滚。
+
+## 触摸输入实测(2026-09-17)
+
+用 `/switch/ACNH-Manager/dev-touchprobe` 开关在真机上验证(hid 共享内存 + 触点坐标):
+
+```
+touch probe: hid shared memory ready
+touch probe: down at x=1217 y=51 count=1 diameter=67x89
+touch probe: released at x=1213 y=56
+```
+
+- **applet 模式可以读触摸**:`hidInitializeTouchScreen()` 成功、共享内存就绪(与 Sphaira 的用法一致);
+  触摸因此在设置里是"能用就用、不能用就退回按键",不是必需能力。
+- **`HidTouchState.x/y` 就是 1280×720 屏幕坐标**:手指点在右上角,记录值与位置吻合,无需面板坐标换算。
+- 指腹接触面约 `67×89` px → 可点目标做到 100 px 以上、间距 ≥ 20 px 才不至于误触。
+- 注意:`hidInitializeTouchScreen()` 在失败时会 **abort 整个进程**(libnx 行为),所以它只在这条
+  探针路径与 `ui::Touch::Init()` 里各调用一次,其余地方先查共享内存再读状态。

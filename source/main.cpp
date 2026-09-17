@@ -23,6 +23,7 @@ constexpr const char *kLogPath = "/switch/ACNH-Manager/log.txt";
 constexpr const char *kLogHistoryPath = "/switch/ACNH-Manager/log-history.log";
 constexpr const char *kProbeFlagPath = "/switch/ACNH-Manager/dev-probe";
 constexpr const char *kWriteProbeFlagPath = "/switch/ACNH-Manager/dev-writeprobe";
+constexpr const char *kTouchProbeFlagPath = "/switch/ACNH-Manager/dev-touchprobe";
 constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
 constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
 /* Kept in sync with APP_VERSION in the Makefile. */
@@ -201,6 +202,13 @@ int main(int argc, char **argv) {
             if (R_SUCCEEDED(rc_log)) {
                 log.Line("ui: init ok (fonts + framebuffer ready)");
                 log.Sync();
+            }
+            /* Touch probe runs with the first frame already on screen, so the log tells us
+               both "did hid give us touch" and "what does a tap look like", with the user
+               able to see the UI while they tap. */
+            if (R_SUCCEEDED(rc_log) && FileExists(sd, kTouchProbeFlagPath)) {
+                log.Line("dev-touchprobe flag present: running the touch probe");
+                acnh_manager::probe::RunTouchProbe(log, sd);
             }
             app.Run();
             app.Exit();

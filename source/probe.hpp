@@ -20,4 +20,10 @@ void Run(Log &log, FsFileSystem &sd);
    present, and it only creates and deletes its own temp files. */
 void RunWriteProbe(Log &log, FsFileSystem &sd);
 
+/* Touch probe (development switch `/switch/ACNH-Manager/dev-touchprobe`): activate the
+   touchscreen, log whether hid's shared memory appeared, then report every touch for a few
+   seconds.  It exists to prove on real hardware that touch works in applet mode and that
+   HidTouchState.x/y really are screen coordinates before the UI depends on them. */
+void RunTouchProbe(Log &log, FsFileSystem &sd);
+
 }  // namespace acnh_manager::probe

@@ -1,5 +1,6 @@
 #include "probe.hpp"
 
+#include <cstddef>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
@@ -502,6 +503,64 @@ void RunWriteProbe(Log &log, FsFileSystem &sd) {
         ProbeWritePath(log, sd, "exefs-rel", path);
     }
     log.Line("=== write probe done ===");
+}
+
+void RunTouchProbe(Log &log, FsFileSystem &sd) {
+    (void)sd;
+    log.Line("=== touch probe ===");
+    /* libnx aborts the process when the touchscreen cannot be activated, which is exactly why
+       this lives behind a development switch: on a normal run the UI must never risk it. */
+    hidInitializeTouchScreen();
+    const bool ready = hidGetSharedmemAddr() != nullptr;
+    log.Line("touch probe: hid shared memory %s", ready ? "ready" : "MISSING (touch unusable)");
+    if (!ready) {
+        log.Line("=== touch probe done ===");
+        return;
+    }
+
+    /* Watch for a few seconds.  Every new contact and every release is logged with the raw
+       coordinates, so the log tells us both "did it work" and "what is the coordinate space". */
+    bool down = false;
+    int last_x = 0;
+    int last_y = 0;
+    int samples = 0;
+    const u64 start = armGetSystemTick();
+    /* 15 s, or as soon as the user has tapped and let go once. */
+    const u64 deadline = start + armGetSystemTickFreq() * 15;
+    bool released_once = false;
+    while (armGetSystemTick() < deadline) {
+        HidTouchScreenState state{};
+        if (hidGetTouchScreenStates(&state, 1) == 0) {
+            continue;
+        }
+        ++samples;
+        if (state.count > 0) {
+            const int x = static_cast<int>(state.touches[0].x);
+            const int y = static_cast<int>(state.touches[0].y);
+            if (!down) {
+                down = true;
+                log.Line("touch probe: down at x=%d y=%d count=%d diameter=%ux%u", x, y,
+                         state.count, state.touches[0].diameter_x, state.touches[0].diameter_y);
+                log.Sync();
+            } else if ((x - last_x) * (x - last_x) + (y - last_y) * (y - last_y) > 40 * 40) {
+                log.Line("touch probe: moved to x=%d y=%d", x, y);
+                log.Sync();
+            }
+            last_x = x;
+            last_y = y;
+        } else if (down) {
+            down = false;
+            released_once = true;
+            log.Line("touch probe: released at x=%d y=%d", last_x, last_y);
+            log.Sync();
+        }
+        if (released_once) {
+            break;
+        }
+        svcSleepThread(10'000'000ull); /* 10 ms */
+    }
+    log.Line("touch probe: %d samples, last down=%s", samples, down ? "yes" : "no");
+    log.Line("=== touch probe done ===");
 }
 
 }  // namespace acnh_manager::probe

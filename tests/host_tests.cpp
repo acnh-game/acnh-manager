@@ -16,6 +16,7 @@
 #include "manifest/json.hpp"
 #include "manifest/manifest.hpp"
 #include "util/sha256.hpp"
+#include "ui/action.hpp"
 #include "util/text_wrap.hpp"
 #include "util/time.hpp"
 
@@ -511,6 +512,50 @@ void TestTextWrap() {
     CHECK(lines[1].width == 20);
 }
 
+/* Actions: touch hit-testing and spatial focus movement.  These are pure functions on
+   rectangles, so the layout of every button can be pinned here instead of on the console. */
+void TestActions() {
+    using acnh_manager::ui::Action;
+    using acnh_manager::ui::FirstEnabled;
+    using acnh_manager::ui::HitTest;
+    using acnh_manager::ui::MoveFocus;
+    using acnh_manager::ui::Rect;
+
+    /* The home screen from the design: a wide primary button plus two half-width ones. */
+    const std::vector<Action> home = {
+        {0, Rect{120, 270, 1040, 144}, true},  /* A: primary */
+        {1, Rect{120, 450, 508, 110}, true},   /* X: check for updates */
+        {2, Rect{652, 450, 508, 110}, true},   /* Y: uninstall */
+    };
+
+    /* Hit-testing: inside, on the border (top-left counts, bottom-right does not), outside. */
+    CHECK(HitTest(home, 200, 300) == 0);
+    CHECK(HitTest(home, 120, 270) == 0);
+    CHECK(HitTest(home, 1159, 413) == 0);
+    CHECK(HitTest(home, 1160, 414) == -1);
+    CHECK(HitTest(home, 200, 500) == 1);
+    CHECK(HitTest(home, 900, 500) == 2);
+    CHECK(HitTest(home, 640, 500) == -1); /* the gap between the two buttons */
+
+    /* A disabled control is neither hit nor focused. */
+    std::vector<Action> with_disabled = home;
+    with_disabled[2].enabled = false;
+    CHECK(HitTest(with_disabled, 900, 500) == -1);
+
+    /* Focus: entry lands on the primary button, down goes to the left secondary one, right
+       moves between the two secondary buttons, and there is nothing below them. */
+    CHECK(FirstEnabled(home) == 0);
+    CHECK(MoveFocus(home, 0, 0, +1) == 1);
+    CHECK(MoveFocus(home, 1, +1, 0) == 2);
+    CHECK(MoveFocus(home, 2, -1, 0) == 1);
+    CHECK(MoveFocus(home, 1, 0, +1) == 1);
+    CHECK(MoveFocus(home, 2, 0, +1) == 2);
+    CHECK(MoveFocus(home, 1, 0, -1) == 0);
+    CHECK(MoveFocus(home, -1, 0, +1) == 0); /* unknown focus falls back to the first action */
+    CHECK(MoveFocus(with_disabled, 0, 0, +1) == 1);
+    CHECK(MoveFocus(with_disabled, 1, +1, 0) == 1); /* right neighbour is disabled */
+}
+
 }  // namespace
 
 int main() {
@@ -526,6 +571,7 @@ int main() {
     TestStrings();
     TestSha256();
     TestTimeFormat();
+    TestActions();
     TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

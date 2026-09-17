@@ -1,6 +1,6 @@
-# 主机侧单元测试(不需要 Docker,也不需要 Switch)。
+# Host-side unit tests: no Docker, no Switch needed.
 #
-#   make -C tests          # 编译并运行
+#   make -C tests          # build and run
 #   make -C tests clean
 CXX ?= c++
 CXXFLAGS ?= -std=c++17 -O1 -g -Wall -Wextra -Werror
@@ -13,6 +13,9 @@ SOURCES := host_tests.cpp \
            ../source/install/gate.cpp \
            ../source/util/sha256.cpp \
            ../source/util/time.cpp
+# Headers are dependencies too: without this, changing a header alone reused the previous
+# binary, so the tests could "pass" against code that no longer exists.
+HEADERS := $(shell find ../source -name '*.hpp')
 BINARY := host-tests
 
 .PHONY: all run clean
@@ -21,7 +24,7 @@ all: run
 run: $(BINARY)
 	@./$(BINARY)
 
-$(BINARY): $(SOURCES)
+$(BINARY): $(SOURCES) $(HEADERS)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SOURCES) -o $@
 
 clean:

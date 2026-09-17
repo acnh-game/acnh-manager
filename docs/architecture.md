@@ -196,6 +196,9 @@ spike 只读:不写游戏目录,不创建 `state.json`。
   (填充/页眉/正文/页脚)再等一次 —— 用来逐段定位渲染崩溃。开关删掉即恢复成"启动直接出界面"。
 - **文本界面**:存在 `/switch/ACNH-Manager/ui-text` 时,不走图形界面,退回控制台文本界面
   (`source/ui/text_ui.cpp`)。图形路径排查时的兜底入口。
+- **触摸探针**:存在 `/switch/ACNH-Manager/dev-touchprobe` 时,首帧画完后激活触摸屏并在
+  `log.txt` 里记录每次按下/移动/抬起的坐标(实测结论见 `docs/device-acceptance.md`),
+  用来确认 applet 模式的触摸可用性与坐标空间。定位完应把开关删掉。
 
 ## 7. 界面层(M1)
 
@@ -217,6 +220,11 @@ spike 只读:不写游戏目录,不创建 `state.json`。
   "进入游戏或按键就整机崩溃"。宽度用 `width_aligned` 是安全的(1280 本来就对齐)。
 - 交互:`A` 刷新环境(设置页为切换语言)、`L/R` 切页、`B` 或 `+` 退出;安装/确认/进度/结果页
   在 M2 用同一套渲染接入。
+- **输入统一走动作表**(`source/ui/action.hpp`,纯逻辑 + 主机测试):一个控件 = `{id, 矩形,
+   是否可用}`。触摸用 `HitTest` 命中它,方向键/摇杆用 `MoveFocus` 在同一行/列内移动焦点,
+   `A` 执行当前焦点 —— 触屏与按键是同一套动作的两条通路。触摸本身在 `source/ui/touch.*`:
+   只初始化一次,之后每帧读 `hidGetTouchScreenStates`,坐标即屏幕坐标(实测见
+   `docs/device-acceptance.md`);没有触摸(座机模式/服务不可用)时按钮依旧可用。
 
 ### 7.1 绘制与排版约定
 
