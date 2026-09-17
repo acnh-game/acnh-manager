@@ -94,3 +94,54 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 | 冷启动未进游戏 | 重启整机、不进游戏直接运行 spike(applet 模式,`application running=0`):`ns` 版本、`ncm` 数据库与内容列表**全部可用**;`ncm[update]` 给出 version 2228224(type=0x81)与 type=1 内容 id `E10617820DB06889E1638499478DA0DE` ✔ |
 | `lr` 与 `ncm` 的关系 | `lr` 解析 base title id 返回 `@SdCardContent://registered/00000010/80cbc793d37b6f493ba53561106bb5c6.nca`,而 `ncm` 显示 `80CBC793…` 属于**基础标题**(version 0)的 Program 内容;因此门控改用 `ncm` 的更新内容 id |
 | 指纹绑定(游戏运行中,同一次运行) | `dmnt:cht` 的 ModuleId `FF1D1C05670DB6021C85B624A710B963` 与 `ncm[update]` 的 version 2228224 / type=1 内容 id `E10617820DB06889E1638499478DA0DE` 同时成立;`tools/summarize-spike-log.py` 判定 gate ①+② 与 hardening ③ 均 PASS |
+
+## 6. 核心逻辑模块(M1 起)
+
+判据与决策已从探针代码抽成**不依赖 libnx 的纯逻辑**,主机侧可直接测试;真机部分只负责"取数"和"落盘"。
+
+| 模块 | 职责 |
+|---|---|
+| `source/manifest/json.*` | 极简 JSON 子集解析与输出(对象/数组/字符串含 `\uXXXX` 与代理对/数字/布尔/null),对象保持插入顺序 |
+| `source/manifest/manifest.*` | 发布清单解析与**严格校验**:schema、`agent.dirty==false`、`agent.buildFlags==` 发布位(仅语义钩子位)、`target` 路径安全、`sha256` 64 位十六进制、`size>0`、`restart` 取值、`app.minVersion`;任一项不符即整体拒绝 |
+| `source/install/gate.*` | 门控判定 `Evaluate()`、安装决策 `Plan()`、`state.json` 的序列化/解析 |
+| `source/env/config_ini.*` | `override_config.ini` 与 per-title `config.ini` 的语义解析,产出"启动游戏要不要按键"的人话提示(纯逻辑) |
+| `source/env/detect.*` | 真机取数(只读):`ns` 内容表、`ncm` 更新标题 Program 内容 id、`dmnt:cht` ModuleId、覆盖配置、exefs 现状与旧金手指检测 → `EnvironmentReport` |
+
+### 6.1 门控状态(`Evaluate`)
+
+| 状态 | 触发条件 | 处理 |
+|---|---|---|
+| `Supported` | 命中 `games[]` 条目:title 与 version 相同、内容 id 相同;若游戏在运行且条目有 `buildId`,ModuleId 也必须相同 | 允许安装 |
+| `NoManifest` | App 没有可用清单(M1 阶段即如此,清单由 M4 导入) | 不写盘,提示"清单不可用" |
+| `TitleNotSupported` | 清单里没有该 title | 拒绝 |
+| `VersionNotSupported` | title 有但版本不同 | 拒绝 |
+| `ContentIdMissing` | `ncm` 读不到内容 id(权限或异常) | 拒绝(fail-closed,不做"降级为仅版本匹配") |
+| `ContentIdMismatch` | 版本相同但内容指纹不同(重打包/未支持的新构建) | 拒绝 |
+| `BuildIdMismatch` | 游戏正在运行,且 `dmnt:cht` 的 ModuleId 与条目不符 | 拒绝 |
+
+### 6.2 安装动作(`Plan`)
+
+按顺序判定:门控未通过 → `Blocked`;无安装记录 → `Install`;记录的内容 id 不同 → `Install`(换构建);
+记录的 agent 版本不同 → `Install`(升级/降级);任一文件缺失或 sha256/size 不符 → `Repair`;
+全部一致 → `UpToDate`(跳过写入)。
+
+### 6.3 state.json
+
+```json
+{"schema":1,"agentVersion":"0.11.0","agentCommit":"4ac89fd403b7",
+ "contentId":"E10617820DB06889E1638499478DA0DE",
+ "buildId":"FF1D1C05670DB6021C85B624A710B963",
+ "installedAt":"2026-09-17T00:00:00Z",
+ "files":[{"target":"atmosphere/contents/01006F8002326000/exefs/subsdk9","size":105837,"sha256":"…"}]}
+```
+
+写入必须遵守第 4 节的 `SetSize` 约定;卸载只删除这里记录且哈希一致的文件。
+
+### 6.4 测试与阶段说明
+
+- 主机测试:`make -C tests`(覆盖 JSON 解析/拒绝、清单校验、路径安全、版本比较、门控七种状态、
+  安装五种动作、state 往返、覆盖键语义多种情形)。
+- **M1 阶段 App 不内置发布清单**,状态页会显示"清单不可用";清单与内嵌 payload 由 M4 的导入工具
+  从 acnh-agent 的发布产物生成(发布门控见 `../../docs/acnh_manager_plan.md` 第 8 节)。
+- **M0 探针仍随 App 保留**:在 SD 卡上创建空文件 `/switch/ACNH-Manager/dev-probe` 时,App 会在
+  环境报告之后额外运行 M0 取证的探针(写 `spike.log`),用于复核 `fsp-ldr` 等已否路线。

@@ -11,4 +11,7 @@
 | `tools/summarize-spike-log.py` | 解析环境探测日志:打印 `ns` 内容表、`ncm` 的更新标题 version 与 Program 内容 id、`dmnt:cht` 的 ModuleId,按当前判据(①ns 版本 ②ncm 内容 id ③ModuleId 复核)给出 PASS/FAIL;`fsp-ldr` 相关行仅作历史信息 | 每次真机探测后复核结论 |
 | `tools/make-icons.py` | 从主图 `assets/icon-org.png` 生成 `assets/icon.jpg`(256×256 JPEG,NACP/hbmenu 图标)与 `assets/icon.png`(256×256 PNG,商店图标);`--source` 可换主图;需带 Pillow 的运行时 | 换图标或商店素材时 |
 
+主机侧测试不在 `tools/` 下,单独放在 `tests/`:`make -C tests` 编译并运行清单解析、门控判定、
+安装决策与 `state.json` 往返的单元测试(不需要 Docker 与真机)。
+
 构建产物与日志等过程性材料放 `build/scratch/`(已忽略);真机验收结论写入 `docs/device-acceptance.md`(M5 建立)。

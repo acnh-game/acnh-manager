@@ -23,8 +23,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 
 ## 验证
 
-声称完成前至少跑:① `./tools/build.sh` 必须零警告通过;② `python3 -m py_compile tools/*.py`;
-③ 涉及真机结论时,用 `python3 tools/summarize-spike-log.py <日志>` 复核(它按当前判据给出 PASS/FAIL)。
+声称完成前至少跑:① `make -C tests`(主机侧单元测试,纯逻辑改动必跑);② `./tools/build.sh` 必须零警告通过;
+③ `python3 -m py_compile tools/*.py`;④ 涉及真机结论时,用 `python3 tools/summarize-spike-log.py <日志>` 复核
+(它按当前判据给出 PASS/FAIL)。
 
 ## 纪律
 
@@ -36,10 +37,12 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 ## 目录规划
 
 - `source/`:应用本体。M0 的探针(`main.cpp`/`probe.*`)不是一次性代码——`probe.*` 在 M1 演进为
-  环境检查模块,`main.cpp` 演进取代它的控制台壳为界面壳;M1 起新增 `ui/`、`install/`、`manifest/`、`net/`。
+  环境检查模块,`main.cpp` 的控制台壳将来换成界面壳。
+- `source/manifest/`:清单解析与校验(纯逻辑,可主机测试);`source/install/`:门控判定、安装决策与
+  `state.json`(同上);`ui/`、`net/` 随 M1/M3 加入。
 - `tools/`:开发与真机迭代工具(见 `docs/tools-guide.md`)。
-- `tests/`:M1 起放 host 侧测试(manifest 解析、状态机);`packaging/`:M4 放商店打包与 `pkgbuild.json`;
-  `docs/device-acceptance.md`:M5 写真机验收记录。目录在对应里程碑建立,不预先占位。
+- `tests/`:主机侧单元测试(`make -C tests`);`packaging/`:M4 放商店打包与 `pkgbuild.json`;
+  `docs/device-acceptance.md`:M5 写真机验收记录。
 
 ## 文档导航
 
