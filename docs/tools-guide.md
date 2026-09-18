@@ -2,9 +2,9 @@
 
 所有工具都在本仓库根目录运行。需要 Docker 的是 `tools/build.sh`(构建 NRO)与 `tools/release.sh`
 (它还要在容器里构建 acnh-agent 的发布版);沙盒里 Docker 需 escalation。
-`tools/make-icons.py` 与 `tools/device-fault-tests.py` 需要带 Pillow 的 Python 运行时(用 Codex 自带
-运行时,见工作区根 `AGENTS.md`);其余为纯标准库。后者还需要真机:`switch` 可达(sys-agent 6000、
-其 FTP 6001)、应用已装好、机器停在主界面。
+`tools/make-icons.py`、`tools/device-tests.py` 与 `tools/ui-measure.py` 需要带 Pillow 的 Python 运行时
+(用 Codex 自带运行时,见工作区根 `AGENTS.md`);其余为纯标准库。`device-tests.py` 还需要真机:
+`switch` 可达(sys-agent 6000、其 FTP 6001)、应用已装好、机器停在主界面。
 
 | 工具 | 作用 | 何时用 |
 |---|---|---|
@@ -19,7 +19,8 @@
 | `tools/import-agent-release.py` | 发布门控 + 导入:校验 `dirty=false`/`buildFlags=2`/NSO 哈希/**NPDM 重放校验**(用同一原始 NPDM 再派生并逐字节比对)/profile 指纹,通过后写 `packaging/agent-lock.json`、`packaging/agent/<版本>/`(原始文件名的发布记录)与 `data/`(bin2s 构建输入)。`--nso/--npdm/--version-json` 必填,不吃 `acnh-agent/dist/` 里的现成产物 | 发布链的第 3 步;手工单独跑时也要自己给刚构建出来的路径 |
 | `tools/verify-release.py` | 核对"锁 ↔ 发布记录 ↔ `data/` ↔ 已构建 NRO"四处一致;`--nro` 时还会在 NRO 里搜内嵌清单与三个 payload 的原始字节,并校验 **NRO 构建戳的 `src:` 哈希 == 当前源码树**(抓"源码改了但 NRO 没重建") | 发布链的第 5 步;也可单独挂 CI |
 | `tools/make-store-package.py` | 生成官方商店 `pkgbuild.json`、图标/横幅与本地测试仓库(`repo.json` + zip) | 打包上架材料或验证商店流程时 |
-| `tools/device-fault-tests.py` | 真机故障注入:`t1a/t1b`(可清理 / 清不掉的 `.acnh-tmp` 残留)、`t2`(记录写不进去)、`restore`(清注入并重装),也可 `all` 连跑。每一步先截图判定页面、再按键,并用 `log.txt` 的 `collect:`/`cleanup:` 行与卡上逐文件哈希做断言;截图落在 `build/scratch/device-fault-tests/` | 改过 `source/install/engine.cpp` 的写盘/回滚逻辑之后,或排查"安装失败/留残留"时 |
+| `tools/device-tests.py` | 真机回归测试两组。**故障注入**:`t1a/t1b`(可清理 / 清不掉的 `.acnh-tmp` 残留)、`t2`(记录写不进去)、`restore`(清注入并重装),`all` 连跑;断言"要么全落位、要么卡片逐字节不变",用 `log.txt` 的 `collect:`/`cleanup:` 行 + 卡上逐文件哈希。**启停循环**:`cycles [--cycles N]` 连续"相册 → 应用 → 退出",每轮都要求日志有首帧与干净退出的两行(守相册黑屏那个回归)。截图落在 `build/scratch/device-tests/` | 改过 `source/install/engine.cpp` 的写盘/回滚逻辑、或改动退出路径(`__nx_applet_exit_mode` / 显示层)之后 |
+| `tools/ui-measure.py` | 像素尺子:`bbox`(窗口内墨迹外框与左右内缩)、`lines`(按文本行分段,每行的内缩/高度/宽度)、`runs`(某一行的墨迹段,看左边缘与居中)、`color`(某颜色的外框/中心/像素数)。背景可用 `--bg page\|card\|header\|border` 指名(与 `source/ui/app.cpp` 的调色板一致) | 改过任何排版(间距、居中、内缩)之后;把"看着有点歪"变成数字 |
 
 主机侧测试不在 `tools/` 下,单独放在 `tests/`:`make -C tests` 编译并运行清单解析、门控判定、
 安装决策与 `state.json` 往返的单元测试(不需要 Docker 与真机)。

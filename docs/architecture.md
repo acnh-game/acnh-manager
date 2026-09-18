@@ -432,3 +432,7 @@ DisplayLayerManager 在 applet 结束时调用)。hbl 复用进程这一件事,�
 验证方式(真机):连续做"主界面 → 相册 → Sphaira → ACNH-Manager → 退出"六次以上,每次退出
 都应干净回到主界面,过程中不出现黑屏/白屏;对比基线是同一台机器上 `__nx_applet_exit_mode = 0`
 的构建,它会在第 3~4 次退出后让相册黑屏。
+
+排查这类问题时的**取数方式**(不用保存副本):hbl 本体就在卡上 `/atmosphere/hbl.nsp`
+(PFS0,里面是 `main`(NSO)与 `main.npdm`),用工作区里的 `src/hactool` 解开就能看它的 NSO /
+NPDM —— 我们核对加载器自身的退出与显示行为时解过一次;解出来的二进制属过程材料,不入库。

@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Fault-injection tests for the installer, driven on the console.
+"""Device regression tests, driven on the console.
 
-The installer promises "either everything lands, or the card is left exactly as it was".  These
-cases try to break that promise on purpose and then read the card back.  Every step proves
-itself before it is allowed to move on:
+Two groups, both of which have already caught real bugs on hardware:
+
+  * fault injection for the installer, which promises "either everything lands, or the card is
+    left exactly as it was" -- the cases try to break that promise and then read the card back;
+  * launch/exit cycles, because leaving the app used to leave the album black after a few rounds
+    (see docs/architecture.md 10).
+
+Every step proves itself before it is allowed to move on:
 
   * the page is classified from a screenshot *before* a key is sent, so a key can never land on
     an unknown page;
@@ -13,9 +18,10 @@ itself before it is allowed to move on:
 
 Prerequisites: the console reachable as ``switch`` (sys-agent on 6000, its FTP on 6001), the app
 installed with its three files, and the console on the home menu.  Captures are written to
-``build/scratch/device-fault-tests/``.
+``build/scratch/device-tests/``.
 
-Usage:  python3 tools/device-fault-tests.py <t1a|t1b|t2|restore|all>
+Usage:  python3 tools/device-tests.py <t1a|t1b|t2|restore|cycles|all> [--cycles N]
+        (``all`` runs the four installer cases; ``cycles`` defaults to 3 rounds)
 """
 
 import ftplib
@@ -32,7 +38,7 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 AGENT = os.path.abspath(os.path.join(REPO, "..", "sys-agent", "client", "sysagent.py"))
-OUT_DIR = os.path.join(REPO, "build", "scratch", "device-fault-tests")
+OUT_DIR = os.path.join(REPO, "build", "scratch", "device-tests")
 
 FTP_HOST = "switch"
 FTP_PORT = 6001
@@ -536,23 +542,72 @@ def case_restore(card):
                     expect_ok=True)
 
 
+def case_cycles(card, rounds):
+    """Album -> app -> exit, `rounds` times, with each round confirmed twice.
+
+    The bug this guards against was visible only on the third or fourth exit: the app's own log
+    was clean, the album process was still alive, and the screen stayed black -- the applet's
+    display layers were never released (`docs/architecture.md` 10).  So a round counts only when
+    the app really started (log: first frame done) *and* really exited (log: app: exiting, and a
+    screenshot showing the console's own home menu afterwards).
+    """
+    ok = True
+    for index in range(1, rounds + 1):
+        tag = "cyc%d" % index
+        if app_page(shot("%s-pre.jpg" % tag)) in ("home", "details", "action", "unknown"):
+            # Leave a running instance first, so every round starts from the same place.
+            error = exit_app(card, tag)
+            if error:
+                print("[%s] FAIL could not leave the app: %s" % (tag, error))
+                ok = False
+                break
+        error = launch_app(card, tag)
+        if error:
+            print("[%s] FAIL launch: %s" % (tag, error))
+            ok = False
+            break
+        error = exit_app(card, tag)
+        if error:
+            print("[%s] FAIL exit: %s" % (tag, error))
+            ok = False
+            break
+        text = card.log_text() or ""
+        if "ui: loop exited" not in text or "app: exiting" not in text:
+            print("[%s] FAIL the app did not shut down cleanly (log has no exit lines)" % tag)
+            ok = False
+            break
+        print("[%s] round %d/%d: started (first frame drawn) and exited back to the home menu"
+              % (tag, index, rounds))
+    return ok
+
+
 CASES = {"t1a": case_t1a, "t1b": case_t1b, "t2": case_t2, "restore": case_restore}
 
 
 def main():
-    if len(sys.argv) < 2 or (sys.argv[1] not in CASES and sys.argv[1] != "all"):
+    command = sys.argv[1] if len(sys.argv) > 1 else ""
+    rounds = 3
+    if "--cycles" in sys.argv:
+        rounds = int(sys.argv[sys.argv.index("--cycles") + 1])
+    if command not in CASES and command not in ("all", "cycles"):
         print(__doc__)
-        print("commands: %s, all" % ", ".join(sorted(CASES)))
+        print("commands: %s, cycles, all" % ", ".join(sorted(CASES)))
         return 2
     os.makedirs(OUT_DIR, exist_ok=True)
-    names = ["t1a", "t1b", "t2", "restore"] if sys.argv[1] == "all" else [sys.argv[1]]
     card = Card()
     failed = []
+    names = []
     try:
-        for name in names:
-            if not CASES[name](card):
-                failed.append(name)
-            print("")
+        if command == "cycles":
+            names = ["cycles"]
+            if not case_cycles(card, rounds):
+                failed.append("cycles")
+        else:
+            names = ["t1a", "t1b", "t2", "restore"] if command == "all" else [command]
+            for name in names:
+                if not CASES[name](card):
+                    failed.append(name)
+                print("")
     finally:
         card.close()
     print("cases run: %s" % ", ".join(names))

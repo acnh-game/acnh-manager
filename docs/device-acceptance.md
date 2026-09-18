@@ -68,6 +68,13 @@ agent 版本、观察到什么、失败用例的原始现象。
 注意:从 Home 挂起再重新启动时,applet 是被外部结束的,日志会停在
 `ui: init ok` 而没有退出行 —— 这不等于崩溃,要和"收尾缺行 + 有新崩溃报告"区分开。
 
+**崩溃证据从哪来、要不要留**:现场在卡上 —— `/atmosphere/crash_reports/*.log`(Atmosphère
+的文本报告:进程名/Program ID、异常类型与地址、栈回溯)和 `/atmosphere/erpt_reports/*.bin`
+(同一批错误的 ERPT 二进制记录),排查时用 sys-agent 的 FTP 取回即可,不必留副本。我们撞到的
+那一份长这样:`Process Name: hbloader`、`Program ID: 010000000000100d`、`Type: Data Abort`、
+`Result: 0x4A8 (2168-0002)`,出错地址远离我们自己的缓冲。看到"hbloader + Data Abort"的报告,
+先查上面这两条(绘制高度 clamp、退出模式),再怀疑卡或系统服务。
+
 ## 装到游戏目录的实测结论(2026-09-17)
 
 - **applet 模式可以写 SD 卡,包括 `/atmosphere/contents/<tid>/exefs/`**:写盘探针在游戏目录里
@@ -148,7 +155,7 @@ touch probe: released at x=1213 y=56
 
 ### 故障注入用例
 
-手法(`tools/device-fault-tests.py`,在真机上跑,每步都自证):
+手法(`tools/device-tests.py all`,在真机上跑,每步都自证):
 
 - 先让首页的安装按钮**真的可用**:改写 `state.json` 里一个文件的 sha256,`Plan()` 于是判成
   `repair`,而卡上三个已装文件保持原样 —— 于是回滚有真东西可恢复;
