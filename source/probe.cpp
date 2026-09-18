@@ -3,7 +3,12 @@
 #include <cstddef>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
+
+#include "util/fs_path.hpp"
 
 /* M0 environment probes.  Every probe here ran on real hardware and its result is recorded
  * in docs/architecture.md:
@@ -503,6 +508,163 @@ void RunWriteProbe(Log &log, FsFileSystem &sd) {
         ProbeWritePath(log, sd, "exefs-rel", path);
     }
     log.Line("=== write probe done ===");
+}
+
+/* fs-session probe.
+
+   `fsFsCreateFile()` and friends hand the path over as an IPC buffer whose declared maximum
+   length is `FS_MAX_PATH` (0x301): the service maps a **page-aligned window** covering
+   `[path, path + 0x301)`.  A pointer sitting within that distance of the end of a mapping
+   therefore makes the window reach into a page that is not there, and the kernel answers
+   `InvalidMemoryState` (0xD401) -- the code the installer was failing with, on a path whose
+   directory really exists.  Nothing in libnx checks this, and which allocation lands near an
+   edge is a property of the process's heap layout, which is why the same code worked in one
+   session and failed in another.
+
+   The probe separates that from "the session lost the card": the same create is tried with a
+   page-aligned static buffer and with a heap buffer, in `/switch` and in the game directory,
+   and `svcQueryMemory` is asked about the first and last page of each IPC window.  That is how
+   the case was pinned down (`docs/device-acceptance.md`, "路径贴着映射边界").
+
+   The raw `fsFs*` calls below are deliberate: this probe exists to show what the *unprotected*
+   pointer does, so the paths are not copied into `util::FsPath` here. */
+namespace {
+
+constexpr std::size_t kIpcPathWindow = FS_MAX_PATH;
+const char *const kGameDir = "/atmosphere/contents/01006F8002326000/exefs";
+
+void ReportIpcWindow(Log &log, const char *label, const char *path) {
+    const u64 addr = reinterpret_cast<u64>(path);
+    const u64 first_page = addr & ~0xFFFULL;
+    const u64 last_page = (addr + kIpcPathWindow - 1) & ~0xFFFULL;
+    MemoryInfo first{};
+    MemoryInfo last{};
+    u32 page = 0;
+    const Result rc_first = svcQueryMemory(&first, &page, first_page);
+    const Result rc_last = svcQueryMemory(&last, &page, last_page);
+    log.Line("fsprobe[%s] path=0x%llX window=0x%llX..0x%llX", label,
+             static_cast<unsigned long long>(addr),
+             static_cast<unsigned long long>(first_page),
+             static_cast<unsigned long long>(last_page + 0xFFF));
+    if (R_SUCCEEDED(rc_first)) {
+        log.Line("fsprobe[%s]   first rc=ok type=0x%X attr=0x%X perm=0x%X ipc=%u", label,
+                 first.type, first.attr, first.perm, first.ipc_refcount);
+    } else {
+        log.Line("fsprobe[%s]   first rc=0x%08X", label, rc_first);
+    }
+    if (R_SUCCEEDED(rc_last)) {
+        log.Line("fsprobe[%s]   last  rc=ok type=0x%X attr=0x%X perm=0x%X ipc=%u", label,
+                 last.type, last.attr, last.perm, last.ipc_refcount);
+    } else {
+        log.Line("fsprobe[%s]   last  rc=0x%08X  <-- window leaves the mapped area", label,
+                 rc_last);
+    }
+}
+
+void TryCreateOnce(Log &log, FsFileSystem &sd, const char *label, const char *path) {
+    const Result rc_create = fsFsCreateFile(&sd, path, 0, 0);
+    const Result rc_delete = fsFsDeleteFile(&sd, path);
+    log.Line("fsprobe[%s] create rc=0x%08X delete rc=0x%08X", label, rc_create, rc_delete);
+}
+
+/* Replay the installer's write path on one file, logging every step's return code: create with
+   the real size, open for write, SetSize, write (flush), close, then the read-back open the
+   installer does to verify what landed -- which is where the failures were reported. */
+void ReplayWrite(Log &log, FsFileSystem &sd, const char *label, const std::string &path,
+                 std::size_t size) {
+    const std::vector<u8> payload(size, 0x41);
+    fsFsDeleteFile(&sd, path.c_str());
+    Result rc = fsFsCreateFile(&sd, path.c_str(), static_cast<s64>(size), 0);
+    log.Line("fsprobe[%s] create(%zu) rc=0x%08X", label, size, rc);
+    FsFile file{};
+    if (R_SUCCEEDED(rc)) {
+        rc = fsFsOpenFile(&sd, path.c_str(), FsOpenMode_Write, &file);
+        log.Line("fsprobe[%s] open(write) rc=0x%08X", label, rc);
+    }
+    if (R_SUCCEEDED(rc)) {
+        rc = fsFileSetSize(&file, static_cast<s64>(size));
+        log.Line("fsprobe[%s] setsize rc=0x%08X", label, rc);
+    }
+    if (R_SUCCEEDED(rc) && size > 0) {
+        rc = fsFileWrite(&file, 0, payload.data(), size, FsWriteOption_Flush);
+        log.Line("fsprobe[%s] write rc=0x%08X", label, rc);
+    }
+    if (R_SUCCEEDED(rc)) {
+        rc = fsFileFlush(&file);
+        log.Line("fsprobe[%s] flush rc=0x%08X", label, rc);
+    }
+    fsFileClose(&file);
+    FsFile read_back{};
+    const Result rc_read = fsFsOpenFile(&sd, path.c_str(), FsOpenMode_Read, &read_back);
+    log.Line("fsprobe[%s] open(read-back) rc=0x%08X", label, rc_read);
+    if (R_SUCCEEDED(rc_read)) {
+        s64 actual = 0;
+        fsFileGetSize(&read_back, &actual);
+        log.Line("fsprobe[%s]   size=%lld", label, static_cast<long long>(actual));
+        fsFileClose(&read_back);
+    }
+    log.Line("fsprobe[%s] delete rc=0x%08X", label, fsFsDeleteFile(&sd, path.c_str()));
+}
+
+}  // namespace
+
+void RunFsSessionProbe(Log &log, FsFileSystem &sd, const char *where) {
+    log.Line("=== fs session probe (%s) ===", where);
+    /* Page-aligned on purpose: this is the control that must always work if the theory above
+       is right. */
+    alignas(4096) static char static_home[FS_MAX_PATH + 64];
+    alignas(4096) static char static_game[FS_MAX_PATH + 64];
+    std::snprintf(static_home, sizeof(static_home), "/switch/ACNH-Manager/fsprobe-static.tmp");
+    std::snprintf(static_game, sizeof(static_game), "%s/fsprobe-static.tmp", kGameDir);
+
+    /* Heap copies, allocated the way the installer's std::string paths are. */
+    const std::string heap_home = std::string("/switch/ACNH-Manager/fsprobe-heap.tmp");
+    const std::string heap_game = std::string(kGameDir) + "/fsprobe-heap.tmp";
+    /* And one built by concatenation, exactly like `<target> + ".acnh-tmp"`. */
+    const std::string built_game = std::string(kGameDir) + "/fsprobe-built" + ".acnh-tmp";
+
+    ReportIpcWindow(log, "static/home", static_home);
+    ReportIpcWindow(log, "heap/home", heap_home.c_str());
+    ReportIpcWindow(log, "static/game", static_game);
+    ReportIpcWindow(log, "heap/game", heap_game.c_str());
+    ReportIpcWindow(log, "heap/built", built_game.c_str());
+
+    TryCreateOnce(log, sd, "static/home", static_home);
+    TryCreateOnce(log, sd, "heap/home", heap_home.c_str());
+    TryCreateOnce(log, sd, "static/game", static_game);
+    TryCreateOnce(log, sd, "heap/game", heap_game.c_str());
+    TryCreateOnce(log, sd, "heap/built", built_game.c_str());
+
+    /* The directory the installer could not create, plus the state record's directory. */
+    log.Line("fsprobe: mkdir(game) rc=0x%08X", fsFsCreateDirectory(&sd, kGameDir));
+    FsDir dir{};
+    const Result rc_dir = fsFsOpenDirectory(&sd, kGameDir, FsDirOpenMode_ReadDirs |
+                                                                  FsDirOpenMode_ReadFiles, &dir);
+    log.Line("fsprobe: opendir(game) rc=0x%08X", rc_dir);
+    if (R_SUCCEEDED(rc_dir)) {
+        FsDirectoryEntry entry{};
+        s64 read = 0;
+        const Result rc_read = fsDirRead(&dir, &read, 1, &entry);
+        log.Line("fsprobe: readdir(game) rc=0x%08X count=%lld first=%s", rc_read,
+                 static_cast<long long>(read), read > 0 ? entry.name : "-");
+        fsDirClose(&dir);
+    }
+    s64 free_space = 0;
+    s64 total_space = 0;
+    const Result rc_free = fsFsGetFreeSpace(&sd, "/", &free_space);
+    const Result rc_total = fsFsGetTotalSpace(&sd, "/", &total_space);
+    log.Line("fsprobe: free rc=0x%08X value=%llu MB", rc_free,
+             static_cast<unsigned long long>(free_space >> 20));
+    log.Line("fsprobe: total rc=0x%08X value=%llu MB", rc_total,
+             static_cast<unsigned long long>(total_space >> 20));
+
+    /* The installer's own sequence, on its own file names, with the real payload size. */
+    ReplayWrite(log, sd, "replay/game-73986", std::string(kGameDir) + "/fsprobe-replay.acnh-tmp",
+                73986);
+    ReplayWrite(log, sd, "replay/game-0", std::string(kGameDir) + "/fsprobe-zero.acnh-tmp", 0);
+    ReplayWrite(log, sd, "replay/home-73986",
+                std::string("/switch/ACNH-Manager/fsprobe-replay.acnh-tmp"), 73986);
+    log.Line("=== fs session probe done ===");
 }
 
 void RunTouchProbe(Log &log, FsFileSystem &sd) {

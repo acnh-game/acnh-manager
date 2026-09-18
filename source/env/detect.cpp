@@ -4,13 +4,16 @@
 #include <cstring>
 #include <utility>
 
+#include "util/fs_path.hpp"
+
 namespace acnh_manager::env {
 namespace {
 
-constexpr const char *kExefsDir = "/atmosphere/contents/01006F8002326000/exefs";
-constexpr const char *kCheatsDir = "/atmosphere/contents/01006F8002326000/cheats";
-constexpr const char *kOverrideConfig = "/atmosphere/config/override_config.ini";
-constexpr const char *kTitleConfig = "/atmosphere/contents/01006F8002326000/config.ini";
+/* Local aliases of the single-source paths declared in detect.hpp. */
+constexpr const char *kExefsDir = kAcnhExefsDir;
+constexpr const char *kCheatsDir = kAcnhCheatsDir;
+constexpr const char *kOverrideConfig = kAcnhOverrideConfig;
+constexpr const char *kTitleConfig = kAcnhTitleConfig;
 
 void Hex(char *out, const u8 *data, std::size_t size) {
     static const char digits[] = "0123456789ABCDEF";
@@ -31,8 +34,9 @@ void Note(EnvironmentReport *report, const char *what, Result rc) {
 }
 
 bool ReadTextFile(FsFileSystem &sd, const char *path, std::string *out) {
+    const util::FsPath arg(path);
     FsFile file{};
-    if (R_FAILED(fsFsOpenFile(&sd, path, FsOpenMode_Read, &file))) {
+    if (R_FAILED(fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file))) {
         return false;
     }
     s64 size = 0;
@@ -131,7 +135,11 @@ void CollectNcm(EnvironmentReport *report) {
 std::vector<ExefsFile> ListDirectory(FsFileSystem &sd, const char *path) {
     std::vector<ExefsFile> files;
     FsDir dir{};
-    if (R_FAILED(fsFsOpenDirectory(&sd, path, FsDirOpenMode_ReadFiles, &dir))) {
+    const util::FsPath arg(path);
+    /* ReadDirs | ReadFiles everywhere: opening with "files only" silently fails on some
+       directories, which is how an existence check can claim a directory is missing. */
+    if (R_FAILED(fsFsOpenDirectory(&sd, arg.c_str(),
+                                   FsDirOpenMode_ReadDirs | FsDirOpenMode_ReadFiles, &dir))) {
         return files;
     }
     FsDirectoryEntry entries[32]{};

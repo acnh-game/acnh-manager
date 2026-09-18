@@ -18,11 +18,16 @@ SOURCES := host_tests.cpp \
 HEADERS := $(shell find ../source -name '*.hpp')
 BINARY := host-tests
 
-.PHONY: all run clean
+.PHONY: all run clean check-i18n
 all: run
 
-run: $(BINARY)
+run: check-i18n $(BINARY)
 	@./$(BINARY)
+
+# Text() maps ids to rows by index, so the enum and the table order have to agree; nothing in
+# C++ notices a swap (it shows the wrong string at runtime), so check it here.
+check-i18n:
+	@python3 ../tools/check-i18n.py
 
 $(BINARY): $(SOURCES) $(HEADERS)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SOURCES) -o $@

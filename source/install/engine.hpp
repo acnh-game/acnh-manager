@@ -16,7 +16,18 @@
 #include "install/gate.hpp"
 #include "manifest/manifest.hpp"
 
+namespace acnh_manager {
+class Log;
+}
+
 namespace acnh_manager::install {
+
+/* Development switch (`/switch/ACNH-Manager/dev-fsprobe`): route every fs call the installer
+   makes to this log, with the path pointer and the memory type/permission of the page it lives
+   on.  It exists because the installer could fail with `0xD401` on a path whose directory is
+   provably fine, while an identical probe call a moment later succeeded -- so the question is
+   which call failed and what the kernel saw at that pointer. */
+void SetFsTraceSink(Log *log);
 
 /* Payload source: M2 reads a directory on the SD card (for on-device dry runs); the release
    path embeds the payload in the NRO instead. */
@@ -80,8 +91,25 @@ InstallResult Install(FsFileSystem &sd, const manifest::Manifest &manifest,
                       const manifest::GameEntry &game, PayloadSource &source, bool dry_run,
                       const ProgressCallback &progress);
 
-/* Uninstall: verify each file from state.json by sha256, delete it, then drop the record and
-   the now-empty directory. */
+/* Uninstall: delete every file the record names (by path, no hash check -- a file the player
+   edited by hand must still be removable), then drop the record and the now-empty directory.
+   All entries are attempted; whatever could not be deleted is reported. */
 InstallResult Uninstall(FsFileSystem &sd, bool dry_run, const ProgressCallback &progress);
+
+/* Remove files a previous run left behind after a crash (the `<target>.acnh-tmp` /
+   `<target>.acnh-old` siblings of a two-phase install).  `dir` is the manifest's target
+   directory; the names that were removed are appended to `removed` for the log.  Returns how
+   many files were deleted; a missing directory simply means "nothing to clean". */
+int CleanLeftovers(FsFileSystem &sd, const std::string &dir,
+                   std::vector<std::string> *removed);
+
+/* True when an install/uninstall error carries the `0xD401` signature (`InvalidMemoryState`).
+
+   The one cause we hit was a path buffer sitting near the end of a mapping; that is fixed in
+   `util::FsPath` (see `docs/architecture.md` 4.2), and the replay of the old failure is in
+   `docs/device-acceptance.md`.  The check stays as a safety net: if the signature ever shows up
+   again the result page names the one action that has always worked, "quit and reopen the
+   manager", instead of leaving a raw error code on screen. */
+bool IsStaleSessionError(const std::string &error);
 
 }  // namespace acnh_manager::install

@@ -16,6 +16,12 @@ namespace acnh_manager::env {
 
 inline constexpr u64 kAcnhTitleId = 0x01006F8002326000ull;
 inline constexpr u64 kAcnhUpdateTitleId = 0x01006F8002326800ull;
+/* Card paths for the title above.  Single source for every module that needs them (detector,
+   M0 probe, install engine) -- they used to be literals copied into three files. */
+inline constexpr const char *kAcnhExefsDir = "/atmosphere/contents/01006F8002326000/exefs";
+inline constexpr const char *kAcnhCheatsDir = "/atmosphere/contents/01006F8002326000/cheats";
+inline constexpr const char *kAcnhTitleConfig = "/atmosphere/contents/01006F8002326000/config.ini";
+inline constexpr const char *kAcnhOverrideConfig = "/atmosphere/config/override_config.ini";
 
 struct MetaEntry {
     u8 meta_type{0};

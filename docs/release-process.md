@@ -148,5 +148,5 @@ App 的联网检查默认读 `agent-manifest.json`(见 `docs/architecture.md` �
 ## 7. 尚未完成的部分(明确记录)
 
 - **CA bundle**:联网检查需要 `/switch/ACNH-Manager/ca.pem` 或把 CA 内嵌进 NRO(bin2s 通道);
-- **启动即静默检查**:目前是设置页手动触发,改成启动时后台线程(M5);
+- **启动即静默检查**:目前是首页按 `X` 手动触发,改成启动时后台线程(M5);
 - **商店收录**:官方 Homebrew App Store 的收录步骤与元数据(见第 3 节)尚未实际提交过一次。

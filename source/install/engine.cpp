@@ -3,17 +3,53 @@
 #include <cstdio>
 #include <utility>
 
+#include "env/detect.hpp"
 #include "i18n/strings.hpp"
+#include "log.hpp"
+#include "util/fs_path.hpp"
 #include "util/sha256.hpp"
 #include "util/time.hpp"
 
 namespace acnh_manager::install {
 namespace {
 
+using util::FsPath;
+
 constexpr const char *kStatePath = "/switch/ACNH-Manager/state.json";
 constexpr const char *kTempSuffix = ".acnh-tmp";
 constexpr const char *kOldSuffix = ".acnh-old";
 constexpr std::size_t kChunkSize = 64 * 1024;
+
+/* fs-call tracing: see SetFsTraceSink in the header. */
+Log *g_fs_trace = nullptr;
+
+Result TraceFs(const char *what, const char *path, Result rc) {
+    if (g_fs_trace != nullptr) {
+        MemoryInfo info{};
+        u32 page = 0;
+        const u64 addr = reinterpret_cast<u64>(path);
+        svcQueryMemory(&info, &page, addr & ~0xFFFULL);
+        MemoryInfo end{};
+        u32 end_page = 0;
+        const u64 last = (addr + FS_MAX_PATH - 1) & ~0xFFFULL;
+        const Result rc_end = svcQueryMemory(&end, &end_page, last);
+        g_fs_trace->Line("fsop: %s rc=0x%08X ptr=0x%llX region=0x%llX+0x%llX type=0x%X perm=0x%X",
+                         what, rc,
+                         static_cast<unsigned long long>(addr),
+                         static_cast<unsigned long long>(info.addr),
+                         static_cast<unsigned long long>(info.size),
+                         static_cast<unsigned>(info.type),
+                         static_cast<unsigned>(info.perm));
+        g_fs_trace->Line("fsop:   window=0x%llX..0x%llX region_end=0x%llX last_page=0x%llX "
+                         "rc=0x%08X type=0x%X",
+                         static_cast<unsigned long long>(addr),
+                         static_cast<unsigned long long>(addr + FS_MAX_PATH),
+                         static_cast<unsigned long long>(info.addr + info.size),
+                         static_cast<unsigned long long>(last), rc_end,
+                         static_cast<unsigned>(end.type));
+    }
+    return rc;
+}
 
 std::string Describe(const std::string &what, Result rc) {
     char buf[160];
@@ -32,11 +68,16 @@ std::string Upper(std::string text) {
 
 bool DeleteIfPresent(FsFileSystem &sd, const std::string &path) {
     const std::string absolute = AbsolutePath(path);
-    const Result rc = fsFsDeleteFile(&sd, absolute.c_str());
+    const FsPath arg(absolute);
+    const Result rc = TraceFs("delete", arg.c_str(), fsFsDeleteFile(&sd, arg.c_str()));
     return R_SUCCEEDED(rc) || rc == 0x00000202; /* 202 = PathNotFound */
 }
 
 }  // namespace
+
+void SetFsTraceSink(Log *log) {
+    g_fs_trace = log;
+}
 
 /* Every path handed to fs* starts with '/': the manifest target is relative ("atmosphere/...",
    and manifest::IsSafeTarget guarantees there is no leading '/'), and FS refuses a relative
@@ -46,6 +87,26 @@ std::string AbsolutePath(std::string_view path) {
         return std::string(path);
     }
     return "/" + std::string(path);
+}
+
+/* True when the path is an existing directory.  Opening it is the only answer we trust on
+   the console's filesystem (see the mkdir note below). */
+bool DirectoryExists(FsFileSystem &sd, const std::string &path) {
+    FsDir dir{};
+    const FsPath arg(path);
+    /* ReadDirs is what makes the service treat this as a directory listing.  Asking for files
+       only made the open fail on some directories, so the caller concluded "not there" and an
+       existing directory turned into a bogus mkdir failure (measured on /switch/ACNH-Manager:
+       "writing state.json failed: mkdir /switch/ACNH-Manager rc=0x0000D401" even though it
+       exists). */
+    if (R_FAILED(TraceFs("opendir", arg.c_str(),
+                         fsFsOpenDirectory(&sd, arg.c_str(),
+                                           FsDirOpenMode_ReadDirs | FsDirOpenMode_ReadFiles,
+                                           &dir)))) {
+        return false;
+    }
+    fsDirClose(&dir);
+    return true;
 }
 
 bool EnsureDirectory(FsFileSystem &sd, const std::string &path, std::string *error) {
@@ -59,10 +120,21 @@ bool EnsureDirectory(FsFileSystem &sd, const std::string &path, std::string *err
                                        : absolute.substr(start, slash - start);
         if (!segment.empty()) {
             current += "/" + segment;
-            const Result rc = fsFsCreateDirectory(&sd, current.c_str());
-            if (R_FAILED(rc) && rc != 0x00000402) { /* 402 = PathAlreadyExists */
+            const FsPath arg(current);
+            const Result rc = TraceFs("mkdir", arg.c_str(),
+                                      fsFsCreateDirectory(&sd, arg.c_str()));
+            /* "It is already there" is not a failure, and fs does not report it with one
+               single code: 0x402 is PathAlreadyExists, but an existing SD path has also come
+               back as 0xD401 on hardware (which used to abort every install after an
+               uninstall had removed the directory).  So ask the filesystem whether the
+               directory is really there instead of trusting the error code. */
+            if (R_FAILED(rc) && rc != 0x00000402 &&
+                !DirectoryExists(sd, current)) {
                 if (error != nullptr) {
-                    *error = Describe("mkdir " + current, rc);
+                    /* Say what was actually wrong: the path could not be created *and* it is not
+                       an openable directory.  A bare "mkdir <path>" reads like "the directory is
+                       missing", which sent us chasing the wrong thing once. */
+                    *error = Describe("mkdir " + current + " (not usable as a directory)", rc);
                 }
                 return false;
             }
@@ -79,7 +151,9 @@ bool ReadWholeFile(FsFileSystem &sd, const std::string &path, std::vector<u8> *o
                    std::string *error) {
     const std::string absolute = AbsolutePath(path);
     FsFile file{};
-    Result rc = fsFsOpenFile(&sd, absolute.c_str(), FsOpenMode_Read, &file);
+    const FsPath arg(absolute);
+    Result rc = TraceFs("read.open", arg.c_str(),
+                        fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file));
     if (R_FAILED(rc)) {
         if (error != nullptr) {
             *error = Describe("open " + absolute, rc);
@@ -111,7 +185,9 @@ bool ReadWholeFile(FsFileSystem &sd, const std::string &path, std::vector<u8> *o
 bool HashFile(FsFileSystem &sd, const std::string &path, std::string *hex, std::string *error) {
     const std::string absolute = AbsolutePath(path);
     FsFile file{};
-    Result rc = fsFsOpenFile(&sd, absolute.c_str(), FsOpenMode_Read, &file);
+    const FsPath arg(absolute);
+    Result rc = TraceFs("hash.open", arg.c_str(),
+                        fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file));
     if (R_FAILED(rc)) {
         if (error != nullptr) {
             *error = Describe("open " + absolute, rc);
@@ -144,16 +220,57 @@ bool HashFile(FsFileSystem &sd, const std::string &path, std::string *hex, std::
     return true;
 }
 
-bool WriteFileVerified(FsFileSystem &sd, const std::string &path, const std::vector<u8> &data,
-                       const std::string &sha256, std::string *error) {
+bool FileExists(FsFileSystem &sd, const std::string &path) {
+    FsFile file{};
+    const FsPath arg(path);
+    if (R_FAILED(TraceFs("open-exists", arg.c_str(),
+                         fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file)))) {
+        return false;
+    }
+    fsFileClose(&file);
+    return true;
+}
+
+/* Put a backup back where it came from.
+
+   A rename cannot land on a path that already exists (FAT), and by the time a rollback runs the
+   file we wrote is sitting exactly there.  Renaming first therefore fails silently and leaves
+   the new file installed *and* the backup behind as junk -- measured on hardware: injecting a
+   state-record write failure left three `.acnh-old` files behind while the app reported the
+   install as failed.  The file in the way is removed first, and a backup is only trusted once
+   it has actually been seen. */
+bool RestoreBackup(FsFileSystem &sd, const std::string &target, const std::string &backup) {
+    if (!FileExists(sd, backup)) {
+        return false;
+    }
+    DeleteIfPresent(sd, target);
+    const FsPath from(backup);
+    const FsPath to(target);
+    return R_SUCCEEDED(fsFsRenameFile(&sd, from.c_str(), to.c_str()));
+}
+
+/* Phase one: everything that can be done without touching the files that are already
+   installed.  Writes <target>.acnh-tmp and reads it back. */
+bool PrepareFile(FsFileSystem &sd, const std::string &path, const std::vector<u8> &data,
+                 const std::string &sha256, std::string *error) {
     const std::string target = AbsolutePath(path);
     const std::string temp = target + kTempSuffix;
-    const std::string backup = target + kOldSuffix;
     if (!EnsureDirectory(sd, target.substr(0, target.find_last_of('/')), error)) {
         return false;
     }
     DeleteIfPresent(sd, temp);
-    Result rc = fsFsCreateFile(&sd, temp.c_str(), static_cast<s64>(data.size()), 0);
+    const FsPath arg(temp);
+    Result rc = TraceFs("prepare.create", arg.c_str(),
+                        fsFsCreateFile(&sd, arg.c_str(), static_cast<s64>(data.size()), 0));
+    if (R_FAILED(rc)) {
+        /* A stale leftover can sit at the temp path (an interrupted install).  If it is a
+           directory, "delete file" cannot remove it and create keeps failing with 0xD401 --
+           that is exactly how an install got permanently stuck on hardware. */
+        fsFsDeleteDirectory(&sd, arg.c_str());
+        DeleteIfPresent(sd, temp);
+        rc = TraceFs("prepare.create-retry", arg.c_str(),
+                     fsFsCreateFile(&sd, arg.c_str(), static_cast<s64>(data.size()), 0));
+    }
     if (R_FAILED(rc)) {
         if (error != nullptr) {
             *error = Describe("create " + temp, rc);
@@ -161,12 +278,17 @@ bool WriteFileVerified(FsFileSystem &sd, const std::string &path, const std::vec
         return false;
     }
     FsFile file{};
-    rc = fsFsOpenFile(&sd, temp.c_str(), FsOpenMode_Write, &file);
+    rc = TraceFs("prepare.open-write", arg.c_str(),
+                 fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Write, &file));
     if (R_SUCCEEDED(rc)) {
         rc = fsFileSetSize(&file, static_cast<s64>(data.size()));
     }
     if (R_SUCCEEDED(rc) && !data.empty()) {
         rc = fsFileWrite(&file, 0, data.data(), static_cast<u64>(data.size()), FsWriteOption_Flush);
+        if (g_fs_trace != nullptr) {
+            g_fs_trace->Line("fsop: prepare.write rc=0x%08X bytes=%zu buf=0x%llX", rc, data.size(),
+                             reinterpret_cast<unsigned long long>(data.data()));
+        }
     }
     if (R_SUCCEEDED(rc)) {
         rc = fsFileFlush(&file);
@@ -193,31 +315,137 @@ bool WriteFileVerified(FsFileSystem &sd, const std::string &path, const std::vec
         DeleteIfPresent(sd, temp);
         return false;
     }
-
-    /* Atomic replace: move the old file to .acnh-old, rename, then drop the old file. */
-    DeleteIfPresent(sd, backup);
-    const Result rc_backup = fsFsRenameFile(&sd, target.c_str(), backup.c_str());
-    if (R_FAILED(rc_backup) && rc_backup != 0x00000202) {
-        if (error != nullptr) {
-            *error = Describe("backup " + target, rc_backup);
-        }
-        DeleteIfPresent(sd, temp);
-        return false;
-    }
-    rc = fsFsRenameFile(&sd, temp.c_str(), target.c_str());
-    if (R_FAILED(rc)) {
-        if (error != nullptr) {
-            *error = Describe("rename into " + target, rc);
-        }
-        /* Best effort: put the old file back. */
-        fsFsRenameFile(&sd, backup.c_str(), target.c_str());
-        DeleteIfPresent(sd, temp);
-        return false;
-    }
-    DeleteIfPresent(sd, backup);
     return true;
 }
 
+/* Phase two: move the installed file aside, then move the prepared one in.  `*had_backup`
+   tells the caller how to roll this file back.  fs reports "cannot do that" in more than one
+   way -- 0x0202 when the source is missing, and 0xD401 on hardware for paths that exist -- so
+   the filesystem is asked what actually happened instead of guessing from the code. */
+bool CommitFile(FsFileSystem &sd, const std::string &path, const std::string &sha256,
+                bool *had_backup, std::string *error) {
+    const std::string target = AbsolutePath(path);
+    const std::string temp = target + kTempSuffix;
+    const std::string backup = target + kOldSuffix;
+    const FsPath arg_target(target);
+    const FsPath arg_temp(temp);
+    const FsPath arg_backup(backup);
+    DeleteIfPresent(sd, backup);
+    *had_backup = false;
+    if (FileExists(sd, target)) {
+        const Result rc_backup =
+            TraceFs("commit.rename-out", arg_target.c_str(),
+                    fsFsRenameFile(&sd, arg_target.c_str(), arg_backup.c_str()));
+        if (R_FAILED(rc_backup) && FileExists(sd, target)) {
+            if (error != nullptr) {
+                *error = Describe("backup " + target + " (the installed file is still there, so "
+                                  "the backup did not take effect)", rc_backup);
+            }
+            return false;
+        }
+        *had_backup = FileExists(sd, backup);
+    }
+    const Result rc = TraceFs("commit.rename-in", arg_target.c_str(),
+                              fsFsRenameFile(&sd, arg_temp.c_str(), arg_target.c_str()));
+    if (R_FAILED(rc)) {
+        std::string actual;
+        const bool in_place = !sha256.empty() && HashFile(sd, target, &actual, nullptr) &&
+                              Upper(actual) == Upper(sha256);
+        if (in_place) {
+            DeleteIfPresent(sd, temp);
+            return true;
+        }
+        if (error != nullptr) {
+            *error = Describe("rename into " + target + " (the file in place is not the one we "
+                              "verified)", rc);
+        }
+        if (*had_backup) {
+            RestoreBackup(sd, target, backup);
+        }
+        DeleteIfPresent(sd, temp);
+        return false;
+    }
+    return true;
+}
+
+/* Undo a file that phase two already committed. */
+void RollbackFile(FsFileSystem &sd, const std::string &path, bool had_backup) {
+    const std::string target = AbsolutePath(path);
+    if (had_backup && RestoreBackup(sd, target, target + kOldSuffix)) {
+        return;
+    }
+    /* Nothing to restore (a file that was not installed before): the file we wrote has to go,
+       otherwise a failed install would leave an agent behind that no record describes. */
+    DeleteIfPresent(sd, target);
+}
+
+void DropBackups(FsFileSystem &sd, const std::string &path) {
+    DeleteIfPresent(sd, AbsolutePath(path) + kOldSuffix);
+}
+
+/* 0xD401 is the kernel's InvalidMemoryState: the call is accepted but refused for the current
+   state of the memory or the target it names (see docs/architecture.md 2.1 and 4.2).  Kept as
+   the result page's safety net; see engine.hpp. */
+bool IsStaleSessionError(const std::string &error) {
+    return error.find("0x0000D401") != std::string::npos;
+}
+
+/* Single-file convenience for the state record: prepare + commit + drop the backup. */
+bool WriteFileVerified(FsFileSystem &sd, const std::string &path, const std::vector<u8> &data,
+                       const std::string &sha256, std::string *error) {
+    if (!PrepareFile(sd, path, data, sha256, error)) {
+        return false;
+    }
+    bool had_backup = false;
+    if (!CommitFile(sd, path, sha256, &had_backup, error)) {
+        return false;
+    }
+    DropBackups(sd, path);
+    return true;
+}
+
+int CleanLeftovers(FsFileSystem &sd, const std::string &dir,
+                   std::vector<std::string> *removed) {
+    const std::string absolute = AbsolutePath(dir);
+    FsDir handle{};
+    const FsPath arg_dir(absolute);
+    if (R_FAILED(fsFsOpenDirectory(&sd, arg_dir.c_str(),
+                                   FsDirOpenMode_ReadDirs | FsDirOpenMode_ReadFiles, &handle))) {
+        return 0; /* not installed (or unreadable): nothing to clean */
+    }
+    int count = 0;
+    FsDirectoryEntry entry{};
+    s64 read = 0;
+    while (R_SUCCEEDED(fsDirRead(&handle, &read, 1, &entry)) && read > 0) {
+        const std::string name = entry.name;
+        /* Match the family rather than each suffix constant: a leftover is any sibling we
+           created, and missing one because a suffix was renamed would be silent. */
+        if (name.find(".acnh-") == std::string::npos) {
+            continue;
+        }
+        const std::string path = absolute + "/" + name;
+        const FsPath arg(path);
+        /* Same two-step delete as PrepareFile: a leftover can be a directory (an interrupted
+           run did that to us), and "delete file" alone cannot remove it. */
+        bool gone = R_SUCCEEDED(fsFsDeleteFile(&sd, arg.c_str()));
+        if (!gone) {
+            gone = R_SUCCEEDED(fsFsDeleteDirectory(&sd, arg.c_str()));
+        }
+        if (gone) {
+            ++count;
+            if (removed != nullptr) {
+                removed->push_back(name);
+            }
+        } else if (removed != nullptr) {
+            /* Keep the name in the list too: the caller logs whatever was found, so a leftover
+               that refuses to go away is visible in log.txt instead of silently blocking a
+               later install (that is how an install got stuck on hardware). */
+            removed->push_back(name + " (could not remove)");
+        }
+    }
+    fsDirClose(&handle);
+    return count;
+}
 bool SdFolderPayloadSource::Read(const std::string &name, std::vector<u8> *out,
                                  std::string *error) {
     const std::string path = m_dir + "/" + name;
@@ -312,28 +540,67 @@ InstallResult Install(FsFileSystem &sd, const manifest::Manifest &manifest,
             return result;
         }
         if (!dry_run) {
-            if (!WriteFileVerified(sd, entry.target, payload, entry.sha256, &error)) {
+            /* Phase one only prepares: nothing that is already installed is touched, so a
+               failure here leaves the card exactly as it was. */
+            if (!PrepareFile(sd, entry.target, payload, entry.sha256, &error)) {
                 result.error = i18n::Format(i18n::StringId::InstallErrWrite, error.c_str());
+                for (const auto &other : game.files) {
+                    DeleteIfPresent(sd, AbsolutePath(other.target) + kTempSuffix);
+                }
                 return result;
             }
-            ++result.files_written;
         }
         state.files.push_back({entry.target, entry.size, entry.sha256});
     }
 
-    u64 timestamp = 0;
-    if (R_SUCCEEDED(timeInitialize())) {
-        timeGetCurrentTime(TimeType_UserSystemClock, &timestamp);
-    }
-    state.installed_at = util::FormatUnixTimeUtc(static_cast<std::int64_t>(timestamp));
-
+    /* Phase two: every file is prepared and verified, so only cheap renames are left.  If one
+       of them fails the files committed so far are rolled back -- the user must never be left
+       with a half-installed agent (measured: a failure on file 2 used to leave file 1 in
+       place and the rest missing). */
     if (!dry_run) {
-        std::string error;
-        if (!WriteStateFile(sd, state, &error)) {
-            result.error = i18n::Format(i18n::StringId::InstallErrStateWrite, error.c_str());
+        /* vector<bool> is a bitset and cannot hand out a bool*; the flags are plain chars. */
+        std::vector<char> had_backup(game.files.size(), 0);
+        std::size_t committed = 0;
+        for (std::size_t i = 0; i < game.files.size(); ++i) {
+            std::string error;
+            bool file_had_backup = false;
+            if (!CommitFile(sd, game.files[i].target, game.files[i].sha256, &file_had_backup,
+                            &error)) {
+                result.error = i18n::Format(i18n::StringId::InstallErrWrite, error.c_str());
+                for (std::size_t j = committed; j-- > 0;) {
+                    RollbackFile(sd, game.files[j].target, had_backup[j] != 0);
+                }
+                for (std::size_t j = committed; j < game.files.size(); ++j) {
+                    DeleteIfPresent(sd, AbsolutePath(game.files[j].target) + kTempSuffix);
+                }
+                return result;
+            }
+            had_backup[i] = file_had_backup ? 1 : 0;
+            ++committed;
+            ++result.files_written;
+        }
+        /* The record goes in *before* the backups are dropped, so it shares the transaction:
+           if it cannot be written, the game files we just installed are rolled back as well and
+           the card never ends up with files no record describes. */
+        u64 timestamp = 0;
+        if (R_SUCCEEDED(timeInitialize())) {
+            timeGetCurrentTime(TimeType_UserSystemClock, &timestamp);
+        }
+        state.installed_at = util::FormatUnixTimeUtc(static_cast<std::int64_t>(timestamp));
+        std::string state_error;
+        if (!WriteStateFile(sd, state, &state_error)) {
+            result.error = i18n::Format(i18n::StringId::InstallErrStateWrite,
+                                        state_error.c_str());
+            for (std::size_t j = game.files.size(); j-- > 0;) {
+                RollbackFile(sd, game.files[j].target, had_backup[j] != 0);
+            }
             return result;
         }
+        for (const auto &entry : game.files) {
+            DropBackups(sd, entry.target);
+        }
     }
+
     result.ok = true;
     result.state = std::move(state);
     return result;
@@ -354,35 +621,43 @@ InstallResult Uninstall(FsFileSystem &sd, bool dry_run, const ProgressCallback &
         return result;
     }
     const int total = static_cast<int>(state.files.size());
+    /* Delete by name only.  The record's hash is deliberately *not* checked here: a player who
+       edited the files by hand must still be able to remove them, and refusing to delete because
+       "the file changed" is a worse outcome than deleting a file we put there.  Every entry is
+       attempted -- stopping half way would leave the directory neither installed nor clean --
+       and whatever could not be deleted is reported together at the end. */
+    std::string failures;
     for (int i = 0; i < total; ++i) {
         const InstalledFile &file = state.files[static_cast<std::size_t>(i)];
         if (progress) {
             progress(Progress{file.target, i + 1, total});
         }
-        std::string actual;
-        if (!HashFile(sd, file.target, &actual, &error)) {
-            /* Not there any more: treat as already removed and keep going. */
-            continue;
-        }
-        if (Upper(actual) != file.sha256) {
-            result.error = i18n::Format(i18n::StringId::UninstallModified, file.target.c_str());
-            return result;
-        }
         if (!dry_run) {
-            const Result rc = fsFsDeleteFile(&sd, AbsolutePath(file.target).c_str());
-            if (R_FAILED(rc)) {
-                result.error = Describe("delete " + file.target, rc);
-                return result;
+            const FsPath arg(AbsolutePath(file.target));
+            const Result rc = fsFsDeleteFile(&sd, arg.c_str());
+            if (R_FAILED(rc) && rc != 0x00000202) { /* 202: already gone */
+                if (!failures.empty()) {
+                    failures += "; ";
+                }
+                failures += Describe("delete " + file.target, rc);
+                continue;
             }
         }
         ++result.files_written;
     }
+    if (!failures.empty()) {
+        result.error = i18n::Format(i18n::StringId::UninstallFailed, failures.c_str());
+        return result;
+    }
     if (!dry_run) {
         /* Only remove the directory when it is empty; a failure means someone else's files
            live there, so keep it. */
-        const std::string dir = "/atmosphere/contents/01006F8002326000/exefs";
-        fsFsDeleteDirectory(&sd, dir.c_str());
-        const Result rc = fsFsDeleteFile(&sd, kStatePath);
+        /* The card path comes from env/detect.hpp (single source of truth); the engine's own
+           targets are the only files it could have created there. */
+        const std::string dir = AbsolutePath(env::kAcnhExefsDir);
+        fsFsDeleteDirectory(&sd, FsPath(dir).c_str());
+        const FsPath arg_state(kStatePath);
+        const Result rc = fsFsDeleteFile(&sd, arg_state.c_str());
         if (R_FAILED(rc) && rc != 0x00000202) {
             result.error = Describe("delete state.json", rc);
             return result;

@@ -10,10 +10,29 @@
 #include "probe.hpp"
 #include "ui/app.hpp"
 #include "ui/text_ui.hpp"
+#include "util/fs_path.hpp"
 
 #ifndef ACNH_BUILD_STAMP
 #define ACNH_BUILD_STAMP "unknown"
 #endif
+
+/* Exiting: hand the applet back to the applet manager instead of returning to the loader.
+
+   hbl (the loader the album uses) keeps one process for the whole album session and reloads
+   every NRO inside it, so whatever an NRO does not give back to the system stays behind.  The
+   default window init asks the applet manager for a managed display layer on every load and
+   only closes the layer on exit, while the manager destroys applet layers when the *applet*
+   terminates, not when an NRO returns.  Launching and exiting homebrew inside one album
+   session therefore piles up layers; on hardware the third exit already left the album on a
+   black screen even though the app logged a clean exit (see docs/architecture.md).
+
+   Setting this to 1 makes the exit path run the applet exit commands even when we were not
+   launched as a real title (the same thing DBI does), so the applet terminates and the applet
+   manager frees everything it owns.  The trade-off is that leaving the app lands on the home
+   menu instead of back in the loader's menu. */
+extern "C" {
+u32 __nx_applet_exit_mode = 1;
+}
 
 namespace {
 
@@ -23,6 +42,7 @@ constexpr const char *kLogPath = "/switch/ACNH-Manager/log.txt";
 constexpr const char *kLogHistoryPath = "/switch/ACNH-Manager/log-history.log";
 constexpr const char *kProbeFlagPath = "/switch/ACNH-Manager/dev-probe";
 constexpr const char *kWriteProbeFlagPath = "/switch/ACNH-Manager/dev-writeprobe";
+constexpr const char *kFsProbeFlagPath = "/switch/ACNH-Manager/dev-fsprobe";
 constexpr const char *kTouchProbeFlagPath = "/switch/ACNH-Manager/dev-touchprobe";
 constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
 constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
@@ -66,7 +86,8 @@ const char *GateStatusName(acnh_manager::install::GateStatus status) {
 
 bool FileExists(FsFileSystem &sd, const char *path) {
     FsFile file{};
-    if (R_FAILED(fsFsOpenFile(&sd, path, FsOpenMode_Read, &file))) {
+    const acnh_manager::util::FsPath arg(path);
+    if (R_FAILED(fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file))) {
         return false;
     }
     fsFileClose(&file);
@@ -134,7 +155,7 @@ int main(int argc, char **argv) {
     acnh_manager::Log log;
     Result rc_log = rc_sd;
     if (R_SUCCEEDED(rc_sd)) {
-        rc_dir = fsFsCreateDirectory(&sd, kAppDir);
+        rc_dir = fsFsCreateDirectory(&sd, acnh_manager::util::FsPath(kAppDir).c_str());
         rc_log = log.Open(sd, kLogPath, true);
         if (R_SUCCEEDED(rc_log)) {
             log.Open(sd, kLogHistoryPath, false);
@@ -154,6 +175,10 @@ int main(int argc, char **argv) {
         if (FileExists(sd, kWriteProbeFlagPath)) {
             log.Line("dev-writeprobe flag present: running the SD write probe");
             acnh_manager::probe::RunWriteProbe(log, sd);
+        }
+        if (FileExists(sd, kFsProbeFlagPath)) {
+            log.Line("dev-fsprobe flag present: probing the fs session at startup");
+            acnh_manager::probe::RunFsSessionProbe(log, sd, "startup");
         }
         log.Line("=== done: press + to exit ===");
         log.Sync();

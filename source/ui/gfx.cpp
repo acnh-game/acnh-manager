@@ -1,6 +1,7 @@
 #include "gfx.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace acnh_manager::ui {
 
@@ -110,6 +111,26 @@ void StrokeRect(Surface surface, int x, int y, int w, int h, int thickness, Colo
     FillRect(surface, x, y + h - thickness, w, thickness, color);
     FillRect(surface, x, y, thickness, h, color);
     FillRect(surface, x + w - thickness, y, thickness, h, color);
+}
+
+/* Rounded rectangle without any new primitive: on a 2D framebuffer a rounded rect is just a
+   stack of horizontal spans whose ends follow a quarter circle, so it stays a few FillRect
+   calls and inherits the clip handling.  radius is clamped to half the smaller side. */
+void FillRoundedRect(Surface surface, int x, int y, int w, int h, int radius, Color color) {
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    const int r = std::min(radius, std::min(w, h) / 2);
+    /* Middle band: full width. */
+    FillRect(surface, x, y + r, w, h - 2 * r, color);
+    /* Top and bottom bands: shrink each row towards the corner. */
+    for (int row = 0; row < r; ++row) {
+        const int dy = r - row;                       /* distance from the band edge to the centre */
+        const int inset = r - static_cast<int>(
+                              std::sqrt(static_cast<double>(r * r - dy * dy)) + 0.5);
+        FillRect(surface, x + inset, y + row, w - 2 * inset, 1, color);
+        FillRect(surface, x + inset, y + h - 1 - row, w - 2 * inset, 1, color);
+    }
 }
 
 void Fill(Surface surface, Color color) {

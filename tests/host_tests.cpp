@@ -17,6 +17,8 @@
 #include "manifest/manifest.hpp"
 #include "util/sha256.hpp"
 #include "ui/action.hpp"
+#include "ui/header_tabs.hpp"
+#include "ui/home_state.hpp"
 #include "util/text_wrap.hpp"
 #include "util/time.hpp"
 
@@ -425,8 +427,10 @@ void TestStrings() {
     using acnh_manager::i18n::StringCount;
     using acnh_manager::i18n::Text;
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::ExitHint) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ExitHint); ++i) {
+    /* The last enumerator doubles as the sentinel: adding a string without touching this
+       line fails to build, which is exactly the reminder we want. */
+    CHECK(StringCount() == static_cast<unsigned>(StringId::ResultRelinkHint) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ResultRelinkHint); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -544,16 +548,157 @@ void TestActions() {
 
     /* Focus: entry lands on the primary button, down goes to the left secondary one, right
        moves between the two secondary buttons, and there is nothing below them. */
-    CHECK(FirstEnabled(home) == 0);
-    CHECK(MoveFocus(home, 0, 0, +1) == 1);
-    CHECK(MoveFocus(home, 1, +1, 0) == 2);
-    CHECK(MoveFocus(home, 2, -1, 0) == 1);
-    CHECK(MoveFocus(home, 1, 0, +1) == 1);
-    CHECK(MoveFocus(home, 2, 0, +1) == 2);
-    CHECK(MoveFocus(home, 1, 0, -1) == 0);
-    CHECK(MoveFocus(home, -1, 0, +1) == 0); /* unknown focus falls back to the first action */
-    CHECK(MoveFocus(with_disabled, 0, 0, +1) == 1);
-    CHECK(MoveFocus(with_disabled, 1, +1, 0) == 1); /* right neighbour is disabled */
+    /* Every home control carries its own key (A/X/Y), so the page has no focus at all: the
+       ring used to sit on a button the d-pad could not leave, which read as a bug on hardware.
+       Only keyless controls are focus targets. */
+    CHECK(FirstEnabled(home) == -1);
+    CHECK(MoveFocus(home, 0, 0, +1) == 0);
+    CHECK(MoveFocus(home, -1, 0, +1) == -1);
+    /* A page with one keyless control: it takes the focus, and a key-bound neighbour is not a
+       candidate, so the d-pad cannot wander onto the X / Y buttons. */
+    const std::vector<acnh_manager::ui::Action> with_row = {
+        {9, acnh_manager::ui::Rect{40, 100, 500, 40}, true, true},
+        {1, acnh_manager::ui::Rect{40, 200, 500, 40}, true, false},
+    };
+    CHECK(FirstEnabled(with_row) == 9);
+    CHECK(MoveFocus(with_row, 9, 0, +1) == 9);
+
+    /* Tap tracking.  The console only reports coordinates while a finger is down, so the
+       release poll carries no position: the tracker has to remember the last one.  Reading the
+       release poll directly made every real tap look like a screen-wide drag on hardware. */
+    using acnh_manager::ui::TapTracker;
+    {
+        TapTracker tap;
+        auto press = tap.Update(home, true, 640, 341);
+        CHECK(press.press_edge);
+        CHECK(press.pressed_action == 0);
+        CHECK(press.tapped_action == -1); /* a press alone never fires */
+        const auto release = tap.Update(home, false, 0, 0);
+        CHECK(release.tapped_action == 0); /* release carries no position */
+        CHECK(!tap.Down());
+    }
+    {
+        /* Several frames down, then release: still a tap, and the focus follows the press. */
+        TapTracker tap;
+        const auto press = tap.Update(home, true, 200, 500);
+        CHECK(press.press_edge);
+        CHECK(press.pressed_action == 1);
+        tap.Update(home, true, 205, 502);
+        const auto release = tap.Update(home, false, 0, 0);
+        CHECK(release.tapped_action == 1);
+    }
+    {
+        /* Dragging further than the slop cancels, even when the finger comes back inside. */
+        TapTracker tap;
+        tap.Update(home, true, 300, 500);
+        tap.Update(home, true, 900, 500);
+        tap.Update(home, true, 300, 500);
+        CHECK(tap.Update(home, false, 0, 0).tapped_action == -1);
+    }
+    {
+        /* Releasing outside the pressed action does not fire, and a stray release is ignored. */
+        TapTracker tap;
+        tap.Update(home, true, 300, 500);
+        tap.Update(home, true, 900, 500);
+        CHECK(tap.Update(home, false, 0, 0).tapped_action == -1);
+        CHECK(tap.Update(home, false, 0, 0).tapped_action == -1);
+    }
+    {
+        /* A press that misses every control still tracks the finger but fires nothing. */
+        TapTracker tap;
+        const auto press = tap.Update(home, true, 640, 500);
+        CHECK(press.press_edge);
+        CHECK(press.pressed_action == -1);
+        CHECK(tap.Update(home, false, 0, 0).tapped_action == -1);
+    }
+}
+
+/* Header tabs.  The bug this guards against was reported from the console: the "L status" /
+   "R details" pills were drawn but never registered as actions, so tapping them did nothing.
+   These checks pin the properties that make them tappable where they are drawn. */
+void TestHeaderTabs() {
+    using acnh_manager::ui::HitTest;
+    using acnh_manager::ui::kHeaderBarHeight;
+    using acnh_manager::ui::kHeaderTabBadge;
+    using acnh_manager::ui::kHeaderTabTop;
+    using acnh_manager::ui::LayoutHeaderTabs;
+
+    const int label_width[2] = {110, 120}; /* the two header tab labels, measured on hardware */
+    const auto layout = LayoutHeaderTabs(1280, label_width);
+
+    /* Both tabs are hit-testable in the middle of the group they draw. */
+    const std::vector<acnh_manager::ui::Action> tabs = {
+        {1, layout.hit[0], true},
+        {2, layout.hit[1], true},
+    };
+    CHECK(HitTest(tabs, layout.badge_x[0] + kHeaderTabBadge / 2, kHeaderTabTop + 20) == 1);
+    CHECK(HitTest(tabs, layout.label_x[0] + label_width[0] / 2, 56) == 1);
+    CHECK(HitTest(tabs, layout.badge_x[1] + kHeaderTabBadge / 2, kHeaderTabTop + 20) == 2);
+    CHECK(HitTest(tabs, layout.label_x[1] + label_width[1] / 2, 56) == 2);
+
+    /* A tap can never be ambiguous, and the targets stay inside the header bar. */
+    CHECK(layout.hit[0].x + layout.hit[0].w <= layout.hit[1].x);
+    CHECK(layout.badge_x[0] < layout.badge_x[1]);
+    CHECK(layout.hit[0].x >= 0);
+    CHECK(layout.hit[0].y >= 0);
+    CHECK(layout.hit[1].x + layout.hit[1].w <= 1280);
+    CHECK(layout.hit[0].y + layout.hit[0].h <= kHeaderBarHeight);
+    CHECK(layout.hit[1].y + layout.hit[1].h <= kHeaderBarHeight);
+
+    /* Wider labels push the group to the left instead of running off the screen. */
+    const int wide[2] = {200, 200};
+    const auto wide_layout = LayoutHeaderTabs(1280, wide);
+    CHECK(wide_layout.badge_x[0] < layout.badge_x[0]);
+    CHECK(wide_layout.hit[1].x + wide_layout.hit[1].w <= 1280);
+}
+
+/* Home-screen state: the seven states and their priority.  Getting the order wrong would
+   show "install" to someone whose game is not even installed, so it is pinned here. */
+void TestHomeState() {
+    using acnh_manager::ui::Classify;
+    using acnh_manager::ui::HomeInputs;
+    using acnh_manager::ui::HomeKind;
+
+    HomeInputs ready; /* the healthy baseline: game found, supported, installed, current */
+    ready.game_found = true;
+    ready.supported = true;
+    CHECK(Classify(ready) == HomeKind::UpToDate);
+
+    HomeInputs no_game = ready;
+    no_game.game_found = false;
+    CHECK(Classify(no_game) == HomeKind::GameMissing);
+    /* A missing game beats every other condition, including a leftover failure. */
+    no_game.last_failed = true;
+    no_game.supported = false;
+    CHECK(Classify(no_game) == HomeKind::GameMissing);
+
+    HomeInputs unsupported = ready;
+    unsupported.supported = false;
+    unsupported.fresh_install = true;
+    CHECK(Classify(unsupported) == HomeKind::Unsupported);
+
+    HomeInputs failed = ready;
+    failed.last_failed = true;
+    failed.fresh_install = true; /* a retry still shows the failure, not "install" */
+    CHECK(Classify(failed) == HomeKind::Failed);
+
+    HomeInputs repair = ready;
+    repair.repair_needed = true;
+    CHECK(Classify(repair) == HomeKind::Repair);
+    repair.last_failed = true;
+    CHECK(Classify(repair) == HomeKind::Failed);
+
+    HomeInputs fresh = ready;
+    fresh.fresh_install = true;
+    CHECK(Classify(fresh) == HomeKind::NeedsInstall);
+    fresh.repair_needed = true;
+    CHECK(Classify(fresh) == HomeKind::Repair);
+
+    HomeInputs newer = ready;
+    newer.newer_agent = true;
+    CHECK(Classify(newer) == HomeKind::UpdateAvailable);
+    newer.fresh_install = true;
+    CHECK(Classify(newer) == HomeKind::NeedsInstall);
 }
 
 }  // namespace
@@ -572,6 +717,8 @@ int main() {
     TestSha256();
     TestTimeFormat();
     TestActions();
+    TestHeaderTabs();
+    TestHomeState();
     TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -28,6 +28,10 @@ struct Action {
     int id{-1};
     Rect rect{};
     bool enabled{true};
+    /* Controls that already have a dedicated key (A/X/Y/L/R/B) are not focus targets: the key
+       badge already says everything about them, so a focus ring on them is noise.  Only
+       controls without their own key can be focused (today: the details page's language row). */
+    bool focusable{false};
 };
 
 /* Id of the enabled action containing (x, y), or -1.  Disabled actions never hit. */
@@ -40,10 +44,85 @@ inline int HitTest(const std::vector<Action> &actions, int x, int y) {
     return -1;
 }
 
+inline int AbsInt(int value) { return value < 0 ? -value : value; }
+
+/* Result of feeding one touch poll into TapTracker. */
+struct TapResult {
+    bool press_edge{false};   /* a new contact started during this poll */
+    int pressed_action{-1};   /* action under the finger then (-1 when the finger missed) */
+    int tapped_action{-1};    /* action to fire: press and release landed on the same one */
+};
+
+/* Tap tracking: a tap fires only when the finger goes down and comes back up on the same
+   enabled action, having stayed within the slop of where it landed the whole time (a swipe
+   that wanders off and returns is a drag, not a tap).
+
+   The panel only reports coordinates *while* a finger is down -- the poll that sees the
+   release carries no position -- so the tracker remembers where the finger last was and uses
+   that for both the drag test and the release hit test.  Reading the release coordinates from
+   that poll directly is what made every real tap look like a screen-wide drag on hardware. */
+class TapTracker {
+public:
+    TapResult Update(const std::vector<Action> &actions, bool down, int x, int y) {
+        TapResult result{};
+        if (down) {
+            if (!m_down) {
+                m_down = true;
+                m_pressed = HitTest(actions, x, y);
+                m_press_x = x;
+                m_press_y = y;
+                m_max_deviation = 0;
+                result.press_edge = true;
+                result.pressed_action = m_pressed;
+            }
+            m_last_x = x;
+            m_last_y = y;
+            const int deviation = AbsInt(m_last_x - m_press_x) > AbsInt(m_last_y - m_press_y)
+                                      ? AbsInt(m_last_x - m_press_x)
+                                      : AbsInt(m_last_y - m_press_y);
+            if (deviation > m_max_deviation) {
+                m_max_deviation = deviation;
+            }
+            return result;
+        }
+        if (!m_down) {
+            return result;
+        }
+        m_down = false;
+        const int pressed = m_pressed;
+        m_pressed = -1;
+        if (pressed < 0) {
+            return result;
+        }
+        if (m_max_deviation > kSlop) {
+            return result;
+        }
+        if (HitTest(actions, m_last_x, m_last_y) != pressed) {
+            return result;
+        }
+        result.tapped_action = pressed;
+        return result;
+    }
+
+    bool Down() const { return m_down; }
+
+private:
+    /* Half a fingertip: the contact patch measured on hardware is about 67x89 px, so a
+       deliberate press can wobble a little without turning into a drag. */
+    static constexpr int kSlop = 32;
+    bool m_down{false};
+    int m_pressed{-1};
+    int m_press_x{0};
+    int m_press_y{0};
+    int m_last_x{0};
+    int m_last_y{0};
+    int m_max_deviation{0};
+};
+
 /* First enabled action, or -1 (used as the entry focus). */
 inline int FirstEnabled(const std::vector<Action> &actions) {
     for (const Action &action : actions) {
-        if (action.enabled) {
+        if (action.enabled && action.focusable) {
             return action.id;
         }
     }
@@ -73,7 +152,7 @@ inline int MoveFocus(const std::vector<Action> &actions, int current, int dx, in
     int best = current;
     int best_score = 0;
     for (const Action &action : actions) {
-        if (action.id == current || !action.enabled) {
+        if (action.id == current || !action.enabled || !action.focusable) {
             continue;
         }
         const int ax = action.rect.x + action.rect.w / 2;

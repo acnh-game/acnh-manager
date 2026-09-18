@@ -61,6 +61,10 @@ Bounds DrawBounds(Surface surface);
 
 void Fill(Surface surface, Color color);
 void FillRect(Surface surface, int x, int y, int w, int h, Color color);
+/* Rounded rectangle: the corners are chipped with a quarter circle of the given radius.
+   Used for the home-screen buttons (a button is a rounded fill plus a rounded fill inset by
+   the border thickness). */
+void FillRoundedRect(Surface surface, int x, int y, int w, int h, int radius, Color color);
 void StrokeRect(Surface surface, int x, int y, int w, int h, int thickness, Color color);
 void BlendPixel(Surface surface, int x, int y, Color color);
 
