@@ -74,6 +74,7 @@ enum class StringId {
     StateUnsupported,
     StateFailed,
     StateRepair,
+    StateIncomplete,
     StateNotInstalled,
     StateUpdateAvailable,
     StateInstalled,

@@ -21,6 +21,7 @@
 #include "ui/font.hpp"
 #include "ui/header_tabs.hpp"
 #include "ui/home_state.hpp"
+#include "ui/settings.hpp"
 #include "ui/touch.hpp"
 
 namespace acnh_manager {
@@ -52,6 +53,10 @@ private:
 
     void Collect();
     void RefreshPlan();
+    /* Compare the card with the install record (the record alone is not evidence). */
+    void VerifyRecordAgainstCard();
+    void LoadSettings();
+    void SaveSettings();
     void UpdateHomeState();
     /* "0.11.0(c47d2b47)" -- version plus the first bytes of its payload hash, which is what
        tells two builds of the same version apart. */
@@ -132,6 +137,8 @@ private:
 
     HomeKind m_home_kind{HomeKind::NeedsInstall};
     bool m_last_failed{false};
+    /* The record says installed, but the card no longer matches it. */
+    bool m_files_incomplete{false};
     /* Newer agent version found by the update check (empty when there is none). */
     std::string m_newer_agent{};
 

@@ -13,12 +13,13 @@
 #include "env/config_ini.hpp"
 #include "i18n/strings.hpp"
 #include "install/gate.hpp"
-#include "manifest/json.hpp"
+#include "util/json.hpp"
 #include "manifest/manifest.hpp"
 #include "util/sha256.hpp"
 #include "ui/action.hpp"
 #include "ui/header_tabs.hpp"
 #include "ui/home_state.hpp"
+#include "ui/settings.hpp"
 #include "util/text_wrap.hpp"
 #include "util/time.hpp"
 
@@ -652,7 +653,7 @@ void TestHeaderTabs() {
     CHECK(wide_layout.hit[1].x + wide_layout.hit[1].w <= 1280);
 }
 
-/* Home-screen state: the seven states and their priority.  Getting the order wrong would
+/* Home-screen state: the eight states and their priority.  Getting the order wrong would
    show "install" to someone whose game is not even installed, so it is pinned here. */
 void TestHomeState() {
     using acnh_manager::ui::Classify;
@@ -699,6 +700,69 @@ void TestHomeState() {
     CHECK(Classify(newer) == HomeKind::UpdateAvailable);
     newer.fresh_install = true;
     CHECK(Classify(newer) == HomeKind::NeedsInstall);
+
+    /* The card disagreeing with the record wins over the record's own verdict: that is the
+       case where "installed" would be a lie (the game directory was deleted behind our back),
+       and it outranks repair/needs-install because the player is looking at the wrong story. */
+    HomeInputs incomplete = ready;
+    incomplete.files_incomplete = true;
+    CHECK(Classify(incomplete) == HomeKind::Incomplete);
+    incomplete.repair_needed = true;
+    CHECK(Classify(incomplete) == HomeKind::Incomplete);
+    incomplete.last_failed = true;
+    CHECK(Classify(incomplete) == HomeKind::Failed);
+    HomeInputs missing_game = incomplete;
+    missing_game.game_found = false;
+    CHECK(Classify(missing_game) == HomeKind::GameMissing);
+}
+
+/* Settings (interface language and whatever follows it).  They live in their own file so they
+   survive an uninstall, and the round trip has to be exact: a parse that quietly drops the
+   language is how "the language resets after a restart" came back from the console. */
+void TestSettings() {
+    using acnh_manager::ui::DumpSettings;
+    using acnh_manager::ui::ParseSettings;
+    using acnh_manager::ui::Settings;
+    using acnh_manager::i18n::Language;
+
+    Settings written;
+    written.language = Language::English;
+    const std::string text = DumpSettings(written);
+    CHECK(text.find("\"language\":\"en\"") != std::string::npos);
+
+    Settings read;
+    std::string error;
+    CHECK(ParseSettings(text, &read, &error));
+    CHECK(read.language == Language::English);
+    CHECK(error.empty());
+
+    /* Defaults when the language key is absent, and an unknown value keeps what we had. */
+    Settings defaults;
+    CHECK(ParseSettings("{\"schema\":1}", &defaults, &error));
+    CHECK(defaults.language == Language::ZhHans);
+    defaults.language = Language::English;
+    CHECK(ParseSettings("{\"schema\":1,\"language\":\"klingon\"}", &defaults, &error));
+    CHECK(defaults.language == Language::English);
+    CHECK(!error.empty());
+
+    /* Broken files and files from a newer schema are reported, not guessed at. */
+    Settings junk;
+    CHECK(!ParseSettings("not json", &junk, &error));
+    CHECK(!ParseSettings("[1,2,3]", &junk, &error));
+    CHECK(!ParseSettings("{\"schema\":99,\"language\":\"en\"}", &junk, &error));
+    CHECK(junk.language == Language::ZhHans); /* untouched on failure */
+
+    /* The names are stable identifiers: the enum can be renamed without resetting a choice. */
+    CHECK(text == "{\"schema\":1,\"language\":\"en\"}");
+
+    /* Both directions round trip, not just the one that happens to be the default. */
+    Settings chinese;
+    chinese.language = Language::ZhHans;
+    Settings reloaded;
+    reloaded.language = Language::English;
+    CHECK(ParseSettings(DumpSettings(chinese), &reloaded, &error));
+    CHECK(reloaded.language == Language::ZhHans);
+    CHECK(DumpSettings(chinese) == "{\"schema\":1,\"language\":\"zh-Hans\"}");
 }
 
 }  // namespace
@@ -719,6 +783,7 @@ int main() {
     TestActions();
     TestHeaderTabs();
     TestHomeState();
+    TestSettings();
     TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

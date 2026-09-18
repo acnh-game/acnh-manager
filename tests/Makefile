@@ -8,9 +8,10 @@ INCLUDES := -I../source
 SOURCES := host_tests.cpp \
            ../source/env/config_ini.cpp \
            ../source/i18n/strings.cpp \
-           ../source/manifest/json.cpp \
+           ../source/util/json.cpp \
            ../source/manifest/manifest.cpp \
            ../source/install/gate.cpp \
+           ../source/ui/settings.cpp \
            ../source/util/sha256.cpp \
            ../source/util/time.cpp
 # Headers are dependencies too: without this, changing a header alone reused the previous

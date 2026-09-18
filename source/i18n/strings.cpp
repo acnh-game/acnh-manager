@@ -72,6 +72,7 @@ constexpr Entry kStrings[] = {
     {"这个游戏版本暂不支持", "This game version is not supported yet"},  /* StateUnsupported */
     {"上次安装失败", "The last install failed"},  /* StateFailed */
     {"现在安装的 agent 不是当前发布版本", "The installed agent is not the current release"},  /* StateRepair */
+    {"已安装的文件不完整", "The installed files are incomplete"},  /* StateIncomplete */
     {"还没有安装 agent", "The agent is not installed yet"},  /* StateNotInstalled */
     {"agent 已安装 · 有新版本", "The agent is installed - a newer version exists"},  /* StateUpdateAvailable */
     {"agent 已安装，可以使用", "The agent is installed and ready"},  /* StateInstalled */

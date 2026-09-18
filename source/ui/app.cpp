@@ -92,6 +92,9 @@ constexpr int kActionTabDetails = 11; /* R: the details page (also a touch targe
 constexpr int kActionFooterBack = 12; /* the footer's "Ⓑ exit / back" hint */
 constexpr int kActionLanguage = 13;   /* the details page's language row */
 
+/* Player settings (language today).  Separate from state.json because uninstall deletes that. */
+constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
+
 /* Header tab layout lives in ui/header_tabs.hpp so the host tests can pin it; these two
    constants have to agree with it. */
 static_assert(kMargin == ui::kHeaderMargin, "header tab layout assumes the page margin");
@@ -158,6 +161,7 @@ const char *PlanActionName(install::PlanAction action) {
 bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     m_log = log;
     m_sd = &sd;
+    LoadSettings();
     Trace("ui: font init ...");
     if (!m_font.Init(log, error)) {
         return false;
@@ -340,6 +344,51 @@ std::string App::BuildLabel(const std::string &version, const std::string &sha25
     return out;
 }
 
+/* Settings live in their own file because the install record is deleted by uninstall; the
+   language has to outlive that.  A missing or unreadable file is not an error: the defaults
+   stand and the reason goes to the log. */
+void App::LoadSettings() {
+    Settings settings;
+    std::string text;
+    bool found = false;
+    std::string error;
+    if (!install::ReadTextFile(*m_sd, kSettingsPath, &text, &found, &error)) {
+        Trace("settings: read failed: %s", error.c_str());
+        return;
+    }
+    if (!found) {
+        Trace("settings: no usable file (%s), keeping defaults",
+              error.empty() ? "no reason given" : error.c_str());
+    } else {
+        std::string problem;
+        if (!ParseSettings(text, &settings, &problem)) {
+            Trace("settings: unusable (%s), keeping defaults", problem.c_str());
+        } else {
+            /* A file we could read but whose values we did not understand reports that here
+               (ParseSettings keeps the value it had) -- the log should say why. */
+            if (!problem.empty()) {
+                Trace("settings: %s", problem.c_str());
+            }
+            Trace("settings: language=%s",
+                  settings.language == i18n::Language::English ? "en" : "zh-Hans");
+        }
+    }
+    m_language = settings.language;
+    i18n::SetLanguage(m_language);
+}
+
+void App::SaveSettings() {
+    if (m_sd == nullptr) {
+        return;
+    }
+    Settings settings;
+    settings.language = m_language;
+    std::string error;
+    if (!install::WriteTextFile(*m_sd, kSettingsPath, DumpSettings(settings), &error)) {
+        Trace("settings: could not be saved: %s", error.c_str());
+    }
+}
+
 /* Hash of our payload inside the install record (empty when nothing is recorded). */
 std::string App::InstalledPayloadHash() const {
     for (const auto &file : m_state.files) {
@@ -371,6 +420,29 @@ void App::RefreshPlan() {
         m_gate = install::Evaluate(nullptr, m_report.build);
         m_plan = install::Plan(m_gate, m_have_state ? &m_state : nullptr, manifest::AgentInfo{});
     }
+    VerifyRecordAgainstCard();
+}
+
+/* The record is what the installer *did*; the card is what *is*.  `Plan()` only compares the
+   record against the manifest, so this is the step that notices someone deleted or renamed the
+   game directory while the app was closed -- otherwise the home screen keeps saying "installed"
+   (measured: renaming `atmosphere/contents/<title>/exefs` over FTP while the app was closed
+   left the old verdict on screen). */
+void App::VerifyRecordAgainstCard() {
+    m_files_incomplete = false;
+    if (!m_have_state || m_plan.action != install::PlanAction::UpToDate) {
+        return; /* nothing recorded, or the plan already asks for an install / repair */
+    }
+    std::string reason;
+    if (install::VerifyInstalledFiles(*m_sd, m_state, &reason)) {
+        return;
+    }
+    m_files_incomplete = true;
+    Trace("collect: the card does not match the record: %s", reason.c_str());
+    /* Same action, honest reason: "repair" is what the button offers, and the home screen gives
+       it the wording this case deserves (see HomeKind::Incomplete). */
+    m_plan.action = install::PlanAction::Repair;
+    m_plan.reason = reason;
 }
 
 /* Fold everything the app knows into the single home-screen state. */
@@ -379,6 +451,7 @@ void App::UpdateHomeState() {
     in.game_found = !m_report.build.title_id.empty() && m_report.build.version != 0;
     in.supported = m_gate.status == install::GateStatus::Supported;
     in.last_failed = m_last_failed;
+    in.files_incomplete = m_files_incomplete;
     in.repair_needed = m_plan.action == install::PlanAction::Repair;
     in.fresh_install = m_plan.action == install::PlanAction::Install;
     in.newer_agent = !m_newer_agent.empty();
@@ -398,6 +471,10 @@ void App::ToggleLanguage() {
        the same process-wide language; and the collected report carries sentences built at
        Collect() time (the override advice), so re-collect to rebuild them. */
     i18n::SetLanguage(m_language);
+    /* Remember it: the language used to live only in memory, so it was back to Chinese after
+       every restart (reported from the console).  A failure here is logged and nothing more --
+       the switch itself already took effect. */
+    SaveSettings();
     /* The update-check sentence is one string built by the network layer in the language of the
        moment ("skipped: missing CA file: <path>"), so it cannot be re-rendered here.  Dropping
        it back to "not checked" beats leaving a stale-language message on the details page; the
@@ -684,6 +761,7 @@ void App::ActivateAction(int id) {
                 case HomeKind::NeedsInstall:
                 case HomeKind::UpdateAvailable:
                 case HomeKind::Repair:
+                case HomeKind::Incomplete:
                 case HomeKind::Failed:
                     m_page = Page::Install;
                     break;
@@ -1104,6 +1182,7 @@ void App::RenderHome(Surface surface) {
     switch (m_home_kind) {
         case HomeKind::GameMissing:
         case HomeKind::Unsupported:
+        case HomeKind::Incomplete:
         case HomeKind::Repair: dot = kWarn; break;
         case HomeKind::Failed: dot = kBad; break;
         case HomeKind::UpdateAvailable:
@@ -1117,6 +1196,7 @@ void App::RenderHome(Surface surface) {
         case HomeKind::GameMissing: headline = i18n::StringId::StateGameMissing; break;
         case HomeKind::Unsupported: headline = i18n::StringId::StateUnsupported; break;
         case HomeKind::Failed: headline = i18n::StringId::StateFailed; break;
+        case HomeKind::Incomplete: headline = i18n::StringId::StateIncomplete; break;
         case HomeKind::Repair: headline = i18n::StringId::StateRepair; break;
         case HomeKind::NeedsInstall: headline = i18n::StringId::StateNotInstalled; break;
         case HomeKind::UpdateAvailable: headline = i18n::StringId::StateUpdateAvailable; break;
@@ -1226,32 +1306,42 @@ void App::RenderHome(Surface surface) {
                     kFontSmall, filled && action->enabled ? kOnHeader : kSubtle, sub);
     };
 
+    /* One switch per line instead of nesting: the button has to match the state, and the state
+       list keeps growing (the "files are gone" case was added last). */
+    i18n::StringId label_id = i18n::StringId::BtnUnavailable;
+    i18n::StringId sub_id = i18n::StringId::SubInstall;
+    switch (m_home_kind) {
+        case HomeKind::UpdateAvailable:
+            label_id = i18n::StringId::BtnUpdate; /* formatted below: it carries the version */
+            break;
+        case HomeKind::NeedsInstall: label_id = i18n::StringId::BtnInstall; break;
+        case HomeKind::Repair:
+        case HomeKind::Incomplete:
+            label_id = i18n::StringId::BtnRepair;
+            /* The reason lives on the status line, not under the button. */
+            sub_id = i18n::StringId::SubInstall;
+            break;
+        case HomeKind::Failed:
+            label_id = i18n::StringId::BtnRetry;
+            sub_id = i18n::StringId::SubRetry;
+            break;
+        case HomeKind::GameMissing:
+            label_id = i18n::StringId::BtnRecheck;
+            sub_id = i18n::StringId::SubRecheck;
+            break;
+        case HomeKind::UpToDate:
+            label_id = i18n::StringId::BtnUpToDate;
+            sub_id = i18n::StringId::SubUpToDate;
+            break;
+        case HomeKind::Unsupported:
+            sub_id = i18n::StringId::StateUnsupportedSub;
+            break;
+    }
     const std::string primary_label =
         m_home_kind == HomeKind::UpdateAvailable
             ? i18n::Format(i18n::StringId::BtnUpdate, m_newer_agent.c_str())
-            : std::string(Tr(m_home_kind == HomeKind::NeedsInstall
-                                 ? i18n::StringId::BtnInstall
-                                 : (m_home_kind == HomeKind::Repair
-                                        ? i18n::StringId::BtnRepair
-                                        : (m_home_kind == HomeKind::Failed
-                                               ? i18n::StringId::BtnRetry
-                                               : (m_home_kind == HomeKind::GameMissing
-                                                      ? i18n::StringId::BtnRecheck
-                                                      : (m_home_kind == HomeKind::UpToDate
-                                                             ? i18n::StringId::BtnUpToDate
-                                                             : i18n::StringId::BtnUnavailable))))));
-    const std::string primary_sub =
-        m_home_kind == HomeKind::Repair
-            ? Tr(i18n::StringId::SubInstall) /* the reason lives on the status line, not here */
-            : std::string(Tr(m_home_kind == HomeKind::Failed
-                                 ? i18n::StringId::SubRetry
-                                 : (m_home_kind == HomeKind::GameMissing
-                                        ? i18n::StringId::SubRecheck
-                                        : (m_home_kind == HomeKind::UpToDate
-                                               ? i18n::StringId::SubUpToDate
-                                               : (m_home_kind == HomeKind::Unsupported
-                                                      ? i18n::StringId::StateUnsupportedSub
-                                                      : i18n::StringId::SubInstall)))));
+            : std::string(Tr(label_id));
+    const std::string primary_sub = Tr(sub_id);
     block(primary, primary_label.c_str(), primary_sub, "A", true);
     block(check, Tr(i18n::StringId::BtnCheckUpdate), Tr(i18n::StringId::SubCheckUpdate), "X", false);
     if (uninstall != nullptr) {

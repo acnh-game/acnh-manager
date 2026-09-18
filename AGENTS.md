@@ -111,8 +111,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 - `source/manifest/`:清单解析与校验(纯逻辑,可主机测试);`source/install/`:门控判定、安装决策与
   `state.json`(同上);`source/payload/`:内嵌发布通道(读 `data/` 里 bin2s 生成的符号);
   `source/ui/`:界面层;`source/net/`:联网检查。
-  界面层里三块纯逻辑单独成头文件、由主机测试钉住:`ui/action.hpp`(`HitTest`/`MoveFocus`/`TapTracker`)、
-  `ui/header_tabs.hpp`(页眉标签页几何:绘制与命中矩形共用)、`ui/home_state.hpp`(首页七态分类)——
+  界面层里这几块纯逻辑单独成头文件、由主机测试钉住:`ui/action.hpp`(`HitTest`/`MoveFocus`/`TapTracker`)、
+  `ui/header_tabs.hpp`(页眉标签页几何:绘制与命中矩形共用)、`ui/home_state.hpp`(首页八态分类)、
+  `ui/settings.hpp`(`settings.json` 的往返:界面语言必须活过重启与卸载)——
   改规则时先改头文件与 `tests/host_tests.cpp`。
 - `data/`:内嵌发布清单与 payload 的 bin2s 构建输入(由导入工具生成,入库)。
 - `packaging/agent/<版本>/`:发布记录(subsdk9 / main.npdm / acnh-agent.version / manifest.json),

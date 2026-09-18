@@ -41,6 +41,21 @@ agent 版本、观察到什么、失败用例的原始现象。
 | 非发布清单 | 保留开发构建的清单(默认不允许开发清单) | 拒绝并提示 buildFlags 不是发布形态 | 已验(2026-09-17,CLI 与 App 设置页) |
 | 旧金手指共存 | 保留 `cheats/<build id>.txt` | 状态页给出冲突警告 | 待执行 |
 | 联网检查 | 设置页按 + | 有 CA 与网络时取到清单;缺 CA 时显示"跳过: 缺少 CA 文件" | 待执行 |
+| 界面语言重启后保持 | 详情页切语言 → 退出 → 重开 | 重开后仍是所选语言 | 已验(2026-09-18:`settings.json` 落盘;重开日志 `settings: language=en`,切回中文后重开是 `language=zh-Hans`) |
+| 已装文件被外部删除 | 装完后在应用之外删掉 `exefs` → 重启 | 不再显示"已安装",而是如实报文件不完整并给重装按钮 | 已验(2026-09-18:状态行 `已安装的文件不完整`,日志 `collect: the card does not match the record: installed file … is not on the card`,`plan=repair`;按重装恢复成 `up-to-date`) |
+
+## 状态与设置(2026-09-18)
+
+两件都在真机上按上面的矩阵验过,补充两点实现事实:
+
+- `Plan()` 只比较**安装记录与清单**,不看卡;卡上是否真有那些文件由
+  `install::VerifyInstalledFiles()` 在每次 `Collect()` 之后核对(存在 + sha256 一致),不一致即报
+  `HomeKind::Incomplete`。它只在计划本来是 `UpToDate` 时生效,不会覆盖"该装 / 该修"的判定。
+- 界面语言存 `/switch/ACNH-Manager/settings.json`(与 `state.json` 分开,因为卸载会删掉后者)。
+  文件缺失或损坏都退回默认语言,并把原因写进 `log.txt`,不挡启动。
+
+测试提醒:用 sys-agent 的 FTP 给目录**改名**时,同一路径可能又出现(实测 `RNTO` 之后 `exefs`
+与 `exefs-hidden` 同时存在),所以模拟"文件消失"请用**删除**(先删文件再 `RMD` 目录)。
 
 ## 崩溃记录(2026-09-17)
 

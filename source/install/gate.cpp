@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstdarg>
 
-#include "manifest/json.hpp"
+#include "util/json.hpp"
 
 namespace acnh_manager::install {
 namespace {

@@ -222,7 +222,11 @@ bool HashFile(FsFileSystem &sd, const std::string &path, std::string *hex, std::
 
 bool FileExists(FsFileSystem &sd, const std::string &path) {
     FsFile file{};
-    const FsPath arg(path);
+    /* Normalise here rather than trusting callers: the install record stores *relative*
+       targets ("atmosphere/..."), and fs refuses a relative path with 0x2EEA02 -- which reads
+       like "the file is not there" and made the first version of the card-vs-record check
+       report every healthy install as incomplete. */
+    const FsPath arg(AbsolutePath(path));
     if (R_FAILED(TraceFs("open-exists", arg.c_str(),
                          fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file)))) {
         return false;
@@ -472,6 +476,71 @@ bool WriteStateFile(FsFileSystem &sd, const InstallState &state, std::string *er
     const std::string text = DumpState(state);
     const std::vector<u8> data(text.begin(), text.end());
     return WriteFileVerified(sd, kStatePath, data, util::Sha256Hex(data.data(), data.size()), error);
+}
+
+bool ReadTextFile(FsFileSystem &sd, const std::string &path, std::string *out, bool *found,
+                  std::string *error) {
+    std::vector<u8> data;
+    std::string read_error;
+    if (!ReadWholeFile(sd, path, &data, &read_error)) {
+        if (found != nullptr) {
+            *found = false;
+        }
+        /* Nothing to read (missing, or the card refused the open): the caller falls back to its
+           defaults, and the reason goes to the log instead of the player. */
+        if (error != nullptr) {
+            *error = read_error;
+        }
+        return true;
+    }
+    if (found != nullptr) {
+        *found = true;
+    }
+    if (out != nullptr) {
+        out->assign(data.begin(), data.end());
+    }
+    return true;
+}
+
+bool WriteTextFile(FsFileSystem &sd, const std::string &path, const std::string &text,
+                   std::string *error) {
+    const std::vector<u8> data(text.begin(), text.end());
+    return WriteFileVerified(sd, path, data, util::Sha256Hex(data.data(), data.size()), error);
+}
+
+bool VerifyInstalledFiles(FsFileSystem &sd, const InstallState &state, std::string *error) {
+    /* A record that names nothing describes no installation; saying "incomplete" is the honest
+       answer, and it also means the caller never treats a stub record as a healthy install. */
+    if (state.files.empty()) {
+        if (error != nullptr) {
+            *error = "the install record lists no files";
+        }
+        return false;
+    }
+    for (const InstalledFile &file : state.files) {
+        if (!FileExists(sd, file.target)) {
+            if (error != nullptr) {
+                *error = "installed file " + file.target + " is not on the card";
+            }
+            return false;
+        }
+        std::string actual;
+        std::string hash_error;
+        if (!HashFile(sd, file.target, &actual, &hash_error)) {
+            if (error != nullptr) {
+                *error = "installed file " + file.target + " cannot be read: " + hash_error;
+            }
+            return false;
+        }
+        if (Upper(actual) != Upper(file.sha256)) {
+            if (error != nullptr) {
+                *error = "installed file " + file.target + " differs from the record (got " +
+                         actual.substr(0, 8) + ")";
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 bool ReadManifestFile(FsFileSystem &sd, const std::string &path, std::string_view app_version,

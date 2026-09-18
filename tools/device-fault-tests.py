@@ -97,17 +97,31 @@ def app_page(path):
     if state != "manager":
         return state
     im = Image.open(path).convert("RGB")
-    white = lambda p: min(p) > 225
-    # The status tab badge stays bright on the confirmation and result pages too, so the big
-    # action button is tested first: the status page's own button row (y=267..415) stops well
-    # above y=603, while the confirmation and result pages draw their button across it.
+    # The big action button is tested first: the status page's own button row (y=267..415) stops
+    # well above y=603, while the confirmation and result pages draw their button across it.
     teal = im.getpixel((334, 603))
     if teal[0] < 120 and teal[1] > 150 and teal[2] > 120:
         return "action"
-    if white(im.getpixel((1148, 47))):   # Ⓡ badge bright = details page
-        return "details"
-    if white(im.getpixel((1012, 47))):   # Ⓛ badge bright = status page
-        return "home"
+    # The selected tab carries a white underline under its label (y=82..86, 4 px tall), and the
+    # tabs are laid out from the right edge -- so the right-hand tab's underline ends at the page
+    # margin (x=1240 for a 1280 wide frame) while the left-hand one ends around x=1040.  Reading
+    # that instead of a fixed badge position keeps this working in both languages: the tab group
+    # slides left when the labels are wider, which silently broke the old fixed-x check.
+    for y in (82, 83, 84, 85, 86):
+        runs = []
+        start = None
+        for x in range(700, 1280):
+            is_white = min(im.getpixel((x, y))) > 225
+            if is_white and start is None:
+                start = x
+            elif not is_white and start is not None:
+                runs.append((start, x - 1))
+                start = None
+        if start is not None:
+            runs.append((start, 1279))
+        wide = [run for run in runs if run[1] - run[0] >= 40]
+        if wide:
+            return "details" if max(run[1] for run in wide) >= 1200 else "home"
     return "unknown"
 
 

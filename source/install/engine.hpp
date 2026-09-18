@@ -29,6 +29,25 @@ namespace acnh_manager::install {
    which call failed and what the kernel saw at that pointer. */
 void SetFsTraceSink(Log *log);
 
+/* Small text file on the card (today: settings.json).  `ReadTextFile` reports "not there" as
+   found=false, which is not an error; `WriteTextFile` goes through the same temp-file +
+   read-back + rename path as the install record, so a power cut cannot leave half a file.
+   They live in this module because the verified write path is what the engine owns -- settings
+   are just another small file that must not be left half-written. */
+bool ReadTextFile(FsFileSystem &sd, const std::string &path, std::string *out, bool *found,
+                  std::string *error);
+bool WriteTextFile(FsFileSystem &sd, const std::string &path, const std::string &text,
+                   std::string *error);
+
+/* True when every file the install record names is still on the card, byte for byte.
+
+   `Plan()` compares the record against the manifest *only*, so without this the app keeps
+   saying "installed" after the game directory is removed or renamed behind its back -- measured
+   on hardware: deleting `atmosphere/contents/<title>/exefs` over FTP while the app was closed
+   still left the home screen on "already installed".  The first file that does not match is
+   described in `error`. */
+bool VerifyInstalledFiles(FsFileSystem &sd, const InstallState &state, std::string *error);
+
 /* Payload source: M2 reads a directory on the SD card (for on-device dry runs); the release
    path embeds the payload in the NRO instead. */
 class PayloadSource {

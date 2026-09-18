@@ -1,6 +1,6 @@
 #pragma once
 
-/* Which of the seven home-screen states the app is in.
+/* Which of the eight home-screen states the app is in.
 
    Pure logic on purpose: this single decision drives the whole home screen (headline, colour,
    primary button), so it is testable without a console.  The app fills the inputs from the
@@ -12,6 +12,7 @@ enum class HomeKind {
     GameMissing,     /* no Animal Crossing on this console, or its info is unreadable */
     Unsupported,     /* the game is here, but this build cannot be handled */
     Failed,          /* the last install / uninstall attempt failed */
+    Incomplete,      /* the record says installed, but the files are not (all) on the card */
     Repair,          /* installed files are missing or no longer match */
     NeedsInstall,    /* ready to install: nothing is installed yet */
     UpdateAvailable, /* installed, and the update check found a newer agent */
@@ -22,9 +23,10 @@ struct HomeInputs {
     bool game_found{false};    /* the game is installed and its build was readable */
     bool supported{false};     /* gate verdict is Supported (build matches the manifest) */
     bool last_failed{false};   /* the previous install/uninstall ended in an error */
-    bool repair_needed{false}; /* plan says Repair */
-    bool fresh_install{false}; /* plan says Install (nothing recorded yet) */
-    bool newer_agent{false};   /* update check found a newer agent version */
+    bool files_incomplete{false}; /* the card no longer matches the install record */
+    bool repair_needed{false};    /* plan says Repair */
+    bool fresh_install{false};    /* plan says Install (nothing recorded yet) */
+    bool newer_agent{false};      /* update check found a newer agent version */
 };
 
 inline HomeKind Classify(const HomeInputs &in) {
@@ -39,6 +41,12 @@ inline HomeKind Classify(const HomeInputs &in) {
     /* A failure is shown until something succeeds, even if the plan now says "install". */
     if (in.last_failed) {
         return HomeKind::Failed;
+    }
+    /* The card disagreeing with the record outranks the record's own verdict: it is the one
+       case where "installed" would be a lie (the player deleted or renamed the game directory
+       behind the app's back). */
+    if (in.files_incomplete) {
+        return HomeKind::Incomplete;
     }
     if (in.repair_needed) {
         return HomeKind::Repair;

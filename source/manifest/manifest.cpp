@@ -1,6 +1,6 @@
 #include "manifest.hpp"
 
-#include "json.hpp"
+#include "util/json.hpp"
 
 #include <cctype>
 #include <cstdarg>

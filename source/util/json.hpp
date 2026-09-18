@@ -1,7 +1,9 @@
 #pragma once
 
-/* Minimal JSON: just what this project's own data needs (the install manifest and state.json).
-   Deliberately free of libnx and third-party code so the host tests can run it directly.
+/* Minimal JSON: just what this project's own data needs (the install manifest, the install
+   record and the settings file).  Lives in `util/` because it is generic infrastructure that
+   three modules use, not part of the manifest format.  Deliberately free of libnx and
+   third-party code so the host tests can run it directly.
    Supports: object / array / string (with \" \\ \/ \b \f \n \r \t \uXXXX) / number / true / false / null.
    Does not support: comments, trailing commas, NaN/Infinity, and it makes no precision
    promise beyond 2^53.  Objects keep insertion order, so writing back is order-stable. */

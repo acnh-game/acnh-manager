@@ -11,6 +11,7 @@ ACNH-Manager 是 `acnh-agent` 的安装器:识别控制台上游戏的实际构�
 |---|---|
 | `/switch/ACNH-Manager/acnh-manager.nro` | 应用本体 |
 | `/switch/ACNH-Manager/state.json` | 安装记录:agent 版本、写入的文件与 sha256、时间 |
+| `/switch/ACNH-Manager/settings.json` | 用户设置(目前只有界面语言) |
 | `/switch/ACNH-Manager/log.txt` | 运行日志(含失败原因;M1 起产生) |
 | `/switch/ACNH-Manager/spike.log`、`spike-history.log` | M0 环境探测输出(仅 spike 构建产生) |
 | `atmosphere/contents/01006F8002326000/exefs/subsdk9` | agent 模块(跨构建共享) |
@@ -20,6 +21,10 @@ ACNH-Manager 是 `acnh-agent` 的安装器:识别控制台上游戏的实际构�
 不写 `SHA256SUMS`;卸载**按记录里的路径删除,不再校验 sha256**(玩家手工改过的文件也要能删掉:
 拒删比误删更伤用户),每个条目都会尝试,删不掉的汇总成一条原因返回;目录为空时才删除目录。
 两阶段安装在启动时清理 `.acnh-` 家族的崩溃残留(见 §4)。
+
+设置与安装记录**分开存**:`state.json` 是安装记录,卸载会删掉它;界面语言必须活过卸载,所以
+它有自己的文件(`ui::Settings` 负责 `settings.json` 的解析/序列化,主机测试钉住往返)。文件缺失
+或读不动都不是错误 —— 用默认值,原因写进 `log.txt`。
 
 ### 2.1 写盘错误码:`0xD401` = 内核 `InvalidMemoryState`
 
@@ -170,7 +175,7 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 
 | 模块 | 职责 |
 |---|---|
-| `source/manifest/json.*` | 极简 JSON 子集解析与输出(对象/数组/字符串含 `\uXXXX` 与代理对/数字/布尔/null),对象保持插入顺序 |
+| `source/util/json.*` | 极简 JSON 子集解析与输出(对象/数组/字符串含 `\uXXXX` 与代理对/数字/布尔/null),对象保持插入顺序。**通用基础设施**:清单、安装记录、设置文件三处都用它,所以放在 `util/` 而不是清单模块里 |
 | `source/manifest/manifest.*` | 发布清单解析与**严格校验**:schema、`agent.dirty==false`、`agent.buildFlags==` 发布位(仅语义钩子位)、`target` 路径安全、`sha256` 64 位十六进制、`size>0`、`restart` 取值、`app.minVersion`;任一项不符即整体拒绝 |
 | `source/install/gate.*` | 门控判定 `Evaluate()`、安装决策 `Plan()`、`state.json` 的序列化/解析 |
 | `source/env/config_ini.*` | `override_config.ini` 与 per-title `config.ini` 的语义解析,产出"启动游戏要不要按键"的人话提示(纯逻辑) |
@@ -216,6 +221,12 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 记录的 agent 版本不同 → `Install`(升级/降级);任一文件缺失或 sha256/size 不符 → `Repair`;
 全部一致 → `UpToDate`(跳过写入)。
 
+`Plan()` 只比较**记录与清单**,不看卡 —— 这是它保持纯逻辑、可主机测试的前提。**卡上到底有没有
+那些文件,由 `install::VerifyInstalledFiles()` 在每次 `Collect()` 之后核对**(记录里每个文件都要
+在、且 sha256 一致),不一致就把动作降级成 `Repair` 并把原因写进日志。少了这一步,玩家在应用
+之外删掉/改名 `exefs` 之后,首页会一直说"已安装"(真机上被这么报过;验收记录在
+`docs/device-acceptance.md`)。
+
 ### 6.4 state.json
 
 ```json
@@ -226,12 +237,13 @@ spike 只读:不写游戏目录,不创建 `state.json`。
  "files":[{"target":"atmosphere/contents/01006F8002326000/exefs/subsdk9","size":105837,"sha256":"…"}]}
 ```
 
-写入必须遵守第 4 节的 `SetSize` 约定;卸载只删除这里记录且哈希一致的文件。
+写入必须遵守第 4 节的 `SetSize` 约定;这份记录也是"卡上应该有什么"的清单,每次 `Collect()` 会
+拿它核对卡(见 6.3),核对不上就按 `Repair` 处理。
 
 ### 6.5 测试与阶段说明
 
 - 主机测试:`make -C tests`(覆盖 JSON 解析/拒绝、清单校验、路径安全、版本比较、门控七种状态、
-  安装五种动作、state 往返、覆盖键语义多种情形)。
+  安装四种动作、state 与 settings 往返、首页八态分类、触摸判定、页眉命中矩形、覆盖键语义多种情形)。
 - 清单与内嵌 payload 由 M4 的导入工具从 acnh-agent 的发布产物生成(发布门控见
   `../../docs/acnh_manager_plan.md` 第 8 节)。**没导入时**状态页显示"未内置(等待发布导入)",App 仍能
   启动并显示环境,只是无法安装。
@@ -258,7 +270,8 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 |---|---|
 | `source/ui/gfx.*` | framebuffer 上的最小绘制层:填充、矩形、描边、带 alpha 的像素混合 |
 | `source/ui/font.*` | FreeType + 主机共享字体(`plGetSharedFontByType`,Standard/简中/扩展简中/繁中/韩文),带按字号分组的字形缓存;缺字自动换下一款字体 |
-| `source/ui/app.*` | 页面状态机(状态 / 设置)、输入处理、卡片式布局与渲染 |
+| `source/ui/app.*` | 页面状态机(首页 / 详情 / 安装确认 / 卸载确认 / 结果)、输入处理、卡片式布局与渲染;首页状态由 `ui/home_state.hpp` 的八态分类决定 |
+| `source/ui/settings.*` | 用户设置(`settings.json`,目前只有界面语言)的解析与序列化(纯逻辑,主机可测) |
 | `source/i18n/strings.*` | 简中 / English 双语文案表(`StringId` 枚举 + 两列),由主机测试保证两边都补齐 |
 | `source/util/text_wrap.hpp` | 折行规则(纯函数,主机可测):拉丁文本按空格断词、超长单词才中段断、CJK 按字断、`\n` 强制换行 |
 
@@ -374,6 +387,7 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 - 清单校验默认要求"发布形态"(`dirty=false` 且 `buildFlags` 只含语义钩子位);开发构建会被
   **默认拒绝**并在状态页显示原因。要在 M4 之前干跑,必须在详情页显式打开"允许开发清单",
   此时 UI 会标注清单来自开发文件 —— 这是有意的:发布门控不接受非发布产物。
+  这个开关**不持久化**(每次启动回到默认的"拒绝开发清单"):它是调试入口,不该跟着用户走。
 - payload 与清单同源:内嵌清单配内嵌 payload,开发清单配 SD 上的 payload 目录,不会混用。
 - `干跑模式`只做校验与统计,不写任何文件;图形界面**不提供**这个开关(用户只关心安装与卸载),
   它留在开发用的文本界面(`ui-text`,默认开启,按 `Y` 切换;那个界面里开发清单开关是 `ZL`)。
