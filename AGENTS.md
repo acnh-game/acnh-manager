@@ -30,6 +30,21 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 ⑤ 改过文案表必须跑 `python3 tools/check-i18n.py`:它校验 `StringId` 枚举与 `strings.cpp` 的表**逐条同序**
    并打印条目总数(`make -C tests` 也会调用它)。
 
+## 仓库托管(GitLab)
+
+- 本仓库托管在 **GitLab**:`https://gitlab.com/acnh-game/acnh-manager`(公开),remote 为
+  `git@gitlab.com:acnh-game/acnh-manager.git`。`packaging/listing.json` 的 `url` 必须与它一致
+  (商店条目读这里;agent 文件与清单也由本仓库的 GitLab raw 地址对外提供);仓库必须公开,
+  官方商店要求源码可查,而且 raw 端点本来就只认公开仓库。
+- 本机与 GitLab 打交道一律用 **`glab`**(1.118.x;`glab auth status` 显示 gitlab.com / leolovenet,
+  token 在系统钥匙串)。它和 `gh` 一样要联网,**沙盒里必须 escalation**:
+  - 查看:`glab repo view`、`glab release list`、`glab issue list`;
+  - 发版:`glab release create v<版本> ./acnh-manager.nro` —— tag 必须叫 `v<版本>`,NRO 要作为
+    资产链接附上(permalink 形状是商店包 update 资产的硬要求,见 `docs/store-listing.md` 上架清单);
+  - 推送与打 tag 用 git 本身:`git push origin main`、`git push origin v<版本>`。
+- 工作区里别的项目仍在 GitHub(上游 libnx 的 issue、根 `AGENTS.md` 里 `gh` 那条规矩),两者不要混用:
+  本仓库的一切远端操作都走 GitLab。
+
 ## 纪律
 
 - 只读参考 `src/libnx`、`src/Atmosphere-src`、`src/acnh-agent`;不要在本仓库复制它们的源码。
@@ -108,6 +123,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 
 - `source/`:应用本体。M0 的探针(`main.cpp`/`probe.*`)不是一次性代码——`probe.*` 在 M1 演进为
   环境检查模块,`main.cpp` 的控制台壳将来换成界面壳。
+- `source/version.hpp`:运行中的版本号,由 Makefile 的 `APP_VERSION` 经 `-DACNH_APP_VERSION`
+  注入(和构建戳同一条路);清单门控的 `app.minVersion` 校验、日志与文本界面都用它。
+  **不要在别处再写死版本字符串** —— 漏改一处就会用错版本去校验清单。
 - `source/manifest/`:清单解析与校验(纯逻辑,可主机测试);`source/install/`:门控判定、安装决策与
   `state.json`(同上);`source/payload/`:内嵌发布通道(读 `data/` 里 bin2s 生成的符号);
   `source/ui/`:界面层;`source/net/`:联网检查。
@@ -117,7 +135,8 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   改规则时先改头文件与 `tests/host_tests.cpp`。
 - `data/`:内嵌发布清单与 payload 的 bin2s 构建输入(由导入工具生成,入库)。
 - `packaging/agent/<版本>/`:发布记录(subsdk9 / main.npdm / acnh-agent.version / manifest.json),
-  与 `data/` 同源,也是指南站要托管的那四个文件;`packaging/agent-lock.json` 是发布锁。
+  与 `data/` 同源,也是对外托管的四个文件(玩家侧靠 GitLab raw 直取;仓库根目录还有一份
+  `agent-manifest.json` 是它的副本,给 App 的更新检查读);`packaging/agent-lock.json` 是发布锁。
 - `tools/`:开发与真机迭代工具(见 `docs/tools-guide.md`)。
 - `tests/`:主机侧单元测试(`make -C tests`);`packaging/`:M4 放商店打包与 `pkgbuild.json`;
   `docs/device-acceptance.md`:M5 写真机验收记录。
@@ -129,7 +148,7 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 | `README.md` | 项目概览与当前支持范围 |
 | `docs/architecture.md` | 架构、版本识别与门控、SD 布局、环境检查(改行为前必读) |
 | `docs/tools-guide.md` | 本仓库工具的用法与登记 |
-| `docs/release-process.md` | 发布流程:导入门控、商店打包、上架与指南站同步(发布前必读) |
+| `docs/release-process.md` | 发布流程:导入门控、商店打包、上架与 GitLab 托管地址(发布前必读) |
 | `docs/store-listing.md` | 商店条目元数据与素材要求(改对外文案前) |
 | `docs/device-acceptance.md` | 真机验收矩阵与基线环境(每次真机验收后更新) |
 | `../../docs/acnh_manager_plan.md` | 产品定稿方案(跨仓库决策) |

@@ -11,6 +11,7 @@
 #include "ui/app.hpp"
 #include "ui/text_ui.hpp"
 #include "util/fs_path.hpp"
+#include "version.hpp"
 
 #ifndef ACNH_BUILD_STAMP
 #define ACNH_BUILD_STAMP "unknown"
@@ -46,8 +47,6 @@ constexpr const char *kFsProbeFlagPath = "/switch/ACNH-Manager/dev-fsprobe";
 constexpr const char *kTouchProbeFlagPath = "/switch/ACNH-Manager/dev-touchprobe";
 constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
 constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
-/* Kept in sync with APP_VERSION in the Makefile. */
-constexpr const char *kAppVersion = "0.1.0";
 
 const char *AppletTypeName(int type) {
     switch (type) {
@@ -106,7 +105,7 @@ void PrepareEnvironment(acnh_manager::Log *log) {
 void ReportEnvironment(acnh_manager::Log &log,
                        const acnh_manager::env::EnvironmentReport &report) {
     using acnh_manager::install::Evaluate;
-    log.Line("== ACNH-Manager %s ==", kAppVersion);
+    log.Line("== ACNH-Manager %s ==", acnh_manager::kAppVersion);
     log.Line("HOS %s, applet=%s", report.hos_version.c_str(), AppletTypeName(report.applet_type));
     log.Line("game running=%d, patch storage=%u", report.application_running ? 1 : 0,
              report.patch_found ? report.patch_storage : 0xFF);
@@ -163,7 +162,7 @@ int main(int argc, char **argv) {
     }
 
     if (R_SUCCEEDED(rc_log)) {
-        log.Line("build: %s (ACNH-Manager %s)", kBuildStamp, kAppVersion);
+        log.Line("build: %s (ACNH-Manager %s)", kBuildStamp, acnh_manager::kAppVersion);
         log.Line("start: fsInitialize rc=0x%08X openSdmc rc=0x%08X mkdir rc=0x%08X", rc_fs, rc_sd,
                  rc_dir);
         const auto report = acnh_manager::env::Collect(sd);

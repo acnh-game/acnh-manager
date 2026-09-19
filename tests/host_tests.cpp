@@ -70,7 +70,7 @@ std::string SampleManifest() {
   "generated": "2026-09-17T00:00:00Z",
   "app": { "minVersion": "0.1.0" },
   "agent": { "version": "0.11.0", "commit": "4ac89fd403b7", "dirty": false, "buildFlags": 2 },
-  "baseUrl": "https://lextuo.com/acnh-chat-code/guide/agent/0.11.0/",
+  "baseUrl": "https://gitlab.com/acnh-game/acnh-manager/-/raw/main/packaging/agent/0.11.0/",
   "changelog": "test fixture",
   "games": [
     {

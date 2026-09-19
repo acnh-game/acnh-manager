@@ -8,9 +8,17 @@
    Principles:
    - check only: a failure never changes an install decision -- we fall back to the embedded
      or local manifest and record why;
-   - certificate verification is mandatory: a CA bundle has to be provided (default
-     `/switch/ACNH-Manager/ca.pem`, or embedded); without one we skip and say so -- there is
-     no "disable verification" fallback;
+   - **TLS certificate verification is off**, deliberately, and for the same reason the other
+     homebrew on this console does it (Sphaira sets VERIFYPEER/VERIFYHOST to 0 as well): the
+     console hands libcurl + mbedTLS no trust store at all.  mbedTLS ships no roots by design,
+     libcurl's Switch port cannot reach the console's own CA list (the one behind Atmosphere's
+     `ssl` service), and libcurl 7.69 predates `CURLOPT_CAINFO_BLOB`, so a bundle could only be
+     supplied as a file we would have to ship and keep current ourselves.  With verification
+     impossible to do properly, the check is a **hint about versions, not a channel**: it never
+     installs anything, and a spoofed answer can only make the home screen claim a version that
+     does not exist.  If this path ever starts downloading or installing content, this decision
+     has to be revisited (TLS verification, or a manifest signature we can verify offline) --
+     see docs/architecture.md section 9;
    - short timeouts (connect 5s, total 8s) and silent failure. */
 
 namespace acnh_manager::net {
@@ -24,12 +32,12 @@ struct UpdateCheckResult {
     std::string manifest_text; /* manifest body on success */
 };
 
-UpdateCheckResult CheckForUpdate(const std::string &url, const std::string &ca_path,
-                                 long timeout_seconds = 8);
+UpdateCheckResult CheckForUpdate(const std::string &url, long timeout_seconds = 8);
 
-/* Default manifest URL (hosted by the guide site, the same file the store package uses). */
+/* Default manifest URL: the release manifest committed to this repository's `main`
+   (`agent-manifest.json` at the repo root), served by GitLab's raw endpoint.  Same file the
+   release record carries, so the update check can never disagree with what an install uses. */
 inline constexpr const char *kDefaultManifestUrl =
-    "https://lextuo.com/acnh-chat-code/guide/agent-manifest.json";
-inline constexpr const char *kDefaultCaPath = "/switch/ACNH-Manager/ca.pem";
+    "https://gitlab.com/acnh-game/acnh-manager/-/raw/main/agent-manifest.json";
 
 }  // namespace acnh_manager::net

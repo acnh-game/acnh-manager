@@ -22,7 +22,7 @@ DATA		:=	data
 INCLUDES	:=	source
 
 APP_TITLE	:=	ACNH-Manager
-APP_AUTHOR	:=	leolovenet
+APP_AUTHOR	:=	acnh-game
 APP_VERSION	:=	0.1.0
 
 # The build stamp comes from tools/build.sh (UTC time + commit); a manual make gets a stub.
@@ -43,6 +43,9 @@ CFLAGS	+=	-Wno-missing-field-initializers
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 CFLAGS	+=	-DACNH_BUILD_STAMP="\"$(BUILD_STAMP)\""
+# The app version reaches the code the same way the build stamp does, so a version bump is a
+# one-line change in this file (the manifest gate validates app.minVersion against it).
+CFLAGS	+=	-DACNH_APP_VERSION="\"$(APP_VERSION)\""
 # FreeType's headers live under portlibs/freetype2 (must be added before CXXFLAGS).
 CFLAGS	+=	-I$(PORTLIBS)/include/freetype2
 

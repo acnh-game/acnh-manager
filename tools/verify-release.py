@@ -141,6 +141,11 @@ def main(argv: list[str] | None = None) -> int:
     report.check((args.data / "manifest.bin").read_bytes() ==
                  (record_dir / "manifest.json").read_bytes(),
                  "manifest.bin equals the record's manifest.json")
+    # The update check fetches the repo root copy over GitLab's raw endpoint, so a stale copy
+    # there would quietly tell every player about the wrong release.
+    latest = REPO_ROOT / "agent-manifest.json"
+    report.check(latest.is_file() and latest.read_bytes() == (record_dir / "manifest.json").read_bytes(),
+                 "agent-manifest.json (read by the in-app update check) equals the record")
     for name, data_name in PAYLOAD_MAP.items():
         path = args.data / data_name
         if not report.check(path.is_file(), f"{data_name} exists"):

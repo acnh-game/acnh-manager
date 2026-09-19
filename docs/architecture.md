@@ -397,14 +397,23 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 
 | 模块 | 职责 |
 |---|---|
-| `source/net/update.*` | 用 libcurl + mbedTLS 拉取发布清单;强制证书校验(`CURLOPT_CAINFO` 指向 CA bundle),连接 5s / 总 8s 超时,响应上限 512 KiB |
+| `source/net/update.*` | 用 libcurl + mbedTLS 拉取发布清单;连接 5s / 总 8s 超时,响应上限 512 KiB;**不做 TLS 证书校验**(原因见下) |
 
 行为约定:
 
 - **只检查,不决策**:拿不到清单时静默保留内置/本地清单,并记录原因;失败绝不影响安装门控;
-- **不做"关闭证书校验"的降级**:没有 CA 文件就直接跳过并说明(`跳过: 缺少 CA 文件`);
-- 目标是 `https://lextuo.com/acnh-chat-code/guide/agent-manifest.json`(与指南站、商店包同一份);
-- CA 来源:内嵌进 NRO(与 payload 同一条 bin2s 通道,不引入 romfs)或读 `/switch/ACNH-Manager/ca.pem`;
+- **TLS 证书校验关闭(2026-09-18 的决定)**:与这台机器上的其它自制软件一致(Sphaira 的下载代码同样是
+  `CURLOPT_SSL_VERIFYPEER 0` + `VERIFYHOST 0`)。原因是**这条技术栈根本没有信任锚**:mbedTLS 设计上
+  不带任何根证书,libcurl 的 Switch 版够不到系统自己的证书库(在 Atmosphere 的 `ssl` 服务后面,
+  libnx 的 `ssl.h` 里能看到 DigiCert / ISRG / GlobalSign 等一长串),而镜像里的 libcurl 是 7.69.1,
+  早于 `CURLOPT_CAINFO_BLOB`(7.71),内嵌 bundle 只能落成 SD 上的文件、还得我们自己负责更新。
+  因此这个检查的定位是**版本提示,不是分发通道**:
+  - 它从不安装任何东西(装的文件来自 NRO 内置 payload);
+  - 所以被中间人换掉的答案,最多让首页显示一个并不存在的"新版本",改不了写进游戏目录的内容;
+  - **边界条件**:一旦这条路径开始下载/安装内容(TLS 校验、或清单签名 + 内嵌公钥验签)必须重新
+    讨论并实现——见 `../../docs/acnh_manager_plan.md` 里"更新语义"那条;
+- 目标是 `https://gitlab.com/acnh-game/acnh-manager/-/raw/main/agent-manifest.json` —— 仓库根目录
+  那份清单,由导入工具随发布记录一起刷新(与商店包、安装用的是同一份数据);
 - 触发方式:目前是首页按 `X` 手动触发(阻塞式,数秒)。**启动时静默检查需要工作线程**,
   留到 M5 与界面一起收尾。
 

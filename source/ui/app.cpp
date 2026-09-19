@@ -6,6 +6,7 @@
 
 #include "manifest/manifest.hpp"
 #include "log.hpp"
+#include "version.hpp"
 #include "probe.hpp"
 #include "util/fs_path.hpp"
 
@@ -292,7 +293,7 @@ void App::Collect() {
     m_manifest_error.clear();
     /* Official channel: the release manifest embedded in the NRO (works offline). */
     if (payload::EmbeddedAvailable()) {
-        const auto parsed = manifest::Parse(payload::EmbeddedManifestJson(), "0.1.0");
+        const auto parsed = manifest::Parse(payload::EmbeddedManifestJson(), kAppVersion);
         if (parsed.ok) {
             m_manifest = parsed.manifest;
             m_have_manifest = true;
@@ -307,7 +308,7 @@ void App::Collect() {
     if (!m_have_manifest) {
         bool found = false;
         std::string dev_error;
-        if (!install::ReadManifestFile(*m_sd, m_dev_manifest_path, "0.1.0", !m_allow_dev_manifest,
+        if (!install::ReadManifestFile(*m_sd, m_dev_manifest_path, kAppVersion, !m_allow_dev_manifest,
                                        &m_manifest, &found, &dev_error)) {
             dev_error = i18n::Format(i18n::StringId::ManifestInvalid, dev_error.c_str());
         }
@@ -492,10 +493,10 @@ void App::ToggleLanguage() {
 /* Update check: triggered on demand (a silent check at startup needs a worker thread, which
    is a later step).  A newer agent version switches the home screen to "update available". */
 void App::RunUpdateCheck() {
-    const auto check = net::CheckForUpdate(net::kDefaultManifestUrl, net::kDefaultCaPath);
+    const auto check = net::CheckForUpdate(net::kDefaultManifestUrl);
     char buf[256];
     if (check.ok) {
-        const auto parsed = manifest::Parse(check.manifest_text, "0.1.0");
+        const auto parsed = manifest::Parse(check.manifest_text, kAppVersion);
         if (parsed.ok) {
             const std::string &found = parsed.manifest.agent.version;
             const std::string &have = m_have_manifest ? m_manifest.agent.version : found;

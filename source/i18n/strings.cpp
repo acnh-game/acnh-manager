@@ -60,9 +60,6 @@ constexpr Entry kStrings[] = {
     {"写入 state.json 失败: %s", "writing state.json failed: %s"},  /* InstallErrStateWrite */
     {"state.json 解析失败: %s", "state.json parse failed: %s"},  /* InstallErrStateParse */
     {"没有安装记录，无需卸载", "nothing to uninstall (no install record)"},  /* UninstallNoRecord */
-    {"无法挂载 SD 卡", "cannot mount the SD card"},  /* UpdateErrMountSd */
-    {"缺少 CA 文件: %s", "missing CA file: %s"},  /* UpdateErrNoCaFile */
-    {"未配置 CA bundle", "no CA bundle configured"},  /* UpdateErrNoCa */
     {"只接受 https 地址", "only https URLs are accepted"},  /* UpdateErrHttpsOnly */
     {"curl_easy_init 失败", "curl_easy_init failed"},  /* UpdateErrCurlInit */
     {"socket 服务不可用(rc=0x%08X)", "socket service unavailable (rc=0x%08X)"},  /* UpdateErrSocket */

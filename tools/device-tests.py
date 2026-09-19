@@ -262,7 +262,10 @@ def to_home(card, tag):
         if page == "home":
             return None
         if page == "details":
-            key("DL", pause=2.0)      # L = status page
+            # The shoulder button, not the d-pad: sys-agent's "DL" is D-pad LEFT, and pressing
+            # that on the details page does nothing (the page has no focusable controls), so the
+            # walk back to the status page never happened.
+            key("L", pause=2.0)
         elif page == "action":
             key("B", pause=2.0)       # B = back on those pages
         else:

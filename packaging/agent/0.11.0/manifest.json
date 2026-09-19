@@ -11,7 +11,7 @@
     "dirty": false,
     "buildFlags": 2
   },
-  "baseUrl": "https://lextuo.com/acnh-chat-code/guide/agent/0.11.0/",
+  "baseUrl": "https://gitlab.com/acnh-game/acnh-manager/-/raw/main/packaging/agent/0.11.0/",
   "changelog": "",
   "games": [
     {

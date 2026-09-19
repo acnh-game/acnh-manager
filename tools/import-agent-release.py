@@ -8,13 +8,16 @@ Gate (everything must pass before anything is written; failures say why):
   4. the derived main.npdm passes acnh-agent's make-minimal-npdm.py --verify;
   5. the profile's (titleId, buildId) matches --content-id/--build-id.
 
-On success it writes three things, all of them assets of this repo, and never touches
+On success it writes five things, all of them assets of this repo, and never touches
 acnh-agent's dist/:
   packaging/agent-lock.json              release lock (version/commit/knobs/hashes/profile)
   packaging/agent/<agentVersion>/        release record, original file names kept:
                                            subsdk9 / main.npdm / acnh-agent.version / manifest.json
   data/manifest.bin                      embedded release manifest (json text)
   data/<name>.bin                        embedded payload files (renamed build inputs)
+  agent-manifest.json                    the record's manifest again, at the repo root: this is
+                                         what the in-app update check fetches (GitLab raw), so a
+                                         new import is what makes the app see a newer agent
 `data/` is devkitPro's DATA directory: the build turns each file into a symbol of the same
 name (`subsdk9.bin` -> `subsdk9_bin` / `subsdk9_bin_size`) and links it into the NRO's
 .rodata.  That is why the official channel needs neither romfs nor devoptab nor any service,
@@ -214,7 +217,11 @@ def main(argv: list[str] | None = None) -> int:
             "dirty": version.get("dirty"),
             "buildFlags": version.get("buildFlags"),
         },
-        "baseUrl": f"https://lextuo.com/acnh-chat-code/guide/agent/{agent_version}/",
+        # Where the files of this release are published: the record below, served by GitLab's
+        # raw endpoint from `main`.  The project is hosted on GitLab (no separate file server),
+        # and `files[].source` is relative to this prefix.
+        "baseUrl": (f"https://gitlab.com/acnh-game/acnh-manager/-/raw/main/"
+                    f"packaging/agent/{agent_version}/"),
         "changelog": "",
         "games": [
             {
@@ -258,6 +265,10 @@ def main(argv: list[str] | None = None) -> int:
     (record_dir / "manifest.json").write_text(manifest_text)
     manifest_path = data_dir / "manifest.bin"
     manifest_path.write_text(manifest_text)
+    # "Which release is current": the update check fetches this copy from `main`, so a new
+    # import is what makes the app notice a newer agent.
+    latest_path = REPO_ROOT / "agent-manifest.json"
+    latest_path.write_text(manifest_text)
 
     print(f"imported agent {agent_version} (commit {version.get('commit')}, "
           f"buildFlags {version.get('buildFlags')})")
@@ -269,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
               f"{path.stat().st_size} B)")
     print(f"  manifest: {manifest_path.relative_to(REPO_ROOT)} "
           f"({manifest_path.stat().st_size} B)")
+    print(f"  latest:   {latest_path.relative_to(REPO_ROOT)} (fetched by the in-app update check)")
     print(f"  nso sha256={nso_sha[:16]}…  npdm sha256={npdm_sha[:16]}…")
     return 0
 

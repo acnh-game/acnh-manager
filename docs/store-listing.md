@@ -7,10 +7,10 @@
 |---|---|---|
 | package / 目录名 | `acnh-manager` | 也决定图标 URL `packages/acnh-manager/icon.png` |
 | title | `ACNH-Manager` | 商店搜索按 title/author/description 子串匹配,玩家搜 `ACNH` 或 `manager` 都能命中 |
-| author | `leolovenet` | |
+| author | `acnh-game` | 与 GitLab 命名空间、NRO 内嵌作者(`Makefile` 的 `APP_AUTHOR`)保持一致 |
 | category | `tool` | 商店过滤器里的 Tools |
 | license | GPLv3 | 官方要求源码公开 |
-| url | `https://github.com/leolovenet/acnh-manager` | |
+| url | `https://gitlab.com/acnh-game/acnh-manager` | 源码与发布页(GitLab;官方只要求公开可访问) |
 | 安装路径 | `switch/ACNH-Manager/acnh-manager.nro` | 与 App 数据目录同名 |
 
 ## 素材
@@ -32,6 +32,11 @@
 
 - [ ] `packaging/listing.json` 的中英文案与当前功能一致(尤其"当前支持范围");
 - [ ] `assets/icon.png` 是最新设计稿;
-- [ ] GitHub Release 上的 `acnh-manager.nro` 与仓库里构建的产物哈希一致;
+- [ ] 发布页上的 `acnh-manager.nro` 与仓库里构建的产物哈希一致,且位在
+      `https://gitlab.com/acnh-game/acnh-manager/-/releases/v<版本>/downloads/acnh-manager.nro`
+      —— `pkgbuild.json` 的 update 资产就指向这个 permalink(见 `tools/make-store-package.py`)。
+      形状已核对(2026-09-19,参照 GitLab 上 `gitlab-org/cli` 等项目的 Release 资产):
+      tag 必须叫 `v<版本>`,NRO 要以**资产链接**附在该 Release 上、filepath 为 `acnh-manager.nro`
+      (网页端"Release assets"上传或 `glab release create --assets-links` 都行);
 - [ ] 本地测试仓库(`repo.json` + Sphaira 自定义商店源)能完成搜索→安装→更新→卸载;
 - [ ] PR 里带上 `icon.png`(必需)与 `screen.png`/截图(推荐)。

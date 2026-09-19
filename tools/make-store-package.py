@@ -105,9 +105,10 @@ def main(argv: list[str] | None = None) -> int:
     if banner.is_file():
         (package_dir / "screen.png").write_bytes(banner.read_bytes())
 
-    # pkgbuild.json for the official data repo: assets point straight at a GitHub release (tag first).
-    release_url = (f"https://github.com/leolovenet/acnh-manager/releases/download/"
-                   f"v{version}/{args.nro.name}")
+    # pkgbuild.json for the official data repo: the update asset points at our release download
+    # (the project is hosted on GitLab, tag first; the permalink is the release's asset link).
+    release_url = (f"https://gitlab.com/acnh-game/acnh-manager/-/releases/"
+                   f"v{version}/downloads/{args.nro.name}")
     pkgbuild = {
         "package": name,
         "info": {

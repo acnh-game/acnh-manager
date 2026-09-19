@@ -47,12 +47,14 @@ python3 tools/import-agent-release.py --dry-run \
 
 ```
 packaging/agent-lock.json          发布锁(版本/commit/开关/文件哈希/构建指纹)
-packaging/agent/<agentVersion>/    发布记录,保留原始文件名(指南站托管的就是这四个):
+packaging/agent/<agentVersion>/    发布记录,保留原始文件名(对外托管的就是这四个):
                                      subsdk9 / main.npdm / acnh-agent.version / manifest.json
 data/manifest.bin                  内嵌发布清单(json 文本)
 data/subsdk9.bin                   内嵌 payload 文件(清单里 source=subsdk9)
 data/main_npdm.bin                 内嵌 payload 文件(source=main.npdm)
 data/acnh_agent_version.bin        内嵌 payload 文件(source=acnh-agent.version)
+agent-manifest.json                仓库根目录的"当前版本"清单(发布记录的副本;
+                                   App 的更新检查按 raw 地址读它)
 ```
 
 发布记录与 `data/` 由同一次导入写出,内容逐字节对应;`data/` 只是改名后的构建输入。
@@ -108,35 +110,48 @@ python3 tools/make-store-package.py       # 产出 build/scratch/store/
 
 | 路径 | 用途 |
 |---|---|
-| `packages/acnh-manager/pkgbuild.json` | 提交给官方数据仓库 `forusers/switch-hbas-repo` 的元数据(资产指向 GitHub Release) |
+| `packages/acnh-manager/pkgbuild.json` | 提交给官方数据仓库 `forusers/switch-hbas-repo` 的元数据(update 资产指向本项目的 GitLab Release) |
 | `packages/acnh-manager/icon.png`、`screen.png` | 商店图标与横幅 |
 | `zips/acnh-manager.zip` | 包内容(`switch/ACNH-Manager/acnh-manager.nro` + `manifest.install` + `info.json`) |
 | `repo.json` | **本地测试仓库**:与官方 CDN 同布局,可作为 Sphaira 自定义商店源验证"搜索→安装→更新→卸载" |
 
 ## 4. 上架官方商店
 
-1. 在 GitHub 建公开仓库 `leolovenet/acnh-manager` 并推送;打 tag 并上传 Release 资产
-   `acnh-manager.nro`(`pkgbuild.json` 里的 `url` 指向它);
+1. 项目托管在 GitLab `acnh-game/acnh-manager`(公开):打 tag `v<版本>`,把 `acnh-manager.nro`
+   作为**资产链接**附到该 Release(网页端 "Release assets" 上传,或
+   `glab release create v<版本> ./acnh-manager.nro`),permalink 就是
+   `https://gitlab.com/acnh-game/acnh-manager/-/releases/v<版本>/downloads/acnh-manager.nro`;
+   `pkgbuild.json` 的 update 资产指向它(形状 2026-09-19 核对过,见 `docs/store-listing.md`);
 2. 向 `forusers/switch-hbas-repo` 提 PR:新增 `packages/acnh-manager/{pkgbuild.json,icon.png,screen.png}`;
 3. PR 阶段 CI 会构建出一个预览仓库并评论在 PR 里,先按评论自查;
 4. 合并到 main 后 CI(spinarak)重建并部署到 `switch.cdn.fortheusers.org`,当天生效;
    客户端受 repo.json 缓存影响,可能需要等一会儿或重新打开商店。
 
 官方商店对"写入 `/atmosphere/contents/<tid>/` 的包"已有先例(`UltimateTrainingModpack`、`SwitchCast`),
-但审核有裁量权;被拒或排队期间,**指南站直链兜底**必须可用。
+但审核有裁量权;被拒或排队期间,**GitLab Release 的直链兜底**必须可用(见第 5 节)。
 
-## 5. 指南站同步(另一任务)
+## 5. 托管与直链(GitLab)
 
-指南站按 SD 卡目录结构托管 agent 文件与同一份清单:
+项目全部托管在 GitLab,不再依赖自建服务器;三个对外地址都是 GitLab 自己的地址:
 
 ```
-https://lextuo.com/acnh-chat-code/guide/agent/<agentVersion>/{subsdk9,main.npdm,acnh-agent.version}
-https://lextuo.com/acnh-chat-code/guide/agent-manifest.json
-https://lextuo.com/acnh-chat-code/guide/acnh-manager/<appVersion>/acnh-manager.nro
+# agent 文件与清单:发布记录就提交在仓库里,用 raw 端点直接给出
+https://gitlab.com/acnh-game/acnh-manager/-/raw/main/packaging/agent/<agentVersion>/{subsdk9,main.npdm,acnh-agent.version}
+# 更新检查读的"当前版本"清单:导入工具每次都会刷新仓库根目录这份
+https://gitlab.com/acnh-game/acnh-manager/-/raw/main/agent-manifest.json
+# App 自身的下载(商店 update 资产与兜底直链):GitLab Release 资产
+https://gitlab.com/acnh-game/acnh-manager/-/releases/v<appVersion>/downloads/acnh-manager.nro
 ```
 
-App 的联网检查默认读 `agent-manifest.json`(见 `docs/architecture.md` 第 9 节);两处版本必须一致,
-由 `packaging/agent-lock.json` 与清单内容比对确认。
+要点:
+
+- `packaging/agent/<agentVersion>/manifest.json` 是发布记录,**仓库根目录的 `agent-manifest.json`
+  是它的副本**,由 `tools/import-agent-release.py` 在导入时一起写 —— App 的联网检查读后者的
+  raw URL(见 `docs/architecture.md` 第 9 节),所以"最新版本"和"发布记录"永远同源;
+- 清单里的 `baseUrl` 指向 `packaging/agent/<agentVersion>/` 的 raw 前缀,`files[].source` 相对它解析;
+- raw 端点只认**公开仓库 + 已推送的提交**:改完这两个文件必须提交并 push,线上地址才会更新
+  (这是"忘了推"最常见的坑,验收时先核对 raw 地址能取到东西);
+- 发布记录与指南页兜底都给同一个 NRO:GitLab Release 资产(`docs/store-listing.md` 上架清单有步骤)。
 
 ## 6. 版本与记录
 
@@ -147,6 +162,8 @@ App 的联网检查默认读 `agent-manifest.json`(见 `docs/architecture.md` �
 
 ## 7. 尚未完成的部分(明确记录)
 
-- **CA bundle**:联网检查需要 `/switch/ACNH-Manager/ca.pem` 或把 CA 内嵌进 NRO(bin2s 通道);
+- **联网检查的定位**:TLS 证书校验按 2026-09-18 的决定关闭(没有信任锚可用,与 Sphaira 一致),
+  所以这个检查只报版本、不下载内容。**如果以后要让它在 App 内在线升级 agent**,必须先补上
+  TLS 校验或"清单签名 + 内嵌公钥验签"(见 `docs/architecture.md` §9);
 - **启动即静默检查**:目前是首页按 `X` 手动触发,改成启动时后台线程(M5);
 - **商店收录**:官方 Homebrew App Store 的收录步骤与元数据(见第 3 节)尚未实际提交过一次。

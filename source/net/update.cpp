@@ -36,47 +36,15 @@ std::size_t WriteCallback(char *ptr, std::size_t size, std::size_t nmemb, void *
     return bytes;
 }
 
-bool FileReadable(const std::string &path, std::string *error) {
-    FsFileSystem sd{};
-    if (R_FAILED(fsOpenSdCardFileSystem(&sd))) {
-        if (error != nullptr) {
-            *error = i18n::Text(i18n::StringId::UpdateErrMountSd, i18n::Current());
-        }
-        return false;
-    }
-    FsFile file{};
-    const Result rc = fsFsOpenFile(&sd, path.c_str(), FsOpenMode_Read, &file);
-    if (R_SUCCEEDED(rc)) {
-        fsFileClose(&file);
-    }
-    fsFsClose(&sd);
-    if (R_FAILED(rc)) {
-        if (error != nullptr) {
-            *error = i18n::Format(i18n::StringId::UpdateErrNoCaFile, path.c_str());
-        }
-        return false;
-    }
-    return true;
-}
-
 }  // namespace
 
-UpdateCheckResult CheckForUpdate(const std::string &url, const std::string &ca_path,
-                                 long timeout_seconds) {
+UpdateCheckResult CheckForUpdate(const std::string &url, long timeout_seconds) {
     UpdateCheckResult result;
     result.attempted = true;
 
     if (url.rfind("https://", 0) != 0) {
         result.skipped = true;
         result.reason = i18n::Text(i18n::StringId::UpdateErrHttpsOnly, i18n::Current());
-        return result;
-    }
-    std::string ca_error;
-    if (ca_path.empty() || !FileReadable(ca_path, &ca_error)) {
-        result.skipped = true;
-        result.reason = ca_path.empty()
-                            ? i18n::Text(i18n::StringId::UpdateErrNoCa, i18n::Current())
-                            : ca_error;
         return result;
     }
 
@@ -98,9 +66,12 @@ UpdateCheckResult CheckForUpdate(const std::string &url, const std::string &ca_p
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.manifest_text);
-    curl_easy_setopt(curl, CURLOPT_CAINFO, ca_path.c_str());
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    /* No trust store is available to this stack (see the header): verification is off, the same
+       way Sphaira and most homebrew do it.  The check only ever reports a version, so a
+       spoofed answer cannot change what gets installed -- revisit this the day the network
+       path starts delivering files. */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_seconds);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);

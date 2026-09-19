@@ -7,11 +7,11 @@
 #include "install/engine.hpp"
 #include "install/gate.hpp"
 #include "log.hpp"
+#include "version.hpp"
 
 namespace acnh_manager::ui {
 namespace {
 
-constexpr const char *kAppVersion = "0.1.0";
 #ifndef ACNH_BUILD_STAMP
 #define ACNH_BUILD_STAMP "unknown"
 #endif
@@ -46,7 +46,7 @@ const char *GateName(install::GateStatus status) {
 
 bool TextUi::Init() {
     consoleInit(nullptr);
-    std::printf("ACNH-Manager %s (text UI)\n", kAppVersion);
+    std::printf("ACNH-Manager %s (text UI)\n", acnh_manager::kAppVersion);
     consoleUpdate(nullptr);
     return true;
 }
@@ -68,7 +68,7 @@ void TextUi::Run(acnh_manager::Log *log, FsFileSystem &sd) {
         bool has_manifest = false;
         std::string manifest_error;
         bool found = false;
-        if (!install::ReadManifestFile(sd, kDevManifestPath, kAppVersion, !allow_dev_manifest,
+        if (!install::ReadManifestFile(sd, kDevManifestPath, acnh_manager::kAppVersion, !allow_dev_manifest,
                                        &manifest, &found, &manifest_error)) {
             manifest_error = "manifest invalid: " + manifest_error;
         } else {
@@ -78,7 +78,8 @@ void TextUi::Run(acnh_manager::Log *log, FsFileSystem &sd) {
         const auto plan = install::Plan(gate, has_state ? &state : nullptr, manifest.agent);
 
         consoleClear();
-        std::printf("ACNH-Manager %s (text UI)  build %s\n\n", kAppVersion, kBuildStamp);
+        std::printf("ACNH-Manager %s (text UI)  build %s\n\n", acnh_manager::kAppVersion,
+                    kBuildStamp);
         std::printf("system : HOS %s, applet=%d\n", report.hos_version.c_str(),
                     report.applet_type);
         std::printf("game   : running=%s  version=%u  contentId=%s\n",
@@ -161,7 +162,7 @@ void TextUi::Run(acnh_manager::Log *log, FsFileSystem &sd) {
             bool has_manifest = false;
             std::string manifest_error;
             bool found = false;
-            if (!install::ReadManifestFile(sd, kDevManifestPath, kAppVersion, !allow_dev_manifest,
+            if (!install::ReadManifestFile(sd, kDevManifestPath, acnh_manager::kAppVersion, !allow_dev_manifest,
                                            &manifest, &found, &manifest_error)) {
                 status = "install refused: " + manifest_error;
                 refresh(nullptr);
