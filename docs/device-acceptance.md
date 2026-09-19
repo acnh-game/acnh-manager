@@ -41,7 +41,7 @@ agent 版本、观察到什么、失败用例的原始现象。
 | 非发布清单 | 保留开发构建的清单(默认不允许开发清单) | 拒绝并提示 buildFlags 不是发布形态 | 已验(2026-09-17,CLI 与 App 设置页) |
 | 旧金手指共存 | 保留 `cheats/<build id>.txt` | 状态页给出冲突警告 | 待执行 |
 | 联网检查(传输层) | 首页按 `X` | 有网络时真的能连上托管端(现在是 GitLab raw);**不再需要 CA 文件**(TLS 校验按 2026-09-18 的决定关闭,见 `docs/architecture.md` §9) | 已验(2026-09-18:日志 `update check: 失败: HTTP 404` —— 服务器**有响应**就说明 DNS→TLS 握手→HTTP 请求整条链路都通了;以前永远停在"缺少 CA 文件",一次都没真正联网) |
-| 联网检查(取到清单并比较版本) | GitLab 上 `main` 有 `agent-manifest.json` 后按 `X` | 显示"清单可用, agent x.y.z",远端更高时首页出现新版提示;失败只影响提示,不影响安装 | 待执行(先提交并 push 仓库根的 `agent-manifest.json`,再按 `X` 复验) |
+| 联网检查(取到清单并比较版本) | GitLab 上 `main` 有 `agent-manifest.json` 后按 `X` | 显示"清单可用, agent x.y.z",远端更高时首页出现新版提示;失败只影响提示,不影响安装 | 已验(2026-09-19:提交并推送后按 `X` → 详情页与日志 `update check: 清单可用，agent 0.11.0`;远端与内置同版本,所以首页不提示新版。此前一直是 404 / 缺少 CA,这是第一次真正取到清单) |
 | 界面语言重启后保持 | 详情页切语言 → 退出 → 重开 | 重开后仍是所选语言 | 已验(2026-09-18:`settings.json` 落盘;重开日志 `settings: language=en`,切回中文后重开是 `language=zh-Hans`) |
 | 已装文件被外部删除 | 装完后在应用之外删掉 `exefs` → 重启 | 不再显示"已安装",而是如实报文件不完整并给重装按钮 | 已验(2026-09-18:状态行 `已安装的文件不完整`,日志 `collect: the card does not match the record: installed file … is not on the card`,`plan=repair`;按重装恢复成 `up-to-date`) |
 

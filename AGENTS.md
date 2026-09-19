@@ -41,7 +41,11 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   - 查看:`glab repo view`、`glab release list`、`glab issue list`;
   - 发版:`glab release create v<版本> ./acnh-manager.nro` —— tag 必须叫 `v<版本>`,NRO 要作为
     资产链接附上(permalink 形状是商店包 update 资产的硬要求,见 `docs/store-listing.md` 上架清单);
-  - 推送与打 tag 用 git 本身:`git push origin main`、`git push origin v<版本>`。
+  - 推送与打 tag 用 git 本身:`git push origin main`、`git push origin v<版本>`。**本机网络会挡
+    gitlab.com 的 SSH(22 与 443 都超时)**,实测可用的方式是 HTTPS + glab 的 token:
+    `git -c credential.helper= -c credential.helper='!glab auth git-credential' push https://gitlab.com/acnh-game/acnh-manager.git main`
+    (钥匙串里那条 https://gitlab.com 的旧凭据已失效,会被 `osxkeychain` 先拿去用并报
+    `HTTP Basic: Access denied`,所以要用 `-c credential.helper=` 把它清掉);
 - 工作区里别的项目仍在 GitHub(上游 libnx 的 issue、根 `AGENTS.md` 里 `gh` 那条规矩),两者不要混用:
   本仓库的一切远端操作都走 GitLab。
 
