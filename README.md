@@ -16,9 +16,10 @@
    `dmnt:cht` 读 `main` 的 ModuleId 做字节级复核。
 2. 校验并写入 `atmosphere/contents/01006F8002326000/exefs/{subsdk9, main.npdm, acnh-agent.version}`,
    记录安装状态;支持一键卸载回滚。
-3. 内嵌发布清单与 payload,离线也能安装;联网检查是**首页手动按 `X`**,而且**只比对版本、
-   不下载内容**(远端更高时首页提示"有新版本",真正的升级靠换 NRO)。启动时静默检查属于后续计划
-   (断网时静默使用内置 payload 这一点已经成立)。
+3. 内嵌发布清单与 payload,离线也能安装;联网检查**启动时静默做一次**、首页也可以按 `X` 手动做,
+   检查跑在工作线程上(界面不冻结)。远端版本更高时首页直接给出"更新到 X"——下载由清单签名的
+   公钥背书(App 内嵌公钥,ECDSA P-256),每个文件都按清单里的 size + sha256 校验后才落盘;
+   检查失败一律静默退回内置版本。
 
 判据链、实测证据与 SD 布局见 `docs/architecture.md`(改行为前必读);发布与托管地址见
 `docs/release-process.md`。
@@ -26,11 +27,11 @@
 ## 安装方式
 
 1. **官方 Homebrew App Store**(推荐):在相册里打开 Sphaira 等商店客户端,搜索 `ACNH-Manager`;
-2. **直接下载 NRO**:GitLab Release 上的 `acnh-manager.nro`
-   (`https://gitlab.com/acnh-game/acnh-manager/-/releases`),放进 `switch/ACNH-Manager/`;
-3. 指南页(`https://lextuo.com/acnh-chat-code/guide/`)只作为入口,下载同样指向上面的 GitLab 地址。
+2. **直接下载 NRO**:`https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-<版本>.nro`,
+   放进 `switch/ACNH-Manager/`;
+3. 指南页(`acnh-chat-code/guide/`)只作为入口,下载同样指向上面的 Gitee 地址。
 
-项目源码在 GitLab:`https://gitlab.com/acnh-game/acnh-manager`。
+项目源码在 Gitee:`https://gitee.com/acnh-game/acnh-manager`。
 
 ## 构建与部署
 

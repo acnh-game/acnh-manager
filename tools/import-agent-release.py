@@ -16,7 +16,7 @@ acnh-agent's dist/:
   data/manifest.bin                      embedded release manifest (json text)
   data/<name>.bin                        embedded payload files (renamed build inputs)
   agent-manifest.json                    the record's manifest again, at the repo root: this is
-                                         what the in-app update check fetches (GitLab raw), so a
+                                         what the in-app update check fetches (Gitee raw), so a
                                          new import is what makes the app see a newer agent
 `data/` is devkitPro's DATA directory: the build turns each file into a symbol of the same
 name (`subsdk9.bin` -> `subsdk9_bin` / `subsdk9_bin_size`) and links it into the NRO's
@@ -155,6 +155,13 @@ def main(argv: list[str] | None = None) -> int:
         profile_note = entry.get("id", "")
 
     agent_version = version.get("agentVersion", "unknown")
+    # The public key whose signature the in-app update check will verify, recorded here so that
+    # *changing* it is an explicit, reviewable line in the release diff instead of a silent
+    # identity swap (already-shipped apps only trust the key they were built with).
+    pubkey = REPO_ROOT / "data" / "agent_pubkey.bin"
+    if not pubkey.is_file():
+        return fail(f"missing {pubkey.relative_to(REPO_ROOT)} (generate it with "
+                    "tools/make-signing-key.py before importing a release)")
     lock = {
         "agentVersion": agent_version,
         "commit": version.get("commit"),
@@ -162,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         "buildFlags": version.get("buildFlags"),
         "nsoSha256": nso_sha,
         "npdmSha256": npdm_sha,
+        "signingPublicKeySha256": hashlib.sha256(pubkey.read_bytes()).hexdigest(),
         "game": {
             "profile": profile_note,
             "titleId": TITLE_ID,
@@ -217,10 +225,10 @@ def main(argv: list[str] | None = None) -> int:
             "dirty": version.get("dirty"),
             "buildFlags": version.get("buildFlags"),
         },
-        # Where the files of this release are published: the record below, served by GitLab's
-        # raw endpoint from `main`.  The project is hosted on GitLab (no separate file server),
+        # Where the files of this release are published: the record below, served by Gitee's
+        # raw endpoint from `main`.  The project is hosted on Gitee (no separate file server),
         # and `files[].source` is relative to this prefix.
-        "baseUrl": (f"https://gitlab.com/acnh-game/acnh-manager/-/raw/main/"
+        "baseUrl": (f"https://gitee.com/acnh-game/acnh-manager/raw/main/"
                     f"packaging/agent/{agent_version}/"),
         "changelog": "",
         "games": [

@@ -21,14 +21,29 @@
 | 2 | 用 acnh-agent 的 `make-minimal-npdm.py` 从原始 NPDM 派生 `main.npdm` | 原始 NPDM 来自 agent 的 `research/`(只读),产物写进本仓库 `build/scratch/` |
 | 3 | 发布门控 + 导入 | 见第 2 节 |
 | 4 | 构建 NRO(`data/` 经 bin2s 进 `.rodata`) | 与普通构建同一条命令 |
-| 5 | 自检 `tools/verify-release.py` | 见第 3 节 |
-| 6 | 打商店包 | `tools/make-store-package.py` |
+| 5 | 把 NRO 拷进 `packaging/nro/acnh-manager-<APP_VERSION>.nro` | 这个 raw 地址就是对外的下载直链(商店 update 资产与指南页都指它);文件名的版本号取自 Makefile 的 `APP_VERSION`,不另设一处 |
+| 6 | **给根目录的 `agent-manifest.json` 签名**(`tools/sign-manifest.py`) | 漏签 = 线上每个 App 都把清单当垃圾丢掉(见第 6 节);私钥路径用 `--key` 或 `ACNH_MANAGER_SIGNING_KEY` 指,缺了前置检查直接拒绝 |
+| 7 | 自检 `tools/verify-release.py` | 见第 3 节;自检同时验签,抓"清单改了没重签" |
+| 8 | 打商店包 | `tools/make-store-package.py` |
 
-前置:acnh-agent 工作树干净、`research/` 里有原始 `main.npdm`、docker 可用;改完代码后先跑
+前置:acnh-agent 工作树干净、`research/` 里有原始 `main.npdm`、docker 可用、**发布签名私钥在**
+(`--key` 或 `ACNH_MANAGER_SIGNING_KEY`,默认 `~/.acnh/acnh-manager-signing-key.pem`,与其它本地
+密钥一起放在 `~/.acnh/`,权限 600);改完代码后先跑
 `make -C tests`。
 
 `--allow-dirty` 是开发期开关(例如只想验证链本身能否跑通):它只把"本仓库干净"这一条降级成警告,
 打出的 NRO 构建戳会带 `-dirty` —— 看到那个标志就说明这份产物不是发布件。
+
+链条跑完还有三件**人工**动作(工具不替你推任何东西,也不会自动改远端):
+
+1. 提交这一轮的产物:内嵌清单/payload、`packaging/agent/<版本>/`、`packaging/agent-lock.json`、
+   `packaging/nro/acnh-manager-<版本>.nro`、`agent-manifest.json` 与 `agent-manifest.json.sig`;
+2. `git tag v<版本> && git push && git push origin v<版本>`;
+3. 可选:`gitee release create --tag v<版本> -n "ACNH-Manager <版本>" -b "<说明 + raw 下载地址>"`
+   建一个给人看的发行版页面。
+
+**没 push 就等于没发布**:App 读的是 Gitee raw 上已推送的内容,清单与签名留在本地时线上表现为
+"检查失败: 清单签名校验失败 / 清单不可用"。
 
 ## 2. 门控与导入(第 3 步的细节)
 
@@ -46,7 +61,8 @@ python3 tools/import-agent-release.py --dry-run \
 `(titleId, buildId)` 一致。落盘内容:
 
 ```
-packaging/agent-lock.json          发布锁(版本/commit/开关/文件哈希/构建指纹)
+packaging/agent-lock.json          发布锁(版本/commit/开关/文件哈希/构建指纹/
+                                   签名公钥指纹 signingPublicKeySha256)
 packaging/agent/<agentVersion>/    发布记录,保留原始文件名(对外托管的就是这四个):
                                      subsdk9 / main.npdm / acnh-agent.version / manifest.json
 data/manifest.bin                  内嵌发布清单(json 文本)
@@ -55,6 +71,8 @@ data/main_npdm.bin                 内嵌 payload 文件(source=main.npdm)
 data/acnh_agent_version.bin        内嵌 payload 文件(source=acnh-agent.version)
 agent-manifest.json                仓库根目录的"当前版本"清单(发布记录的副本;
                                    App 的更新检查按 raw 地址读它)
+agent-manifest.json.sig            上面那份清单的签名(第 5 步生成,两个文件一起提交;
+                                    App 先验它再决定要不要信清单的内容)
 ```
 
 发布记录与 `data/` 由同一次导入写出,内容逐字节对应;`data/` 只是改名后的构建输入。
@@ -67,7 +85,7 @@ agent-manifest.json                仓库根目录的"当前版本"清单(发布
 acnh-agent 的 `dist/` 默认是开发构建(`buildFlags=7`,带 RPC server),会被门控拒绝——这是设计如此,
 不要用手工数据绕过它;要出正式产物必须先 `make switch SEMANTIC_HOOK=1` 重新构建。
 
-## 3. 自检
+## 3. 自检(第 6 步)
 
 ```bash
 python3 tools/verify-release.py --nro acnh-manager.nro
@@ -99,7 +117,7 @@ python3 tools/verify-release.py --nro acnh-manager.nro
 因此:**发布记录里的哈希可以在任何机器上重建比对**;只是要记得,任何一次源码改动(哪怕是注释)
 都会换掉哈希,所以对账用的是"当前提交 + 发布锁",不是跨提交的绝对数值。
 
-## 3. 打包商店材料
+## 4. 打包商店材料(第 7 步)
 
 ```bash
 ./tools/build.sh                          # 产出 acnh-manager.nro
@@ -110,60 +128,85 @@ python3 tools/make-store-package.py       # 产出 build/scratch/store/
 
 | 路径 | 用途 |
 |---|---|
-| `packages/acnh-manager/pkgbuild.json` | 提交给官方数据仓库 `forusers/switch-hbas-repo` 的元数据(update 资产指向本项目的 GitLab Release) |
+| `packages/acnh-manager/pkgbuild.json` | 提交给官方数据仓库 `forusers/switch-hbas-repo` 的元数据(update 资产指向本仓库 `packaging/nro/` 里那份 NRO 的 raw 地址) |
 | `packages/acnh-manager/icon.png`、`screen.png` | 商店图标与横幅 |
 | `zips/acnh-manager.zip` | 包内容(`switch/ACNH-Manager/acnh-manager.nro` + `manifest.install` + `info.json`) |
 | `repo.json` | **本地测试仓库**:与官方 CDN 同布局,可作为 Sphaira 自定义商店源验证"搜索→安装→更新→卸载" |
 
-## 4. 上架官方商店
+## 5. 上架官方商店
 
-1. 项目托管在 GitLab `acnh-game/acnh-manager`(公开):打 tag `v<版本>`,把 `acnh-manager.nro`
-   作为**资产链接**附到该 Release(网页端 "Release assets" 上传,或
-   `glab release create v<版本> ./acnh-manager.nro`),permalink 就是
-   `https://gitlab.com/acnh-game/acnh-manager/-/releases/v<版本>/downloads/acnh-manager.nro`;
-   `pkgbuild.json` 的 update 资产指向它(形状 2026-09-19 核对过,见 `docs/store-listing.md`);
+1. 项目托管在 Gitee `acnh-game/acnh-manager`(公开):打 tag `v<版本>` 推上去
+   (`git tag v<版本> && git push origin v<版本>`),可选地用
+   `gitee release create --tag v<版本> -n "ACNH-Manager <版本>" -b "<说明>"` 建一个给人看的发行版页面;
+   **下载不走发行版资产**(Gitee CLI 传不了附件),`pkgbuild.json` 的 update 资产指向仓库里的
+   `packaging/nro/acnh-manager-<版本>.nro` 的 raw 地址(见第 6 节,地址形状 2026-09-20 核对过);
 2. 向 `forusers/switch-hbas-repo` 提 PR:新增 `packages/acnh-manager/{pkgbuild.json,icon.png,screen.png}`;
 3. PR 阶段 CI 会构建出一个预览仓库并评论在 PR 里,先按评论自查;
 4. 合并到 main 后 CI(spinarak)重建并部署到 `switch.cdn.fortheusers.org`,当天生效;
    客户端受 repo.json 缓存影响,可能需要等一会儿或重新打开商店。
 
 官方商店对"写入 `/atmosphere/contents/<tid>/` 的包"已有先例(`UltimateTrainingModpack`、`SwitchCast`),
-但审核有裁量权;被拒或排队期间,**GitLab Release 的直链兜底**必须可用(见第 5 节)。
+但审核有裁量权;被拒或排队期间,**Gitee raw 的直链兜底**必须可用(见第 6 节)。
 
-## 5. 托管与直链(GitLab)
+## 6. 托管与直链(Gitee)
 
-项目全部托管在 GitLab,不再依赖自建服务器;三个对外地址都是 GitLab 自己的地址:
+项目全部托管在 Gitee,不依赖自建服务器;**四个对外地址都是同一个 raw 前缀**:
 
 ```
-# agent 文件与清单:发布记录就提交在仓库里,用 raw 端点直接给出
-https://gitlab.com/acnh-game/acnh-manager/-/raw/main/packaging/agent/<agentVersion>/{subsdk9,main.npdm,acnh-agent.version}
+# 前缀
+https://gitee.com/acnh-game/acnh-manager/raw/main/
+
+# agent 三件套(发布记录就提交在仓库里)
+…/raw/main/packaging/agent/<agentVersion>/{subsdk9,main.npdm,acnh-agent.version}
 # 更新检查读的"当前版本"清单:导入工具每次都会刷新仓库根目录这份
-https://gitlab.com/acnh-game/acnh-manager/-/raw/main/agent-manifest.json
-# App 自身的下载(商店 update 资产与兜底直链):GitLab Release 资产
-https://gitlab.com/acnh-game/acnh-manager/-/releases/v<appVersion>/downloads/acnh-manager.nro
+…/raw/main/agent-manifest.json
+# 清单签名(与清单同址,URL 加 .sig):App 先验它,再决定要不要信清单
+…/raw/main/agent-manifest.json.sig
+# App 自身的下载(商店 update 资产与指南页入口)
+…/raw/main/packaging/nro/acnh-manager-<appVersion>.nro
 ```
+
+raw 请求会 302 到 `raw.giteeusercontent.com` 的带签名地址(2026-09-20 实测:匿名可取的完整
+跳转链,内容与仓库里逐字节一致;App 的 libcurl 开了跟随跳转,所以这一层对上层透明)。
 
 要点:
 
 - `packaging/agent/<agentVersion>/manifest.json` 是发布记录,**仓库根目录的 `agent-manifest.json`
   是它的副本**,由 `tools/import-agent-release.py` 在导入时一起写 —— App 的联网检查读后者的
   raw URL(见 `docs/architecture.md` 第 9 节),所以"最新版本"和"发布记录"永远同源;
+- **清单必须签名后再推**:`python3 tools/sign-manifest.py --key ~/.acnh/acnh-manager-signing-key.pem`,
+  然后把 `agent-manifest.json` 与 `agent-manifest.json.sig` 一起提交。签名文件的名字是
+  **清单文件名 + `.sig`**,因为 App 就是把它读清单的 URL 直接加后缀去取的;名字对不上,线上表现是
+  "检查失败: 清单签名校验失败"。工具会先核对私钥与编进 App 的公钥 `data/agent_pubkey.bin` 是否配套
+  (不配套就直接拒绝:那种情况下每个玩家都会验签失败),签完还会用 openssl 复验一次。
+  私钥**不入库**;丢失或更换的后果见 `docs/architecture.md` 第 9.2 节。签名不是确定性的
+  (openssl 每次用新的随机 k),同一份清单重签会得到不同的 `.sig` 字节 —— 只要
+  `tools/verify-release.py` 能验过就是正常的;
+- **发布锁里记着签名公钥指纹**(`signingPublicKeySha256`):自检会拿它和 `data/agent_pubkey.bin`
+  比对,所以"换钥匙"这件事一定会在发布 diff 里出现(已经发出去的 App 只认它自己被编进去的那把,
+  换钥匙 = 换身份,后果见 `docs/architecture.md` 第 9.2 节);
 - 清单里的 `baseUrl` 指向 `packaging/agent/<agentVersion>/` 的 raw 前缀,`files[].source` 相对它解析;
+- 玩家侧"一键更新"走的就是这两条:清单(带签名)+ `baseUrl` 下的三个文件,App 按清单里的
+  size/sha256 逐个校验后才落盘;
 - raw 端点只认**公开仓库 + 已推送的提交**:改完这两个文件必须提交并 push,线上地址才会更新
   (这是"忘了推"最常见的坑,验收时先核对 raw 地址能取到东西);
-- 发布记录与指南页兜底都给同一个 NRO:GitLab Release 资产(`docs/store-listing.md` 上架清单有步骤)。
+- 发布记录、商店 update 资产与指南页入口给的都是同一个 NRO:仓库里的
+  `packaging/nro/acnh-manager-<appVersion>.nro`,由发布链第 5 步拷进去并随发布一起提交
+  (`docs/store-listing.md` 上架清单有步骤);
+- 人类看的发布页用 `gitee release create --tag v<appVersion> -n "ACNH-Manager <appVersion>"
+  -b "<说明 + 上面的 raw 下载地址>"` 建(tag 先 `git push origin v<appVersion>`);**Gitee CLI
+  不能给发行版传附件**,所以下载永远走 raw 地址,发行版页面只是给人和搜索引擎看的入口。
 
-## 6. 版本与记录
+## 7. 版本与记录
 
 - 本仓库版本(`APP_VERSION`)与商店条目 `version` 必须一致;功能更新升 Minor、修复升 Patch、
   特大变更先问用户(工作区规则);
 - 每次发布后把结论写进 `docs/device-acceptance.md`:安装了哪个 agent 版本、在什么构建上验过、
   失败用例的观察结果。
 
-## 7. 尚未完成的部分(明确记录)
+## 8. 尚未完成的部分(明确记录)
 
-- **联网检查的定位**:TLS 证书校验按 2026-09-18 的决定关闭(没有信任锚可用,与 Sphaira 一致),
-  所以这个检查只报版本、不下载内容。**如果以后要让它在 App 内在线升级 agent**,必须先补上
-  TLS 校验或"清单签名 + 内嵌公钥验签"(见 `docs/architecture.md` §9);
-- **启动即静默检查**:目前是首页按 `X` 手动触发,改成启动时后台线程(M5);
-- **商店收录**:官方 Homebrew App Store 的收录步骤与元数据(见第 3 节)尚未实际提交过一次。
+- **发布端的连通性**:托管方的可达性会变(历史上换过一次,当时那家在作者网络上整条链路超时),
+  所以每次换托管方或发版都要先核对 raw 地址能匿名取到东西,再谈 App 侧;App 侧对失败的处理是
+  如实报错并静默退回内置版本,真机是否稳定以 `docs/device-acceptance.md` 的验收记录为准;
+- **商店收录**:官方 Homebrew App Store 的收录步骤与元数据(见第 4 节)尚未实际提交过一次。

@@ -1,102 +1,77 @@
 #include "update.hpp"
 
-#include <cstdio>
 #include <string>
 
-#include <switch.h>
-#include <curl/curl.h>
-
-#include "i18n/strings.hpp"
+#include "manifest/manifest.hpp"
+#include "net/http.hpp"
+#include "net/signature.hpp"
+#include "payload/embedded.hpp"
+#include "version.hpp"
 
 namespace acnh_manager::net {
 namespace {
 
-/* RAII pair for socketInitializeDefault()/socketExit(): every early return below
-   still releases the service.  libcurl's Switch port only calls the BSD socket
-   layer (libcurl.a references socket/socketpair but never socketInitialize*), so
-   bringing the service up is the caller's job -- and it belongs here, next to the
-   code that needs it, not in the global environment setup. */
-struct SocketGuard {
-    bool active{false};
+/* The signature is published next to the manifest; one constant keeps them together. */
+constexpr const char *kSignatureSuffix = ".sig";
+constexpr std::size_t kManifestMaxBytes = 512 * 1024;
+constexpr std::size_t kSignatureMaxBytes = 4 * 1024;
 
-    ~SocketGuard() {
-        if (active) {
-            socketExit();
-        }
+UpdateCheckResult FromHttp(const HttpResult &http) {
+    UpdateCheckResult result;
+    result.http_code = http.status;
+    result.detail = http.detail;
+    switch (http.outcome) {
+        case HttpOutcome::NotHttps: result.outcome = UpdateOutcome::NotHttps; break;
+        case HttpOutcome::HttpStatus: result.outcome = UpdateOutcome::HttpStatus; break;
+        case HttpOutcome::Network: result.outcome = UpdateOutcome::Network; break;
+        case HttpOutcome::Ok: result.outcome = UpdateOutcome::Ok; break;
     }
-};
-
-std::size_t WriteCallback(char *ptr, std::size_t size, std::size_t nmemb, void *userdata) {
-    auto *out = static_cast<std::string *>(userdata);
-    const std::size_t bytes = size * nmemb;
-    if (out->size() + bytes > 512 * 1024) {
-        return 0; /* a manifest should never be this big; fail early */
-    }
-    out->append(ptr, bytes);
-    return bytes;
+    return result;
 }
 
 }  // namespace
 
 UpdateCheckResult CheckForUpdate(const std::string &url, long timeout_seconds) {
+    const HttpResult manifest = Get(url, kManifestMaxBytes, timeout_seconds);
+    if (manifest.outcome != HttpOutcome::Ok) {
+        return FromHttp(manifest);
+    }
     UpdateCheckResult result;
-    result.attempted = true;
+    result.http_code = manifest.status;
 
-    if (url.rfind("https://", 0) != 0) {
-        result.skipped = true;
-        result.reason = i18n::Text(i18n::StringId::UpdateErrHttpsOnly, i18n::Current());
+    const HttpResult signature = Get(url + kSignatureSuffix, kSignatureMaxBytes, timeout_seconds);
+    if (signature.outcome != HttpOutcome::Ok) {
+        result.outcome = UpdateOutcome::NoSignature;
+        result.detail = "no signature (" + signature.detail + ")";
         return result;
     }
 
-    SocketGuard sockets;
-    const Result rc_socket = socketInitializeDefault();
-    if (R_FAILED(rc_socket)) {
-        result.skipped = true;
-        result.reason = i18n::Format(i18n::StringId::UpdateErrSocket, rc_socket);
+    /* The key is a build input (data/agent_pubkey.bin), so a build made without one cannot
+       trust anything the network says -- say that, instead of silently accepting. */
+    const std::string_view pem_view = payload::EmbeddedAgentPublicKeyPem();
+    if (pem_view.empty()) {
+        result.outcome = UpdateOutcome::NoTrustAnchor;
+        result.detail = "no public key is embedded in this build";
         return result;
     }
-    sockets.active = true;
+    const std::string pem(pem_view);
+    std::string signature_error;
+    if (!VerifySignature(manifest.body, signature.body, pem.c_str(), &signature_error)) {
+        result.outcome = UpdateOutcome::BadSignature;
+        result.detail = signature_error;
+        return result;
+    }
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    CURL *curl = curl_easy_init();
-    if (curl == nullptr) {
-        result.reason = i18n::Text(i18n::StringId::UpdateErrCurlInit, i18n::Current());
+    const auto parsed = manifest::Parse(manifest.body, kAppVersion);
+    if (!parsed.ok) {
+        result.outcome = UpdateOutcome::InvalidManifest;
+        result.detail = parsed.error;
         return result;
     }
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.manifest_text);
-    /* No trust store is available to this stack (see the header): verification is off, the same
-       way Sphaira and most homebrew do it.  The check only ever reports a version, so a
-       spoofed answer cannot change what gets installed -- revisit this the day the network
-       path starts delivering files. */
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_seconds);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "acnh-manager/0.1.0");
-    const CURLcode code = curl_easy_perform(curl);
-    if (code == CURLE_OK) {
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.http_code);
-    }
-    curl_easy_cleanup(curl);
-
-    if (code != CURLE_OK) {
-        result.reason =
-            i18n::Format(i18n::StringId::UpdateErrNetwork, curl_easy_strerror(code));
-        result.manifest_text.clear();
-        return result;
-    }
-    if (result.http_code != 200) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "HTTP %ld", result.http_code);
-        result.reason = buf;
-        result.manifest_text.clear();
-        return result;
-    }
-    result.ok = true;
-    result.reason = i18n::Text(i18n::StringId::UpdateOkFetched, i18n::Current());
+    result.outcome = UpdateOutcome::Ok;
+    result.manifest_text = manifest.body;
+    result.agent_version = parsed.manifest.agent.version;
+    result.detail = "manifest ok, agent " + result.agent_version;
     return result;
 }
 

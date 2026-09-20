@@ -33,17 +33,35 @@ constexpr Entry kStrings[] = {
     {"有", "present"},  /* ValuePresent */
     {"无", "absent"},  /* ValueAbsent */
     {"将要写入的文件", "Files to write"},  /* LabelPlan */
-    {"安装包来源", "Install source"},  /* LabelManifestSource */
+    {"清单来源", "Manifest source"},  /* LabelManifestSource */
     {"安装成功", "Install succeeded"},  /* ResultSuccess */
     {"安装失败", "Install failed"},  /* ResultFailure */
     {"这个版本没有带安装包，请更新应用后重试", "This build has no installer bundled; update the app and try again"},  /* ResultNoManifest */
     {"联网检查", "Update check"},  /* LabelUpdateCheck */
     {"(未检查)", "(not checked)"},  /* ValueNotChecked */
     {"清单可用，agent %s", "manifest ok, agent %s"},  /* UpdateCheckOk */
-    {"清单无效: %s", "invalid manifest: %s"},  /* UpdateCheckInvalid */
-    {"跳过: %s", "skipped: %s"},  /* UpdateCheckSkipped */
     {"失败: %s", "failed: %s"},  /* UpdateCheckFailed */
+    {"正在检查…", "Checking…"},  /* SubUpdateChecking */
+    {"已是最新 %s", "up to date: %s"},  /* SubUpdateUpToDate */
+    {"发现新版 %s", "new version %s"},  /* SubUpdateNewer */
+    {"检查失败: %s", "check failed: %s"},  /* SubUpdateFailed */
+    {"发布版本 %s", "published %s"},  /* SubUpdatePublished */
+    /* A release host that moved on without this console's game build: nothing to install, and
+       the reason is not "you are up to date". */
+    {"新版 %s 不支持当前游戏版本", "new %s does not support this game version"},  /* SubUpdateNewerUnsupported */
+    {"正在安装 agent", "Installing the agent"},  /* ProgressInstalling */
+    {"正在卸载 agent", "Removing the agent"},  /* ProgressUninstalling */
+    {"请不要关机,也不要退出应用", "Do not power off or leave the app"},  /* ProgressNote */
+    {"当前文件", "Current file"},  /* LabelProgressFile */
+    {"网络不可用", "no network"},  /* UpdateShortOffline */
+    {"服务器返回 %ld", "server returned %ld"},  /* UpdateShortHttp */
+    {"清单签名校验失败", "manifest signature check failed"},  /* UpdateShortSignature */
+    {"清单不可用", "manifest is unusable"},  /* UpdateShortManifest */
+    {"应用内部错误", "internal error"},  /* UpdateShortInternal */
     {"随应用自带", "bundled with the app"},  /* ValueEmbeddedManifest */
+    {"从发布端下载(agent %s)", "downloaded (agent %s)"},  /* ValueNetworkManifest */
+    /* The version on the card, plus what this build of the app carries when the two differ. */
+    {"%s(随应用自带 %s)", "%s (bundled %s)"},  /* ValueAgentCarried */
     {"覆盖始终生效(override_key 没有有效按键)", "Override always applies (override_key has no valid key)"},  /* OverrideAlwaysOn */
     {"覆盖永不生效(override_key 为空或按键名无法识别):请改成 !L 或删除该项", "Override never applies (override_key empty or the key name is unknown): change it to !L or remove the entry"},  /* OverrideNeverApplies */
     {"覆盖默认生效；启动游戏时不要按住 %s", "Override applies by default; do not hold %s while launching the game"},  /* OverrideOnByDefault */
@@ -60,11 +78,6 @@ constexpr Entry kStrings[] = {
     {"写入 state.json 失败: %s", "writing state.json failed: %s"},  /* InstallErrStateWrite */
     {"state.json 解析失败: %s", "state.json parse failed: %s"},  /* InstallErrStateParse */
     {"没有安装记录，无需卸载", "nothing to uninstall (no install record)"},  /* UninstallNoRecord */
-    {"只接受 https 地址", "only https URLs are accepted"},  /* UpdateErrHttpsOnly */
-    {"curl_easy_init 失败", "curl_easy_init failed"},  /* UpdateErrCurlInit */
-    {"socket 服务不可用(rc=0x%08X)", "socket service unavailable (rc=0x%08X)"},  /* UpdateErrSocket */
-    {"网络失败: %s", "network failed: %s"},  /* UpdateErrNetwork */
-    {"已获取发布清单", "release manifest fetched"},  /* UpdateOkFetched */
     {"没有找到《集合啦!动物森友会》", "Animal Crossing: New Horizons was not found"},  /* StateGameMissing */
     {"这个游戏版本暂不支持", "This game version is not supported yet"},  /* StateUnsupported */
     {"上次安装失败", "The last install failed"},  /* StateFailed */

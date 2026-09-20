@@ -16,6 +16,7 @@
 #include "install/gate.hpp"
 #include "manifest/manifest.hpp"
 #include "net/update.hpp"
+#include "net/update_task.hpp"
 #include "payload/embedded.hpp"
 #include "ui/action.hpp"
 #include "ui/font.hpp"
@@ -49,7 +50,9 @@ private:
     /* Home is the new one-screen UI (state + primary action + two secondary ones); Details
        carries everything professional; Install/Uninstall are the confirmation pages and
        Result reports what happened. */
-    enum class Page { Home, Details, Install, Uninstall, Result };
+    /* Progress is shown while the engine works: the install runs on this thread, so this page
+       is drawn once before the first byte moves and again after every file. */
+    enum class Page { Home, Details, Install, Uninstall, Progress, Result };
 
     void Collect();
     void RefreshPlan();
@@ -64,9 +67,28 @@ private:
     std::string InstalledPayloadHash() const;
     std::string ManifestPayloadHash() const;
     void ToggleLanguage();
-    void RunUpdateCheck();
+    /* Update check: started on demand (X) or once at startup; runs on a worker thread, so the
+       UI polls it every frame instead of waiting for the network. */
+    void StartUpdateCheck(bool silent = false);
+    void PollUpdateCheck();
+    void ApplyUpdateCheck(net::UpdateCheckResult result);
+    /* Home page: the check button's second line (idle / running / result, in the current
+       language, built at render time so a language switch cannot leave a stale sentence). */
+    std::string UpdateSubtitle() const;
+    /* Details page: the raw outcome, for when someone needs to know what actually happened. */
+    std::string UpdateDetailText() const;
+    /* The agent version a press of the primary button would install, when that is newer than
+       what is installed; empty when there is nothing newer to offer. */
+    std::string NewerAgentVersion() const;
+    /* The manifest an install would use: the verified remote release when it is newer, else the
+       embedded (or dev) one. */
+    const manifest::Manifest &ActiveManifest() const;
     void RunInstall();
     void RunUninstall();
+    /* The progress page: shown before the engine starts and repainted after every file, because
+       the engine blocks this thread while it works. */
+    void BeginProgress(bool uninstall, int total);
+    void UpdateProgress(const install::Progress &progress);
 
     void Render();
     void RenderHeader(Surface surface);
@@ -81,6 +103,7 @@ private:
     void RenderDetails(Surface surface);
     void RenderInstall(Surface surface);
     void RenderUninstall(Surface surface);
+    void RenderProgress(Surface surface);
     /* Confirmation pages share one implementation: action, outcome, two buttons. */
     void BuildConfirmActions(int width, int height, bool uninstall);
     void RenderConfirm(Surface surface, bool uninstall);
@@ -139,8 +162,6 @@ private:
     bool m_last_failed{false};
     /* The record says installed, but the card no longer matches it. */
     bool m_files_incomplete{false};
-    /* Newer agent version found by the update check (empty when there is none). */
-    std::string m_newer_agent{};
 
     env::EnvironmentReport m_report{};
     manifest::Manifest m_manifest{};
@@ -159,6 +180,8 @@ private:
     std::string m_payload_dir{"/switch/ACNH-Manager/payload"};
     std::string m_dev_manifest_path{"/switch/ACNH-Manager/dev-manifest.json"};
 
+    /* What the running install/uninstall is working on (the engine reports it per file). */
+    bool m_progress_uninstall{false};
     std::string m_progress_step{};
     int m_progress_index{0};
     int m_progress_total{0};
@@ -167,8 +190,23 @@ private:
     int m_result_files{0};
     /* Whether the last action was an uninstall (the result page picks its wording). */
     bool m_result_uninstall{false};
-    /* An empty string means "not checked yet" (the UI shows the not-checked string). */
-    std::string m_update_status{};
+    net::UpdateCheckTask m_update_task{};
+    bool m_update_running{false};
+    /* A startup check keeps a failure to itself (the button keeps its normal wording); a
+       check the player asked for always reports what happened. */
+    bool m_update_silent{false};
+    bool m_update_have_result{false};
+    net::UpdateOutcome m_update_outcome{net::UpdateOutcome::Network};
+    long m_update_http_code{0};
+    std::string m_update_detail{};
+    std::string m_update_remote_version{};
+    /* The release host has something newer, but it does not cover this console's build: the
+       bundled release stays the install source and the result says so. */
+    bool m_update_newer_unsupported{false};
+    /* A verified remote manifest that is newer than what is installed; the install path uses it
+       instead of the embedded release while it stands. */
+    manifest::Manifest m_update_manifest{};
+    bool m_have_update_manifest{false};
     /* Log every drawing stage of the first frame, so a crash points at one of them. */
     int m_trace_frames{1};
     /* First-frame stage pauses (when dev-pause exists): wait for + after each stage. */

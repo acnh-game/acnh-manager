@@ -13,6 +13,10 @@ Checks:
   4. with --nro: the NRO really contains the embedded manifest and the three payloads, and
      its build stamp matches the *current* source tree -- that last part is what catches
      "source changed but the NRO was not rebuilt", which a payload-only check cannot see.
+  5. the manifest the update check serves is signed by the key this app trusts: a manifest
+     committed without (re-)signing would be rejected by every shipped App, which is exactly
+     the kind of silent release breakage this tool exists to catch.  Uses openssl when it is
+     on PATH; without it the check is reported as skipped, never as passed.
 
 Usage:
     python3 tools/verify-release.py                          # repo assets only
@@ -26,6 +30,8 @@ import hashlib
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -55,6 +61,18 @@ def sha256_of(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def show(path: pathlib.Path) -> str:
+    """Path for messages: relative to the repository when it is inside it.
+
+    A relative `--data`/`--record` (or one outside the repo) used to blow up in
+    `relative_to()` before any check ran -- the tool crashed instead of reporting."""
+    resolved = path if path.is_absolute() else (pathlib.Path.cwd() / path)
+    try:
+        return str(resolved.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(resolved)
+
+
 def source_tree_hash(repo: pathlib.Path) -> str:
     """Reproduce tools/build.sh's src:<8 hex> component: sort the "sha256  path" lines of
     every file under source/ by path, then hash the concatenation."""
@@ -80,6 +98,33 @@ class Report:
         return ok
 
 
+def check_manifest_signature(report: Report) -> None:
+    """The manifest served to the app must carry a signature this app's key accepts: a manifest
+    committed without (re-)signing is rejected by every shipped App, so "the release is live but
+    nobody can see it" would otherwise only show up on a console."""
+    print("\n[5] served manifest signature")
+    manifest = REPO_ROOT / "agent-manifest.json"
+    signature = manifest.with_name(manifest.name + ".sig")  # the name the app asks for
+    pubkey = REPO_ROOT / "data" / "agent_pubkey.bin"
+    if not report.check(pubkey.is_file(),
+                        f"{show(pubkey)} (the key compiled into the app) exists",
+                        "generate it once with tools/make-signing-key.py"):
+        return
+    if not report.check(signature.is_file(),
+                        f"{signature.name} exists next to the manifest it signs",
+                        "run tools/sign-manifest.py --key <private key>"):
+        return
+    if shutil.which("openssl") is None:
+        print("  skip openssl is not on PATH, so the signature was not actually verified")
+        return
+    result = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(pubkey),
+                             "-signature", str(signature), str(manifest)],
+                            capture_output=True)
+    detail = (result.stdout + result.stderr).decode("utf-8", "replace").strip()
+    report.check(result.returncode == 0, "the signature verifies with the embedded public key",
+                 detail)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -101,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     version = lock["agentVersion"]
     record_dir = args.record or (REPO_ROOT / "packaging" / "agent" / version)
 
-    print(f"lock {args.lock.relative_to(REPO_ROOT)}: agent {version} / "
+    print(f"lock {show(args.lock)}: agent {version} / "
           f"commit {lock.get('commit')} / buildFlags {lock.get('buildFlags')}")
 
     print("\n[1] release form")
@@ -109,9 +154,20 @@ def main(argv: list[str] | None = None) -> int:
     report.check(lock.get("buildFlags") == RELEASE_BUILD_FLAGS,
                  f"agent.buildFlags == {RELEASE_BUILD_FLAGS} (semantic hook only)",
                  f"actual {lock.get('buildFlags')}")
+    # The lock pins the key this release's manifest is signed with.  Every shipped app only
+    # trusts the key it was built with, so a change here is an identity change and has to be an
+    # explicit line in the release diff -- not something that slips through unnoticed.
+    embedded_pubkey = args.data / "agent_pubkey.bin"
+    if report.check(embedded_pubkey.is_file(),
+                    f"{show(embedded_pubkey)} exists (the key the app embeds)",
+                    "generate it once with tools/make-signing-key.py"):
+        report.check(lock.get("signingPublicKeySha256") == sha256_of(embedded_pubkey).lower(),
+                     "the lock records this build's signing public key",
+                     f"lock {lock.get('signingPublicKeySha256')} != data {sha256_of(embedded_pubkey)}"
+                     " -- a key change breaks every shipped app, so it must be deliberate")
 
     print(f"\n[2] release record packaging/agent/{version}/")
-    if not report.check(record_dir.is_dir(), f"{record_dir.relative_to(REPO_ROOT)} exists"):
+    if not report.check(record_dir.is_dir(), f"{show(record_dir)} exists"):
         return 1
     nso_sha = sha256_of(record_dir / "subsdk9")
     npdm_sha = sha256_of(record_dir / "main.npdm")
@@ -137,11 +193,11 @@ def main(argv: list[str] | None = None) -> int:
         report.check(sha256_of(path).upper() == entry["sha256"].upper(),
                      f"{name} hash matches the manifest")
 
-    print(f"\n[3] embedded build input {args.data.relative_to(REPO_ROOT)}/")
+    print(f"\n[3] embedded build input {show(args.data)}/")
     report.check((args.data / "manifest.bin").read_bytes() ==
                  (record_dir / "manifest.json").read_bytes(),
                  "manifest.bin equals the record's manifest.json")
-    # The update check fetches the repo root copy over GitLab's raw endpoint, so a stale copy
+    # The update check fetches the repo root copy over Gitee's raw endpoint, so a stale copy
     # there would quietly tell every player about the wrong release.
     latest = REPO_ROOT / "agent-manifest.json"
     report.check(latest.is_file() and latest.read_bytes() == (record_dir / "manifest.json").read_bytes(),
@@ -163,6 +219,12 @@ def main(argv: list[str] | None = None) -> int:
         for name in PAYLOAD_MAP:
             payload = (record_dir / name).read_bytes()
             report.check(payload in blob, f"the NRO contains {name}'s raw bytes ({len(payload)} B)")
+        # The public key is a build input like the payloads, but no stamp covers data/: without
+        # this check, regenerating the key, re-signing the manifest and forgetting to rebuild
+        # the NRO passes every local check while every player's app rejects the new signature.
+        pubkey_bytes = (args.data / "agent_pubkey.bin").read_bytes()
+        report.check(pubkey_bytes in blob,
+                     f"the NRO embeds the current public key ({len(pubkey_bytes)} B)")
 
         expected = source_tree_hash(REPO_ROOT)
         stamps = sorted({m.group(0).decode() for m in STAMP_RE.finditer(blob)})
@@ -174,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
                      f"NRO={found or 'none'} current={expected} -- source changed but the NRO was not rebuilt")
         if any("-dirty" in stamp for stamp in stamps):
             print("  note the NRO stamp says -dirty: the repo was dirty at build time (not a release)")
+
+    check_manifest_signature(report)
 
     print()
     if report.failures:

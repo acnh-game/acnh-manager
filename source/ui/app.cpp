@@ -1,11 +1,14 @@
 #include "app.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <algorithm>
 #include <string>
 
 #include "manifest/manifest.hpp"
+#include "install/network_source.hpp"
 #include "log.hpp"
+#include "net/update_policy.hpp"
 #include "version.hpp"
 #include "probe.hpp"
 #include "util/fs_path.hpp"
@@ -162,6 +165,7 @@ const char *PlanActionName(install::PlanAction action) {
 bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     m_log = log;
     m_sd = &sd;
+    m_update_task.SetLog(log);
     LoadSettings();
     Trace("ui: font init ...");
     if (!m_font.Init(log, error)) {
@@ -202,6 +206,9 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     m_fb_ready = true;
     Trace("ui: collecting environment ...");
     Collect();
+    /* One silent look at the release host per launch: a newer agent shows up on the home screen
+       on its own, and a failure only lands in the log/details. */
+    StartUpdateCheck(/*silent=*/true);
     Trace("ui: environment collected (exefs=%zu, manifest=%d)", m_report.exefs.size(),
           m_have_manifest ? 1 : 0);
     /* Crash leftovers: an interrupted two-phase install can leave `<target>.acnh-tmp` /
@@ -241,11 +248,14 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
        docs/device-acceptance.md). */
     {
         FsFile flag{};
+        /* Even a literal path goes through util::FsPath: fs declares FS_MAX_PATH bytes for it,
+           and the rule is easier to keep than to remember the exceptions to. */
+        const util::FsPath pause_flag("/switch/ACNH-Manager/dev-pause");
         const bool pause_before_first_frame =
             m_sd != nullptr &&
-            R_SUCCEEDED(fsFsOpenFile(m_sd, "/switch/ACNH-Manager/dev-pause", FsOpenMode_Read, &flag));
-    if (pause_before_first_frame) {
-        fsFileClose(&flag);
+            R_SUCCEEDED(fsFsOpenFile(m_sd, pause_flag.c_str(), FsOpenMode_Read, &flag));
+        if (pause_before_first_frame) {
+            fsFileClose(&flag);
             Trace("ui: paused before first frame (press + to continue)");
             PadState pad;
             padConfigureInput(1, HidNpadStyleSet_NpadStandard);
@@ -269,6 +279,7 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
 }
 
 void App::Exit() {
+    m_update_task.Stop();
     if (m_fb_ready) {
         framebufferClose(&m_fb);
         m_fb_ready = false;
@@ -414,9 +425,10 @@ std::string App::ManifestPayloadHash() const {
 }
 
 void App::RefreshPlan() {
-    if (m_have_manifest) {
-        m_gate = install::Evaluate(&m_manifest, m_report.build);
-        m_plan = install::Plan(m_gate, m_have_state ? &m_state : nullptr, m_manifest.agent);
+    const manifest::Manifest &active = ActiveManifest();
+    if (m_have_manifest || m_have_update_manifest) {
+        m_gate = install::Evaluate(&active, m_report.build);
+        m_plan = install::Plan(m_gate, m_have_state ? &m_state : nullptr, active.agent);
     } else {
         m_gate = install::Evaluate(nullptr, m_report.build);
         m_plan = install::Plan(m_gate, m_have_state ? &m_state : nullptr, manifest::AgentInfo{});
@@ -454,8 +466,10 @@ void App::UpdateHomeState() {
     in.last_failed = m_last_failed;
     in.files_incomplete = m_files_incomplete;
     in.repair_needed = m_plan.action == install::PlanAction::Repair;
-    in.fresh_install = m_plan.action == install::PlanAction::Install;
-    in.newer_agent = !m_newer_agent.empty();
+    /* "Install" with a record present is an update, not a fresh install: the home screen must
+       not claim "nothing is installed yet" to someone who has an older agent. */
+    in.fresh_install = m_plan.action == install::PlanAction::Install && !m_have_state;
+    in.newer_agent = !NewerAgentVersion().empty();
     m_home_kind = Classify(in);
     if (m_trace_frames > 0) {
         Trace("home: kind=%d (found=%d supported=%d failed=%d repair=%d fresh=%d newer=%d)",
@@ -476,78 +490,209 @@ void App::ToggleLanguage() {
        every restart (reported from the console).  A failure here is logged and nothing more --
        the switch itself already took effect. */
     SaveSettings();
-    /* The update-check sentence is one string built by the network layer in the language of the
-       moment ("skipped: missing CA file: <path>"), so it cannot be re-rendered here.  Dropping
-       it back to "not checked" beats leaving a stale-language message on the details page; the
-       real fix -- the network layer returning an id plus arguments -- rides along with the
-       embedded CA bundle work. */
-    if (!m_update_status.empty()) {
-        m_update_status.clear();
-        if (m_log != nullptr) {
-            m_log->Line("update check status dropped after a language change");
-        }
-    }
     Collect();
 }
 
-/* Update check: triggered on demand (a silent check at startup needs a worker thread, which
-   is a later step).  A newer agent version switches the home screen to "update available". */
-void App::RunUpdateCheck() {
-    const auto check = net::CheckForUpdate(net::kDefaultManifestUrl);
-    char buf[256];
-    if (check.ok) {
-        const auto parsed = manifest::Parse(check.manifest_text, kAppVersion);
-        if (parsed.ok) {
-            const std::string &found = parsed.manifest.agent.version;
-            const std::string &have = m_have_manifest ? m_manifest.agent.version : found;
-            m_newer_agent =
-                manifest::CompareVersions(found, have) > 0 ? found : std::string();
-            std::snprintf(buf, sizeof(buf), Tr(i18n::StringId::UpdateCheckOk), found.c_str());
-        } else {
-            m_newer_agent.clear();
-            std::snprintf(buf, sizeof(buf), Tr(i18n::StringId::UpdateCheckInvalid),
-                          parsed.error.c_str());
-        }
-    } else {
-        std::snprintf(buf, sizeof(buf),
-                      Tr(check.skipped ? i18n::StringId::UpdateCheckSkipped
-                                       : i18n::StringId::UpdateCheckFailed),
-                      check.reason.c_str());
+/* Update check, on the worker thread: `StartUpdateCheck()` only asks for one (the worker does
+   the network), and `PollUpdateCheck()` -- called once per frame -- moves a finished result into
+   the UI.  The interface therefore stays alive while the request is in flight. */
+void App::StartUpdateCheck(bool silent) {
+    m_update_silent = silent;
+    const std::string start_error = m_update_task.Start(net::kDefaultManifestUrl);
+    m_update_running = m_update_task.Running();
+    if (!start_error.empty()) {
+        /* No worker means no check: report it like any other failure, so the button never looks
+           like it simply ignored the press (the raw text lands in the log and the details page). */
+        net::UpdateCheckResult failed;
+        failed.outcome = net::UpdateOutcome::WorkerFailed;
+        failed.detail = start_error;
+        ApplyUpdateCheck(std::move(failed));
+        return;
     }
-    m_update_status = buf;
-    Trace("update check: %s", m_update_status.c_str());
+    Trace("update check: started (url=%s)", net::kDefaultManifestUrl);
+}
+
+void App::PollUpdateCheck() {
+    net::UpdateCheckResult result;
+    if (m_update_task.Take(&result)) {
+        m_update_running = false;
+        ApplyUpdateCheck(std::move(result));
+        return;
+    }
+    m_update_running = m_update_task.Running();
+}
+
+void App::ApplyUpdateCheck(net::UpdateCheckResult result) {
+    m_update_have_result = true;
+    m_update_outcome = result.outcome;
+    m_update_http_code = result.http_code;
+    m_update_detail = result.detail;
+    m_update_remote_version.clear();
+    m_update_newer_unsupported = false;
+    m_have_update_manifest = false;
+    m_update_manifest = manifest::Manifest{};
+    if (result.outcome == net::UpdateOutcome::Ok) {
+        m_update_remote_version = result.agent_version;
+        /* What this console has: the record's version, or the version this build carries when
+           nothing is installed yet. */
+        const std::string installed = m_have_state ? m_state.agent_version : std::string();
+        const std::string current =
+            !installed.empty() ? installed : (m_have_manifest ? m_manifest.agent.version : installed);
+        const auto parsed = manifest::Parse(result.manifest_text, kAppVersion);
+        if (parsed.ok) {
+            /* The rule lives in net/update_policy.hpp (pure, host-tested): a newer release is
+               only adopted when the gate accepts *this* build. */
+            const auto decision = net::DecideAdoption(parsed.manifest, m_report.build, current);
+            if (decision.adopt) {
+                m_update_manifest = parsed.manifest;
+                m_have_update_manifest = true;
+            }
+            m_update_newer_unsupported = decision.unsupported;
+        }
+    }
+    Trace("update check: %s", m_update_detail.c_str());
+    RefreshPlan();
     UpdateHomeState();
 }
 
+/* The version a press of the primary button would install, when that is newer than what this
+   console actually has.  Empty means "nothing newer to offer": the home screen then keeps its
+   normal states (fresh install, repair, retry, up to date). */
+std::string App::NewerAgentVersion() const {
+    const std::string available = ActiveManifest().agent.version;
+    const std::string installed = m_have_state ? m_state.agent_version : std::string();
+    if (available.empty() || installed.empty()) {
+        return {}; /* nothing to compare against: that is not an update story */
+    }
+    return manifest::CompareVersions(available, installed) > 0 ? available : std::string();
+}
+
+const manifest::Manifest &App::ActiveManifest() const {
+    if (m_have_update_manifest) {
+        return m_update_manifest;
+    }
+    return m_manifest;
+}
+
+/* The check button's second line: idle, in flight, or the outcome -- built here, at render
+   time, so it is always in the current language. */
+std::string App::UpdateSubtitle() const {
+    if (m_update_running) {
+        return std::string(Tr(i18n::StringId::SubUpdateChecking));
+    }
+    if (!m_update_have_result) {
+        return std::string(Tr(i18n::StringId::SubCheckUpdate));
+    }
+    /* The startup check is silent about failure: a machine that is offline when the app opens
+       should not greet the player with an error they did not ask for.  The details page and the
+       log still carry the reason. */
+    if (m_update_silent && m_update_outcome != net::UpdateOutcome::Ok) {
+        return std::string(Tr(i18n::StringId::SubCheckUpdate));
+    }
+    switch (m_update_outcome) {
+        case net::UpdateOutcome::Ok:
+            /* A newer release that does not cover this build is the one case where the player
+               needs to know *why* there is nothing to install: the release host moved on, this
+               console's game build did not. */
+            if (m_update_newer_unsupported) {
+                return i18n::Format(i18n::StringId::SubUpdateNewerUnsupported,
+                                    m_update_remote_version.c_str());
+            }
+            /* With nothing installed there is no "your version" to compare against, so the
+               line states what the release host publishes instead of claiming "up to date". */
+            if (!m_have_state) {
+                return i18n::Format(i18n::StringId::SubUpdatePublished,
+                                    m_update_remote_version.c_str());
+            }
+            return NewerAgentVersion().empty()
+                       ? i18n::Format(i18n::StringId::SubUpdateUpToDate,
+                                      m_update_remote_version.c_str())
+                       : i18n::Format(i18n::StringId::SubUpdateNewer,
+                                      m_update_remote_version.c_str());
+        case net::UpdateOutcome::HttpStatus:
+            return i18n::Format(
+                i18n::StringId::SubUpdateFailed,
+                i18n::Format(i18n::StringId::UpdateShortHttp, m_update_http_code).c_str());
+        case net::UpdateOutcome::NoSignature:
+        case net::UpdateOutcome::BadSignature:
+        case net::UpdateOutcome::NoTrustAnchor:
+            return i18n::Format(i18n::StringId::SubUpdateFailed,
+                                Tr(i18n::StringId::UpdateShortSignature));
+        case net::UpdateOutcome::InvalidManifest:
+            return i18n::Format(i18n::StringId::SubUpdateFailed,
+                                Tr(i18n::StringId::UpdateShortManifest));
+        case net::UpdateOutcome::WorkerFailed:
+            return i18n::Format(i18n::StringId::SubUpdateFailed,
+                                Tr(i18n::StringId::UpdateShortInternal));
+        case net::UpdateOutcome::NotHttps:
+        case net::UpdateOutcome::Network:
+            break;
+    }
+    return i18n::Format(i18n::StringId::SubUpdateFailed,
+                        Tr(i18n::StringId::UpdateShortOffline));
+}
+
+/* Details page: the raw outcome, so "it failed" always comes with what actually happened. */
+std::string App::UpdateDetailText() const {
+    if (m_update_running) {
+        return std::string(Tr(i18n::StringId::SubUpdateChecking));
+    }
+    if (!m_update_have_result) {
+        return std::string(Tr(i18n::StringId::ValueNotChecked));
+    }
+    if (m_update_outcome == net::UpdateOutcome::Ok) {
+        return m_update_newer_unsupported
+                   ? i18n::Format(i18n::StringId::SubUpdateNewerUnsupported,
+                                  m_update_remote_version.c_str())
+                   : i18n::Format(i18n::StringId::UpdateCheckOk, m_update_remote_version.c_str());
+    }
+    return i18n::Format(i18n::StringId::UpdateCheckFailed, m_update_detail.c_str());
+}
+
 void App::RunInstall() {
-    if (!m_have_manifest || m_plan.action == install::PlanAction::Blocked ||
-        m_plan.game == nullptr) {
+    const manifest::Manifest &active = ActiveManifest();
+    if ((!m_have_manifest && !m_have_update_manifest) ||
+        m_plan.action == install::PlanAction::Blocked || m_plan.game == nullptr) {
         m_result_ok = false;
         m_last_failed = true;
         /* Even when the engine is never reached, the result page has to say whether anything
            was written -- otherwise dry-run would show up as dry_run=no. */
         m_result_files = 0;
-        m_result_error = m_have_manifest ? m_plan.reason : Tr(i18n::StringId::ResultNoManifest);
+        m_result_error = (m_have_manifest || m_have_update_manifest)
+                             ? m_plan.reason
+                             : Tr(i18n::StringId::ResultNoManifest);
         m_page = Page::Result;
         return;
     }
-    /* Payload matches the manifest's origin: the embedded manifest uses the embedded
-       payload, a dev manifest uses the payload directory on the SD card. */
+    /* Payload matches the manifest's origin: the embedded manifest uses the embedded payload, a
+       dev manifest uses the payload directory on the SD card, and a verified remote release is
+       downloaded from the URLs it names (the engine verifies each file against the manifest
+       before anything is written). */
     payload::EmbeddedPayloadSource embedded_source;
     install::SdFolderPayloadSource sd_source(*m_sd, m_payload_dir);
-    install::PayloadSource &source =
-        m_manifest_embedded ? static_cast<install::PayloadSource &>(embedded_source)
-                            : static_cast<install::PayloadSource &>(sd_source);
+    install::NetworkPayloadSource network_source(active, *m_plan.game);
+    install::PayloadSource *source = nullptr;
+    if (m_have_update_manifest) {
+        source = &network_source;
+    } else if (m_manifest_embedded) {
+        source = &embedded_source;
+    } else {
+        source = &sd_source;
+    }
     /* Development switch: record every fs call the engine makes, so a failure can be read back
        with the pointer and memory state the kernel saw at that moment. */
     if (DevFlagPresent(*m_sd, "/switch/ACNH-Manager/dev-fsprobe")) {
         install::SetFsTraceSink(m_log);
     }
-    const auto result = install::Install(*m_sd, m_manifest, *m_plan.game, source, /*dry_run=*/false,
+    /* The install runs on this thread, so the interface cannot animate while it works -- but it
+       can (and must) say what it is doing: one frame before the first byte moves, and one after
+       every file.  Without this the player stares at the confirmation page for as long as the
+       download takes, which reads as "the app hung" (that is the whole subject of
+       docs/architecture.md 9.3). */
+    BeginProgress(/*uninstall=*/false, static_cast<int>(m_plan.game->files.size()));
+    const auto result = install::Install(*m_sd, active, *m_plan.game, *source, /*dry_run=*/false,
                                         [this](const install::Progress &progress) {
-                                            m_progress_step = progress.step;
-                                            m_progress_index = progress.index;
-                                            m_progress_total = progress.total;
+                                            UpdateProgress(progress);
                                         });
     install::SetFsTraceSink(nullptr);
     m_result_ok = result.ok;
@@ -566,6 +711,10 @@ void App::RunInstall() {
         probe::RunFsSessionProbe(*m_log, *m_sd, "after install failure");
     }
     if (result.ok) {
+        /* The record now describes the version we just installed; the remote release is no
+           longer "newer than what is installed", so the next Collect() drops it (and with it the
+           update button). */
+        m_have_update_manifest = false;
         Collect();
     }
     m_page = Page::Result;
@@ -575,11 +724,11 @@ void App::RunUninstall() {
     if (DevFlagPresent(*m_sd, "/switch/ACNH-Manager/dev-fsprobe")) {
         install::SetFsTraceSink(m_log);
     }
-    const auto result = install::Uninstall(*m_sd, /*dry_run=*/false, [this](const install::Progress &p) {
-        m_progress_step = p.step;
-        m_progress_index = p.index;
-        m_progress_total = p.total;
-    });
+    BeginProgress(/*uninstall=*/true, static_cast<int>(m_state.files.size()));
+    const auto result = install::Uninstall(*m_sd, /*dry_run=*/false,
+                                           [this](const install::Progress &p) {
+                                               UpdateProgress(p);
+                                           });
     install::SetFsTraceSink(nullptr);
     /* The result page words itself from these two flags; without this the page claimed
        "install succeeded" right after removing the files. */
@@ -603,6 +752,12 @@ void App::RunUninstall() {
    primary one, X and Y for the two secondary ones) plus focus movement for the d-pad, the
    details page uses focus and A, and B always means "back" (or exit on Home). */
 void App::HandleKeys(u32 down) {
+    /* While the engine is working, the progress page owns the screen and the thread: no key can
+       leave it (the install is synchronous, so in practice nothing arrives here at all -- this
+       guard is what keeps that true if the install ever moves to a worker). */
+    if (m_page == Page::Progress) {
+        return;
+    }
     /* The tabs carry their own key, so L / R go through the same action as a tap on them. */
     if ((down & HidNpadButton_L) != 0) {
         ActivateAction(kActionTabStatus);
@@ -768,7 +923,7 @@ void App::ActivateAction(int id) {
                     break;
             }
             break;
-        case kActionCheckUpdate: RunUpdateCheck(); break;
+        case kActionCheckUpdate: StartUpdateCheck(); break;
         case kActionUninstall:
             if (m_page == Page::Home && m_have_state) {
                 m_page = Page::Uninstall;
@@ -812,6 +967,7 @@ void App::Run() {
     m_touch.Init(m_log);
     m_focus = FirstEnabled(m_actions);
     while (appletMainLoop() && !m_should_exit) {
+        PollUpdateCheck();
         padUpdate(&pad);
         HandleKeys(padGetButtonsDown(&pad));
         HandleTouch();
@@ -879,6 +1035,7 @@ void App::Render() {
         case Page::Details: RenderDetails(surface); break;
         case Page::Install: RenderInstall(surface); break;
         case Page::Uninstall: RenderUninstall(surface); break;
+        case Page::Progress: RenderProgress(surface); break;
         case Page::Result: RenderResult(surface); break;
     }
     /* Every page shows the same chrome (header tabs, footer hint), added after the page's own
@@ -931,6 +1088,11 @@ void App::RenderHeader(Surface surface) {
     m_font.Draw(surface, kMargin + 2, 66, kFontSmall, kHeaderSubtle,
                 i18n::Format(i18n::StringId::HeadSubtitle, "3.0.3"));
     /* Tabs carry their own key, so "one button, one action" holds here too. */
+    /* No tabs while the engine works: the progress page ignores input (see HandleKeys), and a
+       drawn control that cannot be pressed is exactly what this project keeps fixing. */
+    if (m_page == Page::Progress) {
+        return;
+    }
     struct Tab {
         const char *key;
         i18n::StringId label;
@@ -969,6 +1131,11 @@ void App::RenderHeader(Surface surface) {
    drawn pill and the touch target come from one layout function each.  They are appended
    after the page's own controls, which keeps the entry focus on the page's primary action. */
 void App::AddChromeActions(int surface_width, int surface_height) {
+    /* The progress page has no chrome on purpose: its keys are dead while the engine works, and
+       drawing tabs or a "B back" hint would promise controls that do nothing. */
+    if (m_page == Page::Progress) {
+        return;
+    }
     int label_width[2] = {m_font.Measure(Tr(i18n::StringId::TabStatus), kFontHeading),
                           m_font.Measure(Tr(i18n::StringId::TabDetails), kFontHeading)};
     const HeaderTabLayout layout = LayoutHeaderTabs(surface_width, label_width);
@@ -1017,8 +1184,10 @@ void App::RenderFooter(Surface surface) {
 
 bool App::HasOwnBackButton() const {
     /* The confirmation and result pages draw their own Ⓑ button, so the footer hint is omitted
-       there: one key, one place. */
-    return m_page == Page::Install || m_page == Page::Uninstall || m_page == Page::Result;
+       there: one key, one place.  The progress page has no back affordance at all -- B cannot
+       leave it while the engine works -- so it stays quiet too. */
+    return m_page == Page::Install || m_page == Page::Uninstall || m_page == Page::Result ||
+           m_page == Page::Progress;
 }
 
 void App::Card(Surface surface, int x, int y, int w, int h, const char *title) {
@@ -1131,6 +1300,26 @@ void DrawKeyBadge(Surface surface, Font &font, int cx, int cy, int radius, const
     font.Draw(surface, cx - width / 2, cy - kFontBody / 2 - 1, kFontBody, text, key);
 }
 
+/* Busy indicator: eight dots in a ring, the brightest one walking around, drawn where the key
+   badge would be so the button's layout does not move while a check is in flight.  Alpha is
+   blended by the drawing layer, so it reads as a spinner on any button face colour. */
+void DrawSpinner(Surface surface, int cx, int cy, int radius, Color color) {
+    constexpr int kDots = 8;
+    constexpr double kTwoPi = 6.283185307179586;
+    /* One dot step every 1/8 s, so a revolution takes about a second; the phase comes from the
+       clock rather than the frame count, so the speed does not depend on the frame rate. */
+    const u64 ticks = armGetSystemTick();
+    const u64 phase = (ticks / (armGetSystemTickFreq() / 8)) % kDots;
+    for (int i = 0; i < kDots; ++i) {
+        const int step = (static_cast<int>(phase) + i) % kDots;
+        const double angle = (kTwoPi * step) / kDots - kTwoPi / 4;
+        const int x = cx + static_cast<int>(radius * std::cos(angle));
+        const int y = cy + static_cast<int>(radius * std::sin(angle));
+        const u8 alpha = static_cast<u8>(40 + (215 * (kDots - i)) / kDots);
+        FillRoundedRect(surface, x - 3, y - 3, 7, 7, 3, Color{color.r, color.g, color.b, alpha});
+    }
+}
+
 /* Centre a single line in a rectangle.  The line box is what gets centred, so the ink lands in
    the optical middle -- the old fixed "-26 px" offset left every button label about 10 px high
    (measured on the confirmation page). */
@@ -1209,9 +1398,15 @@ void App::RenderHome(Surface surface) {
     } else if (m_report.build.version != 0) {
         game_version = std::to_string(m_report.build.version);
     }
-    const std::string have_agent = m_have_manifest
-                                       ? m_manifest.agent.version
-                                       : std::string(Tr(i18n::StringId::ValueNotInstalled));
+    /* Two different questions, two different answers: "what is on the card" (the install
+       record) and "what a tap would install" (the manifest in use).  They only diverge after a
+       network update, and calling the version this build carries "installed" would be wrong. */
+    const std::string installed_agent =
+        m_have_state ? m_state.agent_version : std::string(Tr(i18n::StringId::ValueNotInstalled));
+    const std::string offer_agent =
+        (m_have_manifest || m_have_update_manifest)
+            ? ActiveManifest().agent.version
+            : std::string(Tr(i18n::StringId::ValueNotInstalled));
     std::string second_line;
     switch (m_home_kind) {
         case HomeKind::Repair:
@@ -1237,15 +1432,15 @@ void App::RenderHome(Surface surface) {
             /* Nothing is installed yet, so the version on the right is what the tap would
                install -- saying just "agent 0.11.0" reads like it is already there. */
             second_line = i18n::Format(i18n::StringId::HomeVersionsAvailable,
-                                       game_version.c_str(), have_agent.c_str());
+                                       game_version.c_str(), offer_agent.c_str());
             break;
         case HomeKind::UpdateAvailable:
             second_line = i18n::Format(i18n::StringId::HomeVersionsUpdate, game_version.c_str(),
-                                       have_agent.c_str(), m_newer_agent.c_str());
+                                       installed_agent.c_str(), NewerAgentVersion().c_str());
             break;
         default:
-            second_line =
-                i18n::Format(i18n::StringId::HomeVersions, game_version.c_str(), have_agent.c_str());
+            second_line = i18n::Format(i18n::StringId::HomeVersions, game_version.c_str(),
+                                       installed_agent.c_str());
             break;
     }
 
@@ -1278,7 +1473,7 @@ void App::RenderHome(Surface surface) {
     }
 
     auto block = [&](const Action *action, const char *label, const std::string &sub,
-                     const char *key, bool filled) {
+                     const char *key, bool filled, bool busy = false) {
         if (action == nullptr) {
             return;
         }
@@ -1293,11 +1488,18 @@ void App::RenderHome(Surface surface) {
                         face);
         /* The key badge is about the physical button, not about the state: it keeps the app's
            accent colour so a state change (purple/orange/red) never repaints it.  Only a
-           disabled control greys its badge out, because then the key really does nothing. */
-        DrawKeyBadge(surface, m_font, action->rect.x + 46, action->rect.y + action->rect.h / 2, 22,
-                     key,
-                     !action->enabled ? kBorder : (filled ? kOnHeader : kHeader),
-                     !action->enabled ? kSubtle : (filled ? kHeader : kOnHeader));
+           disabled control greys its badge out, because then the key really does nothing.  While
+           a check is in flight the same slot carries the spinner, so the button proves it is
+           working and its layout does not move. */
+        if (busy) {
+            DrawSpinner(surface, action->rect.x + 46, action->rect.y + action->rect.h / 2, 13,
+                        filled ? kOnHeader : kHeader);
+        } else {
+            DrawKeyBadge(surface, m_font, action->rect.x + 46, action->rect.y + action->rect.h / 2,
+                         22, key,
+                         !action->enabled ? kBorder : (filled ? kOnHeader : kHeader),
+                         !action->enabled ? kSubtle : (filled ? kHeader : kOnHeader));
+        }
         const int label_width = m_font.Measure(label, kFontHeading + 8);
         const int centre = action->rect.x + action->rect.w / 2;
         m_font.Draw(surface, centre - label_width / 2,
@@ -1340,11 +1542,12 @@ void App::RenderHome(Surface surface) {
     }
     const std::string primary_label =
         m_home_kind == HomeKind::UpdateAvailable
-            ? i18n::Format(i18n::StringId::BtnUpdate, m_newer_agent.c_str())
+            ? i18n::Format(i18n::StringId::BtnUpdate, NewerAgentVersion().c_str())
             : std::string(Tr(label_id));
     const std::string primary_sub = Tr(sub_id);
     block(primary, primary_label.c_str(), primary_sub, "A", true);
-    block(check, Tr(i18n::StringId::BtnCheckUpdate), Tr(i18n::StringId::SubCheckUpdate), "X", false);
+    block(check, Tr(i18n::StringId::BtnCheckUpdate), UpdateSubtitle(), "X", false,
+          m_update_running);
     if (uninstall != nullptr) {
         block(uninstall, Tr(i18n::StringId::BtnUninstall), Tr(i18n::StringId::SubUninstall), "Y",
               false);
@@ -1372,9 +1575,18 @@ void App::RenderDetails(Surface surface) {
     } else if (m_report.build.version != 0) {
         game = std::to_string(m_report.build.version);
     }
-    /* Just the version: the commit is a development detail and lives in the log. */
-    const std::string agent = m_have_manifest ? m_manifest.agent.version
-                                              : std::string(Tr(i18n::StringId::ValueNotInstalled));
+    /* The version on the card first -- that is the fact about this console; the commit is a
+       development detail and lives in the log.  When this build of the app carries a different
+       release (a network update went further than the app), the same row says so, which is the
+       one difference a person reading this page needs to understand. */
+    std::string agent =
+        m_have_state ? m_state.agent_version : std::string(Tr(i18n::StringId::ValueNotInstalled));
+    /* Only the release compiled into this build counts as "bundled"; a newer manifest fetched
+       from the release host is something to install, not something the app carries. */
+    const std::string carried = m_manifest_embedded ? m_manifest.agent.version : std::string();
+    if (m_have_state && !carried.empty() && carried != agent) {
+        agent = i18n::Format(i18n::StringId::ValueAgentCarried, agent.c_str(), carried.c_str());
+    }
     char record[96];
     if (m_have_state) {
         std::snprintf(record, sizeof(record), Tr(i18n::StringId::ValueInstallRecord),
@@ -1437,15 +1649,21 @@ void App::RenderDetails(Surface surface) {
          Tr(m_language == i18n::Language::ZhHans ? i18n::StringId::LanguageChinese
                                                  : i18n::StringId::LanguageEnglish),
          kText, 1});
-    advanced_rows.push_back({Tr(i18n::StringId::LabelManifestSource),
-                             m_manifest_embedded
-                                 ? std::string(Tr(i18n::StringId::ValueEmbeddedManifest))
-                                 : m_dev_manifest_path +
-                                       (m_allow_dev_manifest ? "  [dev allowed]" : ""),
-                             kText, 1});
-    advanced_rows.push_back({Tr(i18n::StringId::LabelUpdateCheck),
-                             m_update_status.empty() ? Tr(i18n::StringId::ValueNotChecked)
-                                                     : m_update_status,
+    /* Which manifest the next install would actually use -- not which one happens to sit in
+       .rodata: while a verified newer release is adopted, the files come from the network, and
+       a row that keeps saying "bundled with the app" is the kind of lie that costs an hour of
+       support time. */
+    std::string manifest_source;
+    if (m_have_update_manifest) {
+        manifest_source = i18n::Format(i18n::StringId::ValueNetworkManifest,
+                                       ActiveManifest().agent.version.c_str());
+    } else if (m_manifest_embedded) {
+        manifest_source = std::string(Tr(i18n::StringId::ValueEmbeddedManifest));
+    } else {
+        manifest_source = m_dev_manifest_path + (m_allow_dev_manifest ? "  [dev allowed]" : "");
+    }
+    advanced_rows.push_back({Tr(i18n::StringId::LabelManifestSource), manifest_source, kText, 1});
+    advanced_rows.push_back({Tr(i18n::StringId::LabelUpdateCheck), UpdateDetailText(),
                              kText, 2});
 
     /* The details page carries every row we keep; the language switch can make the text longer
@@ -1516,8 +1734,8 @@ void App::RenderConfirm(Surface surface, bool uninstall) {
         action = std::string(Tr(i18n::StringId::BtnUninstall));
     } else if (m_plan.action == install::PlanAction::Repair) {
         action = std::string(Tr(i18n::StringId::BtnRepair));
-    } else if (!m_newer_agent.empty()) {
-        action = i18n::Format(i18n::StringId::BtnUpdate, m_newer_agent.c_str());
+    } else if (!NewerAgentVersion().empty()) {
+        action = i18n::Format(i18n::StringId::BtnUpdate, NewerAgentVersion().c_str());
     } else {
         action = std::string(Tr(i18n::StringId::BtnInstall));
     }
@@ -1529,7 +1747,7 @@ void App::RenderConfirm(Surface surface, bool uninstall) {
     if (!uninstall) {
         rows.push_back({nullptr,
                         i18n::Format(i18n::StringId::ConfirmWillInstall,
-                                     m_manifest.agent.version.c_str()),
+                                     ActiveManifest().agent.version.c_str()),
                         kSubtle, 1});
     } else {
         rows.push_back({nullptr, Tr(i18n::StringId::SubUninstall), kSubtle, 1});
@@ -1636,6 +1854,57 @@ void App::RenderConfirm(Surface surface, bool uninstall) {
 void App::RenderInstall(Surface surface) { RenderConfirm(surface, false); }
 
 void App::RenderUninstall(Surface surface) { RenderConfirm(surface, true); }
+
+/* The progress page exists because the install/uninstall engine runs on the frame-loop thread:
+   nothing can animate while it works, so the honest thing to do is say what is happening.  One
+   frame goes up before the first byte moves and one after every file (see BeginProgress /
+   UpdateProgress); a player watching a network download therefore sees "Installing the agent /
+   subsdk9 (1/3)" instead of a frozen confirmation page. */
+void App::BeginProgress(bool uninstall, int total) {
+    m_progress_uninstall = uninstall;
+    m_progress_step.clear();
+    m_progress_index = 0;
+    m_progress_total = total;
+    m_page = Page::Progress;
+    Render();
+}
+
+/* Called from the engine's callback: same thread as the frame loop, between two files, so
+   nothing else is drawing or reading the card at that moment. */
+void App::UpdateProgress(const install::Progress &progress) {
+    m_progress_step = progress.step;
+    m_progress_index = progress.index;
+    m_progress_total = progress.total;
+    Render();
+}
+
+void App::RenderProgress(Surface surface) {
+    /* Nothing on this page is pressable and no keys are handled while it is up (the engine owns
+       the thread), so it carries no controls and no chrome (see AddChromeActions). */
+    m_actions.clear();
+    const int width = surface.width - kMargin * 2;
+    const int value_width = width - kCardPadX * 2 - kLabelColumn;
+    const int page_top = kHeaderHeight + kMargin / 2;
+    const int page_bottom = surface.height - kFooterHeight - kCardGap;
+    const Surface page = surface.Clipped(0, page_top, surface.width, page_bottom - page_top);
+
+    std::vector<Row> rows;
+    rows.push_back({nullptr,
+                    Tr(m_progress_uninstall ? i18n::StringId::ProgressUninstalling
+                                            : i18n::StringId::ProgressInstalling),
+                    kText, 1, kFontTitle});
+    rows.push_back({nullptr, Tr(i18n::StringId::ProgressNote), kSubtle, 2});
+    if (!m_progress_step.empty()) {
+        std::string current = m_progress_step;
+        if (m_progress_total > 0) {
+            current += " (" + std::to_string(m_progress_index) + "/" +
+                       std::to_string(m_progress_total) + ")";
+        }
+        rows.push_back({Tr(i18n::StringId::LabelProgressFile), current, kText, 1});
+    }
+    DrawCard(page, page_top, page_bottom, width, value_width, nullptr, rows, kRowGap, false,
+             kCardPadBottom);
+}
 
 void App::RenderResult(Surface surface) {
     /* One line about what happened, one line of consequence, one button.  Details keep the

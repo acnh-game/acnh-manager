@@ -105,10 +105,13 @@ def main(argv: list[str] | None = None) -> int:
     if banner.is_file():
         (package_dir / "screen.png").write_bytes(banner.read_bytes())
 
-    # pkgbuild.json for the official data repo: the update asset points at our release download
-    # (the project is hosted on GitLab, tag first; the permalink is the release's asset link).
-    release_url = (f"https://gitlab.com/acnh-game/acnh-manager/-/releases/"
-                   f"v{version}/downloads/{args.nro.name}")
+    # pkgbuild.json for the official data repo.  The update asset points at the published NRO,
+    # which -- like the manifest and the agent's three files -- is served straight out of the
+    # repository by Gitee's raw endpoint (see docs/release-process.md 6).  The version is in the
+    # file name on purpose: an update asset has to keep pointing at the NRO of *its* version,
+    # not at whatever was published last.  tools/release.sh copies the built NRO into that path.
+    release_url = (f"https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/"
+                   f"acnh-manager-{version}.nro")
     pkgbuild = {
         "package": name,
         "info": {

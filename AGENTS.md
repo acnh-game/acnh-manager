@@ -30,24 +30,27 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 ⑤ 改过文案表必须跑 `python3 tools/check-i18n.py`:它校验 `StringId` 枚举与 `strings.cpp` 的表**逐条同序**
    并打印条目总数(`make -C tests` 也会调用它)。
 
-## 仓库托管(GitLab)
+## 仓库托管(Gitee)
 
-- 本仓库托管在 **GitLab**:`https://gitlab.com/acnh-game/acnh-manager`(公开),remote 为
-  `git@gitlab.com:acnh-game/acnh-manager.git`。`packaging/listing.json` 的 `url` 必须与它一致
-  (商店条目读这里;agent 文件与清单也由本仓库的 GitLab raw 地址对外提供);仓库必须公开,
-  官方商店要求源码可查,而且 raw 端点本来就只认公开仓库。
-- 本机与 GitLab 打交道一律用 **`glab`**(1.118.x;`glab auth status` 显示 gitlab.com / leolovenet,
-  token 在系统钥匙串)。它和 `gh` 一样要联网,**沙盒里必须 escalation**:
-  - 查看:`glab repo view`、`glab release list`、`glab issue list`;
-  - 发版:`glab release create v<版本> ./acnh-manager.nro` —— tag 必须叫 `v<版本>`,NRO 要作为
-    资产链接附上(permalink 形状是商店包 update 资产的硬要求,见 `docs/store-listing.md` 上架清单);
-  - 推送与打 tag 直接用 git 本身,**普通 `git push` 就行**:`git push`、`git push origin v<版本>`。
-    remote 是 HTTPS(`https://gitlab.com/acnh-game/acnh-manager.git`),凭据由全局配置
-    `credential.https://gitlab.com.helper=""` 与 `credential.https://gitlab.com.helper="!glab auth git-credential"`
-    提供(即 `glab` 那把 token;第一行是清空,用来绕开钥匙串里那条已失效的 gitlab.com 记录)。
-    本机到 gitlab.com 的 SSH(22/443)经常直接超时,**别把 remote 改回 `git@`**;换机器时照上面两行配一次即可;
-- 工作区里别的项目仍在 GitHub(上游 libnx 的 issue、根 `AGENTS.md` 里 `gh` 那条规矩),两者不要混用:
-  本仓库的一切远端操作都走 GitLab。
+- 本仓库托管在 **Gitee**:`https://gitee.com/acnh-game/acnh-manager`(公开),remote 为
+  `git@gitee.com:acnh-game/acnh-manager.git`(SSH)。`packaging/listing.json` 的 `url` 必须与它一致
+  (商店条目读这里);仓库必须公开:官方商店要求源码可查,而且 raw 端点本来就只认公开仓库。
+- **对外托管的四个地址都是 Gitee raw**:`https://gitee.com/acnh-game/acnh-manager/raw/main/<仓库内路径>`。
+  raw 请求会 302 到
+  `raw.giteeusercontent.com` 的带签名地址(App 的 libcurl 开了跟随跳转,匿名可取,已实测)。
+- 本机与 Gitee 打交道用 **`gitee` CLI**(v0.3.0;`gitee auth status` 显示 gitee.com / leolovenet)。
+  它要联网,**沙盒里必须 escalation**:
+  - 查看:`gitee repo view`、`gitee release list`、`gitee issue list`;
+  - 任意 API:`gitee api /repos/acnh-game/acnh-manager/releases`(带认证;`--search` 能查端点);
+  - 发版页:`gitee release create --tag v<版本> -n "..." -b "..."`(**CLI 不能给发行版传附件**,
+    所以 NRO 不走发行版资产,见下);
+- **NRO 就是仓库里的一个文件**:`packaging/nro/acnh-manager-<版本>.nro`,由 `tools/release.sh`
+  第 5 步拷进去,raw 地址就是商店包 update 资产与指南页指向的 permalink(带版本号是有意的:
+  某个版本的 update 资产必须永远指向那个版本的 NRO)。
+- 推送与打 tag 直接用 git:**普通 `git push` 就行**(SSH,本机 key 已注册):
+  `git push`、`git tag v<版本> && git push origin v<版本>`。
+- 工作区里别的项目仍在 GitHub(根 `AGENTS.md` 里 `gh` 那条规矩),两者不要混用;
+  Gitee CLI 与 `gh` 是两套身份,别拿 `gh` 去碰本仓库的远端。
 
 ## 纪律
 
@@ -72,10 +75,20 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   且详情页显式允许"时才被读取。**发布包、商店包、指南站下发物、用户卡上都不得包含这两个**;
   开发卡上的这份必须与当前发布版一致(刷法:把 `packaging/agent/<版本>/` 的三个产物与
   `manifest.json` 推到 `payload/` 与 `dev-manifest.json`),避免回退时装到过期 payload。
-- **SD 路径必须走 `util::FsPath`**:任何交给 `fs*` 的路径都要先复制进它(`source/util/fs_path.hpp`)。
-  `fs*` 按声明长度 `FS_MAX_PATH` 映射一段页对齐 IPC 窗口,路径落在映射末尾 0x301 字节内就会得到
-  `0xD401`(`InvalidMemoryState`)——看着像"卡或会话坏了",实际是缓冲位置;真机根因与追踪数据见
-  `docs/architecture.md` 第 4.2 节。新增对 SD 的访问时同样照此办理。
+- **交给 `fs*` 的缓冲必须自己盖住整个声明窗口**:`fs*` 按声明长度 `FS_MAX_PATH`(0x301)映射一段
+  页对齐 IPC 窗口,所以 `[buf, buf + FS_MAX_PATH)` 必须落在**那块缓冲自己的字节里** —— 路径落在
+  映射末尾 0x301 字节内就会得到 `0xD401`(`InvalidMemoryState`),看着像"卡或会话坏了",实际是
+  缓冲位置。做法:路径先复制进 `util::FsPath`(`source/util/fs_path.hpp`);缓冲是数组时(局部变量
+  或结构体成员,如 `Log::Sink::path`),数组本身也必须 ≥ `FS_MAX_PATH`,并用 `static_assert` 钉住
+  尺寸。引擎、环境探测、主程序、日志与开发开关检查都照此办理(真机根因与追踪数据见
+  `docs/architecture.md` 第 4.2 节);唯一例外是演示用的 `probe.cpp`,它故意把裸指针交给 `fs*`。
+- **发布清单必须签名**:`tools/sign-manifest.py --key ~/.acnh/acnh-manager-signing-key.pem`
+  (私钥放本地密钥目录 `~/.acnh/`,600,不入库,要备份)把根目录 `agent-manifest.json`
+  签成 `agent-manifest.json.sig`(名字就是"清单文件名 + `.sig`",App 按这个规则去取),两个文件一起提交。
+  私钥不入库,公钥 `data/agent_pubkey.bin` 入库并编进 NRO;漏签或换钥的后果见
+  `docs/architecture.md` 第 9.2 节。
+- **工作线程的栈必须页对齐**:`threadCreate` 对调用方给的栈要求 `0x1000` 对齐,否则直接返回
+  `LibnxError_BadInput`(`0x1759`),而且只在真机显现(`source/net/update_task.cpp`)。
 
 ## 语言约定
 
@@ -130,17 +143,22 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 - `source/version.hpp`:运行中的版本号,由 Makefile 的 `APP_VERSION` 经 `-DACNH_APP_VERSION`
   注入(和构建戳同一条路);清单门控的 `app.minVersion` 校验、日志与文本界面都用它。
   **不要在别处再写死版本字符串** —— 漏改一处就会用错版本去校验清单。
-- `source/manifest/`:清单解析与校验(纯逻辑,可主机测试);`source/install/`:门控判定、安装决策与
-  `state.json`(同上);`source/payload/`:内嵌发布通道(读 `data/` 里 bin2s 生成的符号);
-  `source/ui/`:界面层;`source/net/`:联网检查。
+- `source/manifest/`:清单解析与校验(纯逻辑,可主机测试);`source/install/`:门控判定、安装决策、
+  写盘引擎与 `state.json`(判定部分同上),外加从发布端取 payload 的 `network_source.*`;
+  `source/payload/`:内嵌发布通道(读 `data/` 里 bin2s 生成的符号,含验签用的公钥);
+  `source/ui/`:界面层;`source/net/`:联网检查(`http.*` 唯一传输、`signature.*` 验签、
+  `update.*` 取清单+验签+解析、`update_policy.hpp` 决定"这份远端清单能不能当安装来源"、
+  `update_task.*` 工作线程)。
   界面层里这几块纯逻辑单独成头文件、由主机测试钉住:`ui/action.hpp`(`HitTest`/`MoveFocus`/`TapTracker`)、
   `ui/header_tabs.hpp`(页眉标签页几何:绘制与命中矩形共用)、`ui/home_state.hpp`(首页八态分类)、
   `ui/settings.hpp`(`settings.json` 的往返:界面语言必须活过重启与卸载)——
   改规则时先改头文件与 `tests/host_tests.cpp`。
-- `data/`:内嵌发布清单与 payload 的 bin2s 构建输入(由导入工具生成,入库)。
+- `data/`:内嵌发布清单与 payload 的 bin2s 构建输入(由导入工具生成,入库),外加
+  `data/agent_pubkey.bin` —— 验签用的公钥(由 `tools/make-signing-key.py` 生成,入库,编进 NRO)。
 - `packaging/agent/<版本>/`:发布记录(subsdk9 / main.npdm / acnh-agent.version / manifest.json),
-  与 `data/` 同源,也是对外托管的四个文件(玩家侧靠 GitLab raw 直取;仓库根目录还有一份
+  与 `data/` 同源,也是对外托管的四个文件(玩家侧靠 Gitee raw 直取;仓库根目录还有一份
   `agent-manifest.json` 是它的副本,给 App 的更新检查读);`packaging/agent-lock.json` 是发布锁。
+  `packaging/nro/`:每次发布拷进来的 `acnh-manager-<版本>.nro`(对外下载就是它的 raw 地址)。
 - `tools/`:开发与真机迭代工具(见 `docs/tools-guide.md`)。
 - `tests/`:主机侧单元测试(`make -C tests`);`packaging/`:M4 放商店打包与 `pkgbuild.json`;
   `docs/device-acceptance.md`:M5 写真机验收记录。
@@ -152,7 +170,7 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 | `README.md` | 项目概览与当前支持范围 |
 | `docs/architecture.md` | 架构、版本识别与门控、SD 布局、环境检查(改行为前必读) |
 | `docs/tools-guide.md` | 本仓库工具的用法与登记 |
-| `docs/release-process.md` | 发布流程:导入门控、商店打包、上架与 GitLab 托管地址(发布前必读) |
+| `docs/release-process.md` | 发布流程:导入门控、商店打包、上架与 Gitee 托管地址(发布前必读) |
 | `docs/store-listing.md` | 商店条目元数据与素材要求(改对外文案前) |
 | `docs/device-acceptance.md` | 真机验收矩阵与基线环境(每次真机验收后更新) |
 | `../../docs/acnh_manager_plan.md` | 产品定稿方案(跨仓库决策) |

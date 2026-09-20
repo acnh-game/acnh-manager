@@ -524,7 +524,8 @@ void RunWriteProbe(Log &log, FsFileSystem &sd) {
    The probe separates that from "the session lost the card": the same create is tried with a
    page-aligned static buffer and with a heap buffer, in `/switch` and in the game directory,
    and `svcQueryMemory` is asked about the first and last page of each IPC window.  That is how
-   the case was pinned down (`docs/device-acceptance.md`, "路径贴着映射边界").
+   the case was pinned down (the "a path sitting against a mapping boundary" section of
+   `docs/device-acceptance.md`).
 
    The raw `fsFs*` calls below are deliberate: this probe exists to show what the *unprotected*
    pointer does, so the paths are not copied into `util::FsPath` here. */

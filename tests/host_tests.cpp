@@ -13,6 +13,7 @@
 #include "env/config_ini.hpp"
 #include "i18n/strings.hpp"
 #include "install/gate.hpp"
+#include "net/update_policy.hpp"
 #include "util/json.hpp"
 #include "manifest/manifest.hpp"
 #include "util/sha256.hpp"
@@ -70,7 +71,7 @@ std::string SampleManifest() {
   "generated": "2026-09-17T00:00:00Z",
   "app": { "minVersion": "0.1.0" },
   "agent": { "version": "0.11.0", "commit": "4ac89fd403b7", "dirty": false, "buildFlags": 2 },
-  "baseUrl": "https://gitlab.com/acnh-game/acnh-manager/-/raw/main/packaging/agent/0.11.0/",
+  "baseUrl": "https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/agent/0.11.0/",
   "changelog": "test fixture",
   "games": [
     {
@@ -280,6 +281,60 @@ void TestGate() {
     game_closed.module_id_known = false;
     game_closed.module_id.clear();
     CHECK(Evaluate(manifest, game_closed).status == GateStatus::Supported);
+}
+
+/* Which release manifests this app is willing to install from.
+
+   The case that matters is the last one: a newer release that does *not* cover this console's
+   game build.  Adopting it made the app call a perfectly supported console "unsupported" (and
+   killed the primary button) until this rule was extracted here -- reproduced on hardware on
+   2026-09-20 with a signed manifest listing only 4.0.0 while the console ran 3.0.3. */
+void TestUpdateAdoption() {
+    using acnh_manager::install::DetectedBuild;
+    using acnh_manager::install::Evaluate;
+    using acnh_manager::install::Plan;
+    using acnh_manager::install::PlanAction;
+    using acnh_manager::net::DecideAdoption;
+    using acnh_manager::manifest::Manifest;
+
+    const auto parsed = acnh_manager::manifest::Parse(SampleManifest(), "0.1.0");
+    CHECK(parsed.ok);
+    const Manifest &remote = parsed.manifest; /* agent 0.11.0, games[] = ACNH 3.0.3 */
+    const DetectedBuild build = Detected();
+
+    /* Nothing to compare against: never the install source. */
+    auto nothing = DecideAdoption(remote, build, "");
+    CHECK(!nothing.newer && !nothing.adopt && !nothing.unsupported);
+
+    /* Same version: "nothing to do", not an update. */
+    auto equal = DecideAdoption(remote, build, "0.11.0");
+    CHECK(!equal.newer && !equal.adopt && !equal.unsupported);
+
+    /* Older on the card, release covers this build: this is the update path. */
+    auto newer_ok = DecideAdoption(remote, build, "0.10.0");
+    CHECK(newer_ok.newer && newer_ok.adopt && !newer_ok.unsupported);
+
+    /* Newer, but it does not know this build any more (a new game version shipped): keep the
+       release compiled into the app, and say why instead of claiming "up to date". */
+    Manifest for_4_0_0 = remote;
+    for_4_0_0.agent.version = "0.11.1";
+    for_4_0_0.games[0].version = 2686976; /* 4.0.0 */
+    for_4_0_0.games[0].display_version = "4.0.0";
+    auto unsupported = DecideAdoption(for_4_0_0, build, "0.11.0");
+    CHECK(unsupported.newer && !unsupported.adopt && unsupported.unsupported);
+
+    /* Same game version, different update content id (the manifest expects a build this
+       console does not have): also not adopted. */
+    Manifest other_content = remote;
+    other_content.agent.version = "0.11.1";
+    other_content.games[0].content_id = "29A8CE65E45B800CBC73214B7B818F68";
+    auto mismatch = DecideAdoption(other_content, build, "0.11.0");
+    CHECK(mismatch.newer && !mismatch.adopt && mismatch.unsupported);
+
+    /* Not adopting a release is not the same as allowing writes onto an unknown build: with
+       nothing installed, the gate still refuses to install that manifest's files. */
+    const auto gate = Evaluate(&for_4_0_0, build);
+    CHECK(Plan(gate, nullptr, for_4_0_0.agent).action == PlanAction::Blocked);
 }
 
 void TestPlan() {
@@ -775,6 +830,7 @@ int main() {
     TestManifestRejects();
     TestHelpers();
     TestGate();
+    TestUpdateAdoption();
     TestPlan();
     TestOverrideConfig();
     TestStrings();

@@ -5,6 +5,7 @@
   "buildFlags": 2,
   "nsoSha256": "c47d2b4783a15978aa863d71a4b82f384b7abae636f085a88b4bf041f404c0ba",
   "npdmSha256": "23eea4eda50c345ee97c971708dcb16efdf091c5bc852fa57c152669104d05ba",
+  "signingPublicKeySha256": "386769f0bf9ad7fddf5fc1e812ee079f2c53caa509aae00887c8da207e73277d",
   "game": {
     "profile": "v3_0_3",
     "titleId": "01006F8002326000",

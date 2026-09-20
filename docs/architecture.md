@@ -129,11 +129,20 @@ fsop:   window=0x329C697E80..0x329C698181 region_end=0x329C698000 last_page type
 分配器决定,因此 `std::string` 拼出来的路径有时好有时坏,重启应用后又换一个位置,表现为"时好
 时坏、失败点还会在文件之间漂移"。
 
-**规则:任何交给 `fs*` 的路径都必须先复制进 `util::FsPath`**(`source/util/fs_path.hpp`)——
-它是一个长度 `2 × FS_MAX_PATH` 的局部缓冲,窗口不可能越出它。引擎、环境探测与主程序的每一次
-带路径的 `fs*` 调用都走这个类型;新增对 SD 的访问时也照此办理。
+**规则:交给 `fs*` 的缓冲必须自己盖住整个声明窗口** —— `[buf, buf + FS_MAX_PATH)` 要落在那块缓冲
+自己的字节里。两条做法缺一不可:路径先复制进 `util::FsPath`(`source/util/fs_path.hpp`,长度
+`2 × FS_MAX_PATH` 的局部缓冲);缓冲本身就是数组时(局部变量或结构体成员),数组也**必须 ≥
+`FS_MAX_PATH`**,并用 `static_assert` 钉住尺寸。引擎、环境探测、主程序、日志与开发开关检查现在都
+照此办理;新增对 SD 的访问时同样如此 —— 不要把调用者的指针直接递下去。
 
-上游同因已提 issue(建议 libnx 改传 `strlen(path) + 1`):<https://github.com/switchbrew/libnx/issues/738>。
+**平台自己就是这么做的**:在带符号的官方 SDK NSO 里核对过
+`nn::fs::detail::FileSystemServiceObjectAdapter::DoCreateFile` —— 它把路径拷进自己的一块
+`FS_MAX_PATH` 零填充缓冲,长度装不下时返回 fs 的 `TooLongPath`(6003),然后把**这块缓冲**按完整
+声明长度发出去;既从不转发调用者的指针,也从不缩小声明长度。也就是说"把声明改成
+`strlen(path) + 1`"不是官方形状,本仓库不采用。
+
+libnx 侧那份报告已被上游移到**非公开仓库**(链接对普通账号不可见),本仓库看不到它、也不跟踪它
+的状态:上面这条规则是本仓库自己的保险,不依赖上游是否修改。
 
 ## 5. M0 环境探测(spike)
 
@@ -270,7 +279,7 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 |---|---|
 | `source/ui/gfx.*` | framebuffer 上的最小绘制层:填充、矩形、描边、带 alpha 的像素混合 |
 | `source/ui/font.*` | FreeType + 主机共享字体(`plGetSharedFontByType`,Standard/简中/扩展简中/繁中/韩文),带按字号分组的字形缓存;缺字自动换下一款字体 |
-| `source/ui/app.*` | 页面状态机(首页 / 详情 / 安装确认 / 卸载确认 / 结果)、输入处理、卡片式布局与渲染;首页状态由 `ui/home_state.hpp` 的八态分类决定 |
+| `source/ui/app.*` | 页面状态机(首页 / 详情 / 安装确认 / 卸载确认 / **进度** / 结果)、输入处理、卡片式布局与渲染;首页状态由 `ui/home_state.hpp` 的八态分类决定 |
 | `source/ui/settings.*` | 用户设置(`settings.json`,目前只有界面语言)的解析与序列化(纯逻辑,主机可测) |
 | `source/i18n/strings.*` | 简中 / English 双语文案表(`StringId` 枚举 + 两列),由主机测试保证两边都补齐 |
 | `source/util/text_wrap.hpp` | 折行规则(纯函数,主机可测):拉丁文本按空格断词、超长单词才中段断、CJK 按字断、`\n` 强制换行 |
@@ -301,6 +310,8 @@ spike 只读:不写游戏目录,不创建 `state.json`。
   (`ui/header_tabs.hpp` 的 `LayoutHeaderTabs`,页脚的 `LayoutFooterHint`),避免"画得到、
   点不到"再次发生(真机收到过这个反馈)。这些外壳控件在每页自己的控件**之后**追加,进入页面
   仍落在主按钮上;只读页(详情)开头清空动作表,点空白处不会误触上一页的按钮。
+  **唯一的例外是进度页**:安装/卸载期间引擎占着这条线程,页面上不放任何控件,也不处理按键,
+  于是它连页眉标签与页脚提示都不画(画了就是"画得到、点不到"的反面教材)。
 
 ### 7.1 绘制与排版约定
 
@@ -393,29 +404,64 @@ spike 只读:不写游戏目录,不创建 `state.json`。
   它留在开发用的文本界面(`ui-text`,默认开启,按 `Y` 切换;那个界面里开发清单开关是 `ZL`)。
   两边的确认页都会列出将要写入的文件与大小。
 
-## 9. 联网检查更新(M3)
+## 9. 联网检查更新与一键更新
+
+一次检查要做三件事:把清单取回来、证明它是我们发的、必要时把它当升级来源用。每一段各管一件事:
 
 | 模块 | 职责 |
 |---|---|
-| `source/net/update.*` | 用 libcurl + mbedTLS 拉取发布清单;连接 5s / 总 8s 超时,响应上限 512 KiB;**不做 TLS 证书校验**(原因见下) |
+| `source/net/http.*` | 本仓库唯一的 HTTPS 传输(libcurl + mbedTLS,套在 libnx 的 BSD socket 服务上)。只接受 `https://`;连接 5s、总 8s 超时;正文有上限(清单 512 KiB、payload 4 MiB);失败以**数据**返回(outcome + 原文诊断),从不抛异常或终止进程;**TLS 证书校验关闭**(原因见 9.1) |
+| `source/net/signature.*` | mbedTLS 验签(ECDSA P-256),公钥来自编进 NRO 的 `data/agent_pubkey.bin` |
+| `source/net/update.*` | 拉清单 → 拉同址的 `.sig` → 验签 → 解析;返回 `UpdateOutcome` + 原文诊断(玩家侧措辞由界面按当前语言渲染) |
+| `source/net/update_task.*` | 工作线程(128 KiB 静态栈):检查在独立线程上跑,界面每帧 `Take()` 一次结果 |
+| `source/install/network_source.*` | 按 `baseUrl + files[].source` 下载 payload;落盘的信任来自引擎自己的校验(每个文件先对清单里的 size + sha256) |
 
-行为约定:
+### 9.1 为什么可以关掉 TLS 校验
 
-- **只检查,不决策**:拿不到清单时静默保留内置/本地清单,并记录原因;失败绝不影响安装门控;
-- **TLS 证书校验关闭(2026-09-18 的决定)**:与这台机器上的其它自制软件一致(Sphaira 的下载代码同样是
-  `CURLOPT_SSL_VERIFYPEER 0` + `VERIFYHOST 0`)。原因是**这条技术栈根本没有信任锚**:mbedTLS 设计上
-  不带任何根证书,libcurl 的 Switch 版够不到系统自己的证书库(在 Atmosphere 的 `ssl` 服务后面,
-  libnx 的 `ssl.h` 里能看到 DigiCert / ISRG / GlobalSign 等一长串),而镜像里的 libcurl 是 7.69.1,
-  早于 `CURLOPT_CAINFO_BLOB`(7.71),内嵌 bundle 只能落成 SD 上的文件、还得我们自己负责更新。
-  因此这个检查的定位是**版本提示,不是分发通道**:
-  - 它从不安装任何东西(装的文件来自 NRO 内置 payload);
-  - 所以被中间人换掉的答案,最多让首页显示一个并不存在的"新版本",改不了写进游戏目录的内容;
-  - **边界条件**:现在的语义只是"提示有新版本",真正的升级靠换 NRO;一旦这条路径开始下载或安装
-    内容,TLS 校验(或清单签名 + 内嵌公钥验签)必须先补上再谈;
-- 目标是 `https://gitlab.com/acnh-game/acnh-manager/-/raw/main/agent-manifest.json` —— 仓库根目录
-  那份清单,由导入工具随发布记录一起刷新(与商店包、安装用的是同一份数据);
-- 触发方式:目前是首页按 `X` 手动触发(阻塞式,数秒)。**启动时静默检查需要工作线程**,
-  留到 M5 与界面一起收尾。
+与这台机器上的其它自制软件一致(Sphaira 的下载代码同样是 `CURLOPT_SSL_VERIFYPEER 0` +
+`VERIFYHOST 0`),原因是**这条技术栈根本没有信任锚**:mbedTLS 设计上不带任何根证书,libcurl 的
+Switch 版够不到系统自己的证书库(在 Atmosphere 的 `ssl` 服务后面,libnx 的 `ssl.h` 里能看到
+DigiCert / ISRG / GlobalSign 等一长串),而镜像里的 libcurl 是 7.69.1,早于
+`CURLOPT_CAINFO_BLOB`(7.71),内嵌 bundle 只能落成 SD 上的文件、还得我们自己负责更新。
+(2026-09-18 的决定:关闭校验;2026-09-19 起用清单签名补上内容可信。)
+
+关键不是"连接可信",而是"内容可信":能写进游戏目录的每一个字节都由清单的 sha256 定死,
+而清单本身必须先通过验签 —— 见 9.2。中间人换得掉连接,换不出一个能过验签的清单。
+
+### 9.2 清单签名(内容可信的根)
+
+- 私钥只存在发布机上,放在本地密钥目录 `~/.acnh/acnh-manager-signing-key.pem`(权限 600,不入库,
+  要备份);公钥 `data/agent_pubkey.bin` 编进 NRO,随 NRO 一起发给玩家;
+- 这把公钥同时在两处留痕:发布锁的 `signingPublicKeySha256`(自检比对,让换钥匙在 diff 里显式
+  出现)与 NRO 的 `.rodata`(自检核对 NRO 里编的确实是当前那把);
+- 签名文件与清单同址:URL 加后缀 `.sig`(`agent-manifest.json` → `agent-manifest.json.sig`),
+  格式就是 `openssl dgst -sha256 -sign` 的 DER;
+- 验签失败(缺签名 / 不通 / 本 build 没带公钥)= 清单不可用:不解析、不显示版本、更不会下载;
+- 因此**每次发布都必须重新签名**清单,否则线上每一个 App 都会把它当垃圾丢掉
+  (`tools/sign-manifest.py`,流程见 `docs/release-process.md` 第 6 节);
+- 换私钥等于换身份:已发出去的 App 只认旧公钥,新清单会全部验签失败,只能靠换 NRO 才能追上。
+
+### 9.3 界面行为
+
+- **启动时静默检查一次**:有新版首页自己变成"更新到 X";失败静默降级为内置版本
+  (原因只进 `log.txt` 与详情页,不打扰玩家);
+- 首页按 `X` 手动检查,结果写在按钮副标题上(进行中画 spinner);无论成功失败都写上;
+- 检查跑在工作线程上,**整个界面在检查期间照常响应**(改之前是同步调用,整个 App 会卡住数秒);
+- 远端清单只在**比本机已装版本更新、并且门控接受本机构建**时才会成为安装来源(规则是
+  `net/update_policy.hpp` 里的纯函数,由主机测试钉住):更新就是"下载 → 按清单校验 → 安装"。
+  只"更新"但不再覆盖本机构建的版本**不会**顶掉自带发布,而是如实显示"新版 X 不支持当前游戏
+  版本";否则一台本来可用的机器会被自己的更新检查判成"不支持"(2026-09-20 真机复现);
+- **安装期间有进度页**:引擎在帧循环线程上跑,所以 `Page::Progress` 在第一字节之前先画一帧、
+  每处理完一个文件再画一帧(`BeginProgress`/`UpdateProgress`),这张页面上没有可点的控件、也不
+  处理按键——它只是把"应用卡住了"变成"正在处理 subsdk9(1/3)";
+- 工作线程建不起来(例如 `threadCreate` 返回 `0x1759`)也按失败上报,而不是让按钮变成"按了没反应"。
+
+### 9.4 语义边界
+
+- **检查失败不影响安装**:装什么由内嵌(或开发通道)清单决定,联网只提供"有没有更新的版本";
+- 目标地址是 `https://gitee.com/acnh-game/acnh-manager/raw/main/agent-manifest.json`
+  (仓库根目录那份,由导入工具随发布记录一起刷新,与商店包、内嵌 payload 同源);
+- 地址是编译期常量:换托管方 = 重新发一版 NRO。
 
 ## 10. 退出路径与 hbl 的进程复用
 

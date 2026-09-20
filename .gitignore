@@ -1,6 +1,9 @@
 build/
 dist/
 *.nro
+# ...except the published copy: players and the store download it by raw URL, so it has to be
+# tracked (tools/release.sh step 5 puts it here).
+!packaging/nro/*.nro
 *.nacp
 *.elf
 *.lst

@@ -21,6 +21,11 @@ namespace acnh_manager::payload {
 /* JSON text of the embedded release manifest; length 0 when no release was imported. */
 std::string_view EmbeddedManifestJson();
 
+/* PEM public key of the release-signing key (`data/agent_pubkey.bin`), which is what makes the
+   downloaded manifest trustworthy even though TLS verification is off.  Empty when the build
+   carries no key -- the update check then refuses to trust anything from the network. */
+std::string_view EmbeddedAgentPublicKeyPem();
+
 /* Whether the manifest and all three payload files are present. */
 bool EmbeddedAvailable();
 
