@@ -2,6 +2,7 @@
 
 #include <switch.h>
 
+#include <cstddef>
 #include <cstdio>
 #include <string>
 
@@ -23,9 +24,29 @@ namespace acnh_manager::util {
    Which allocation lands at the end of its region is up to the allocator, so a `std::string`
    built by concatenation can be the last thing in the heap -- and then every install fails
    until the app is restarted.  Copying the path in here first removes that possibility: the
-   object is a local, and it is twice `FS_MAX_PATH` long, so the window can never leave it. */
+   buffer belongs to this object and covers the whole declared window, so the window can never
+   leave it.
+
+   The platform's own fs client does exactly this.  Checked against the symbol-rich SDK NSO
+   (`nn::fs::detail::FileSystemServiceObjectAdapter::DoCreateFile`): it copies the string into a
+   zero-filled `FS_MAX_PATH` buffer, returns `fs` `TooLongPath` (6003) when the path does not fit,
+   and hands the service *that* buffer with the full declared length -- it never passes the
+   caller's pointer and never shrinks the declared size.  Two deliberate differences remain
+   here: the buffer is twice `FS_MAX_PATH` (the slack costs nothing and keeps the window well
+   inside the object), and an over-long path is truncated rather than reported, which is
+   acceptable because every path this app builds is a few tens of bytes long.
+
+   Status of the libnx-side report: it was moved to a repository that is not publicly readable,
+   so this repository does not wait for upstream -- the rule is enforced here either way. */
 class FsPath {
 public:
+    /* The invariant the whole class exists for: whatever we hand to fs* has to cover the entire
+       declared window by itself.  The assertion is what stops a future edit from shrinking this
+       back to something like the string's own length. */
+    static constexpr std::size_t kBufferSize = FS_MAX_PATH * 2;
+    static_assert(kBufferSize >= FS_MAX_PATH,
+                  "an fs* path buffer must cover the whole FS_MAX_PATH IPC window");
+
     explicit FsPath(const char *path) {
         if (path != nullptr) {
             std::snprintf(m_buf, sizeof(m_buf), "%s", path);
@@ -36,7 +57,7 @@ public:
     const char *c_str() const { return m_buf; }
 
 private:
-    char m_buf[FS_MAX_PATH * 2]{};
+    char m_buf[kBufferSize]{};
 };
 
 }  // namespace acnh_manager::util

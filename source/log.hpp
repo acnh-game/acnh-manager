@@ -6,16 +6,22 @@
 #include <cstdio>
 #include <cstring>
 
+#include "util/fs_path.hpp"
+
 namespace acnh_manager {
 
 /* Line-based log file on the SD card.  Uses the fs* API directly, no devoptab mount.
 
-   Two rules matter:
+   Three rules matter:
    1. **every line is opened -> written -> flushed -> closed**: that keeps the log readable
       over FTP while the app runs (an open handle makes fs answer "Device or resource
       busy") and loses nothing if we crash;
    2. fs cannot write past EOF, so the file is grown to the target length first (SetSize),
-      exactly like Sphaira's write_entire_file. */
+      exactly like Sphaira's write_entire_file;
+   3. **every path handed to fs goes through util::FsPath first**: fs declares `FS_MAX_PATH`
+      bytes for a path no matter how long it is, so the buffer has to be ours and cover that
+      whole window (`source/util/fs_path.hpp`, `docs/architecture.md` section 4.2).  That is
+      why the sink keeps its own path buffer instead of remembering the caller's pointer. */
 class Log {
 public:
     /* truncate = true: recreate the file (this run's log); false: append (kept across runs). */
@@ -23,23 +29,24 @@ public:
         if (m_sink_count >= kMaxSinks || path == nullptr) {
             return MAKERESULT(Module_Libnx, LibnxError_BadInput);
         }
+        const util::FsPath arg(path);
         Sink &sink = m_sinks[m_sink_count];
         if (truncate) {
-            fsFsDeleteFile(&sd, path);
+            fsFsDeleteFile(&sd, arg.c_str());
         }
-        const Result rc = fsFsCreateFile(&sd, path, 0, 0);
+        const Result rc = fsFsCreateFile(&sd, arg.c_str(), 0, 0);
         if (R_FAILED(rc) && rc != 0x00000402) { /* 402 = PathAlreadyExists */
-            std::printf("log: create %s failed rc=0x%08X\n", path, rc);
+            std::printf("log: create %s failed rc=0x%08X\n", arg.c_str(), rc);
             return rc;
         }
         s64 size = 0;
         FsFile file{};
-        if (R_SUCCEEDED(fsFsOpenFile(&sd, path, FsOpenMode_Read, &file))) {
+        if (R_SUCCEEDED(fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file))) {
             fsFileGetSize(&file, &size);
             fsFileClose(&file);
         }
         sink.sd = &sd;
-        std::snprintf(sink.path, sizeof(sink.path), "%s", path);
+        std::snprintf(sink.path, sizeof(sink.path), "%s", arg.c_str());
         sink.offset = size;
         sink.open = true;
         ++m_sink_count;
@@ -90,7 +97,13 @@ private:
 
     struct Sink {
         FsFileSystem *sd{nullptr};
-        char path[128]{};
+        /* Named, asserted, and big enough on purpose: this array is handed to fs* as a path, so
+           it owes the whole `FS_MAX_PATH` window on its own (see rule 3 above).  It used to be
+           128 bytes, which left the declared window running past the end of the array. */
+        static constexpr size_t kPathBufferSize = util::FsPath::kBufferSize;
+        static_assert(kPathBufferSize >= FS_MAX_PATH,
+                      "the sink's path buffer must cover the whole FS_MAX_PATH IPC window");
+        char path[kPathBufferSize]{};
         s64 offset{0};
         bool open{false};
         bool failed{false};
