@@ -372,9 +372,19 @@ update check: no signature (HTTP 404)
 同一份构建上的回归:`tools/device-tests.py all`(t1a/t1b/t2/restore 全部通过,失败 0)与
 `cycles --cycles 3`(三轮启动/退出干净)均通过,说明换托管端没有碰到安装/退出路径。
 
-**仍待补验**:把 `agent-manifest.json` 与 `agent-manifest.json.sig` 推到 Gitee `main` 之后,
-按 2026-09-19 那套用例跑一次**正路**(签名通过 → 首页"已是最新 x.y.z";再发一个更高版本的清单
-验证"更新到 x.y.z"能下载并安装),结论补到这里。上面的历史行按当时的事实保留,不做追改。
+**正路已验(2026-09-20,推送到 Gitee `main` 之后)**:线上清单与签名与仓库里逐字节一致、
+`openssl dgst -verify data/agent_pubkey.bin` 通过之后,在真机上按 `X` 得到完整正路:
+
+```
+update check: started (url=https://gitee.com/acnh-game/acnh-manager/raw/main/agent-manifest.json)
+update check: manifest ok, agent 0.11.0      ← 取到清单 + 验签通过 + 解析通过
+```
+
+界面:首页"agent 已安装,可以使用 / 游戏 3.0.3 · agent 0.11.0",检查按钮副标题"已是最新 0.11.0";
+详情页"联网检查: 清单可用,agent 0.11.0"。也就是说"从托管端取清单 → 验签 → 与已装版本比较"这条
+链路在真机上是通的,**不再依赖本地镜像**。"更高版本 → 一键更新"的真机验证用的是本机镜像那几轮
+(见上面"更新路径的三处修复"),同一份代码路径、同一个清单格式。上面的历史行按当时的事实保留,
+不做追改。
 
 ## 更新路径的三处修复(2026-09-20,真机验证)
 
