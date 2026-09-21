@@ -76,3 +76,29 @@ cd build/scratch/spinarak-check/packages && python3 ../spinarak.py
 `tools/make-store-package.py` 生成的本地测试仓库就是照着这套规格写的(2026-09-21 重写:早先的版本
 写成了 `U <路径>` 且带多余的 `G:` 行,客户端会解析错)。Sphaira 把它当自定义商店源时,走的才是
 真实代码路径;如果只是"看着像",这个测试没有意义。
+
+## 本地商店真机验收(Sphaira,菜单名取自其源码)
+
+1. Mac 上把仓库目录用 HTTP 提供出去(和 Switch 同一个局域网):
+
+   ```bash
+   cd src/acnh-manager/build/scratch/store
+   python3 -m http.server 8080 --bind 0.0.0.0
+   # 先在 Mac 上自证:curl -sI http://<Mac 的局域网 IP>:8080/repo.json 应返回 200
+   ```
+
+2. Switch:相册 → Sphaira → **商店** → 按 `X` 打开选项 → 选 **商店来源**
+   (`Store Source`)→ 在 **选择商店来源** 列表里选 **添加自定义商店...**;
+3. 键盘输入名称(随意,例如 `ACNH-Test`),再输入 URL:**`http://<Mac 的局域网 IP>:8080`**
+   —— Sphaira 会自己补上 `/repo.json`(`ui/menus/appstore.cpp` 里 `suffix{"/repo.json"}`),
+   所以你写不写 `/repo.json` 都行;
+4. 它会切到这个商店并加载:应能看到 `ACNH-Manager`(Tools,1.0.0),详情页顶部是横幅、
+   下方是四张截图 —— 这一眼就把 `screen.png` 的尺寸/比例与截图顺序一起验了;
+5. **安装**:按 `A` → 完成后卡上应出现 `/switch/ACNH-Manager/acnh-manager.nro`
+   (商店包只包含这一个文件;agent 的三件套是 App 自己装的,不受影响);
+6. **更新**:把本地包换成更高版本(`python3 tools/make-store-package.py --version 1.0.1`),
+   回商店刷新 → 应显示可更新 → 更新后版本号变化、卡上文件被替换;
+7. **卸载**:在商店里卸载 → `acnh-manager.nro` 从卡上消失(其余目录与 `state.json` 不动);
+8. 测完清掉:切到该商店 → `X` → **删除当前商店**。
+
+卡上缓存位置(出问题先看这里):`/switch/appstore/.get/stores/<store id>/{repo.json,icons,banners,packages}`。
