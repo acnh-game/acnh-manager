@@ -1945,16 +1945,18 @@ void App::RenderGuide(Surface surface) {
     rows.push_back({nullptr, Tr(i18n::StringId::GuideHow), kText, 2});
     rows.push_back({nullptr, Tr(i18n::StringId::GuideHowMore), kText, 2});
     rows.push_back({nullptr, Tr(i18n::StringId::GuideWhere), kText, 2});
-    const int text_card_bottom = page_top + RowsHeight(rows, value_width, kRowGap) +
-                                 kCardPadBottom;
-    DrawCard(page, page_top, text_card_bottom, width, value_width, nullptr, rows, kRowGap, false,
-             kCardPadBottom);
+    /* Let DrawCard size the card: it adds the top and bottom padding itself and only clamps to
+       `bottom`.  Handing it a pre-computed bottom that already included one padding made it
+       clamp away the *top* padding, which left the last line sitting on the card's edge. */
+    const int text_card_bottom =
+        DrawCard(page, page_top, page_bottom, width, value_width, nullptr, rows, kRowGap, false,
+                 kCardPadBottom);
 
     /* The code sits in its own card under the text, with the caption beside it.  Its module size
        is derived from the space that is actually left: a fixed 7 px per module overflowed the
        page once the explanation grew to four lines, and the footer then covered the code's last
        module rows (measured on hardware: ink down to y=657 against a footer starting at ~648). */
-    const int card_top = text_card_bottom + kCardGap;
+    const int card_top = text_card_bottom; /* DrawCard's return value already skips the gap */
     const int qr_pad = 12;
     const int space_for_code = page_bottom - card_top - qr_pad * 2;
     int module = 7; /* 37 modules -> 259 px, the size that reads best on the console screen */
