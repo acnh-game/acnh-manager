@@ -26,6 +26,11 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_NRO = REPO_ROOT / "acnh-manager.nro"
 DEFAULT_OUT = REPO_ROOT / "build" / "scratch" / "store"
 MANIFEST_INSTALL = "manifest.install"
+# Screenshots live in assets/screenshots/ and are listed in this order; the store page shows
+# them in the order the pkgbuild names them (status -> what a tap does -> how it ends, with the
+# uninstall confirmation last).
+SCREENSHOT_DIR = REPO_ROOT / "assets" / "screenshots"
+SCREENSHOT_ORDER = ("status.png", "install.png", "done.png", "uninstall.png")
 
 
 def md5_of(path: pathlib.Path) -> str:
@@ -120,6 +125,21 @@ def main(argv: list[str] | None = None) -> int:
     if banner.is_file():
         (package_dir / "screen.png").write_bytes(banner.read_bytes())
 
+    # Screenshots.  The pkgbuild names our source files; spinarak copies whatever it reads into
+    # `screen<N>.png` in the *built* package (that is the name the client asks the CDN for), so
+    # the local test repository needs those generated names too.  The store's own README says the
+    # files spinarak adds while building may be left out of the PR -- they are listed below.
+    screenshots = [name for name in SCREENSHOT_ORDER if (SCREENSHOT_DIR / name).is_file()]
+    screenshots += sorted(p.name for p in SCREENSHOT_DIR.glob("*.png")
+                          if p.name not in screenshots) if SCREENSHOT_DIR.is_dir() else []
+    generated_screens: list[pathlib.Path] = []
+    for index, shot in enumerate(screenshots, start=1):
+        source = SCREENSHOT_DIR / shot
+        (package_dir / shot).write_bytes(source.read_bytes())
+        generated = package_dir / f"screen{index}.png"
+        generated.write_bytes(source.read_bytes())
+        generated_screens.append(generated)
+
     # pkgbuild.json for the official data repo.  The update asset points at the published NRO,
     # which -- like the manifest and the agent's three files -- is served straight out of the
     # repository by Gitee's raw endpoint (see docs/release-process.md 6).  The version is in the
@@ -146,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         "assets": [
             {"url": release_url, "dest": f"/{info['install_path']}", "type": "update"},
             {"type": "icon", "url": "icon.png"},
-        ],
+        ] + [{"type": "screenshot", "url": shot} for shot in screenshots],
     }
     if banner.is_file():
         pkgbuild["assets"].append({"type": "banner", "url": "screen.png"})
@@ -183,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
                 "updated": stamp(package_dir / "pkgbuild.json"),
                 "appCreated": stamp(args.nro),
                 "binary": f"/{info['install_path']}",
-                "screens": 0,
+                "screens": len(screenshots),
                 "web_dls": -1,  # spinarak leaves the stats to the CDN pipeline
                 "app_dls": -1,
             }
@@ -196,6 +216,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  pkgbuild:   {(package_dir / 'pkgbuild.json').relative_to(root)}")
     print(f"  repo.json:  {(root / 'repo.json').relative_to(root)}")
     print(f"  install:    {info['install_path']}")
+    if screenshots:
+        print(f"  screens:    {len(screenshots)} ({', '.join(screenshots)})")
+    if generated_screens:
+        # Upstream: "Spinarak, while building will add additional files to your package's folder
+        # prior to zipping. These can be excluded in your PR."
+        print("  note:       these exist only so the local test repo matches the CDN layout; "
+              "leave them out of the PR:")
+        print("              " + ", ".join(p.name for p in generated_screens))
     return 0
 
 

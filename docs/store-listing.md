@@ -18,8 +18,23 @@
 | 素材 | 现状 | 要求 |
 |---|---|---|
 | 图标 | `assets/icon.png`(256×256,与 NRO 内图标同源) | 必需;商店网格里要能一眼认出 |
-| 横幅 `screen.png` | **待补** | 宽图,详情页顶部展示;可由图标主图裁切或另做一张截图拼版 |
-| 截图 | **待补** | 建议 3 张:状态页、安装确认页、卸载页(真机截图) |
+| 横幅 `screen.png` | **待补**(等设计稿) | **848×208 PNG**;商店客户端就是把详情页顶部那块画成 848×208(Sphaira `ui/menus/appstore.cpp`:`banner_vec(70, …, 848.f, 208.f)`),缺图时回退成图标。图里**不要写字** —— 标题与说明由商店自己画,图上再写字会重叠 |
+| 截图 | `assets/screenshots/{status,install,done,uninstall}.png`(真机 1280×720,四张) | 商店按 `packages/<name>/screen<N>.png` 取图,所以 `tools/make-store-package.py` 会按 `SCREENSHOT_ORDER` 把它们声明成 `screenshot` 资产,并**额外**在包目录里生成 `screen1..4.png`(本地测试仓库与 CDN 布局用)。上游 README 明确说这类构建期文件可以不入 PR |
+
+### 横幅提示词(交给画图标的那位/作图工具)
+
+> 为 Switch 自制软件 "ACNH-Manager" 画一张商店横幅,输出 **848×208 像素的 PNG**(宽高比约 4.08:1),
+> 不透明背景,**画面里不要出现任何文字**。
+>
+> 主题与风格:和现有 App 图标同一套"包裹 + 向下箭头 + 海滩"扁平矢量插画风格(图标主图在
+> `assets/icon-org.png`,1254×1254,可作为风格参考),线条干净、柔和阴影、整体可爱但不幼稚。
+>
+> 配色沿用家族色:主色青绿 `#2FBFA8`,浅薄荷 `#D5F2EC`,奶油背景 `#F6F1E3`,卡片白 `#FFFDF7`,
+> 沙色描边 `#D8CFB6`,墨色 `#2B2B2B`,点缀绿 `#1B7F5A`。
+>
+> 构图:主体居中偏左、四周留白,左右各留约 5% 安全边(有的客户端会轻微裁切);元素要大而简,
+> 因为实际显示只有 848×208 这么大。可以直接把图标的包裹/箭头主元素横向延展成一条"海滩上的
+> 传送带"意象,也可以只保留图标主体 + 青绿渐变背景。
 
 ## 文案要点(已在 listing.json 中)
 
@@ -32,6 +47,7 @@
 
 - [ ] `packaging/listing.json` 的中英文案与当前功能一致(尤其"当前支持范围");
 - [ ] `assets/icon.png` 是最新设计稿;
+- [x] 截图已就位(`assets/screenshots/`,真机四张);横幅仍待设计稿;
 - [ ] 仓库里的 `packaging/nro/acnh-manager-<版本>.nro` 与本次构建的产物哈希一致,且位在
       `https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-<版本>.nro`
       —— `pkgbuild.json` 的 update 资产就指向这个 permalink(见 `tools/make-store-package.py`)。
@@ -39,6 +55,16 @@
       文件名的版本号来自 Makefile 的 `APP_VERSION`,由 `tools/release.sh` 第 5 步拷入;
 - [ ] 本地测试仓库(`repo.json` + Sphaira 自定义商店源)能完成搜索→安装→更新→卸载;
 - [ ] PR 里带上 `icon.png`(必需)与 `screen.png`/截图(推荐)。
+
+PR 里该带的文件(其余都是构建期产物,按上游 README 排除):
+
+```
+packages/acnh-manager/pkgbuild.json
+packages/acnh-manager/icon.png
+packages/acnh-manager/screen.png            # 横幅,等设计稿
+packages/acnh-manager/{status,install,done,uninstall}.png   # 截图源图
+# 不带:screen1.png … screen4.png(构建期由 spinarak 生成)、info.json、manifest.install
+```
 
 ## 提交前怎么验(2026-09-21 实测流程)
 
