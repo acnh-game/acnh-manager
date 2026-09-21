@@ -56,6 +56,7 @@ enum class StringId {
     GuideTitle,
     GuideWhat,
     GuideHow,
+    GuideHowMore,
     GuideWhere,
     GuideScan,
     TabGuide,

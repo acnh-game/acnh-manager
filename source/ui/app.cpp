@@ -1943,17 +1943,26 @@ void App::RenderGuide(Surface surface) {
     rows.push_back({nullptr, Tr(i18n::StringId::GuideTitle), kText, 1, kFontTitle});
     rows.push_back({nullptr, Tr(i18n::StringId::GuideWhat), kText, 2});
     rows.push_back({nullptr, Tr(i18n::StringId::GuideHow), kText, 2});
+    rows.push_back({nullptr, Tr(i18n::StringId::GuideHowMore), kText, 2});
     rows.push_back({nullptr, Tr(i18n::StringId::GuideWhere), kText, 2});
     const int text_card_bottom = page_top + RowsHeight(rows, value_width, kRowGap) +
-                                 kCardPadBottom * 2 + 24;
+                                 kCardPadBottom;
     DrawCard(page, page_top, text_card_bottom, width, value_width, nullptr, rows, kRowGap, false,
              kCardPadBottom);
 
-    /* The code sits in its own card under the text, with the caption beside it. */
-    const int module = 7; /* 37 modules -> 259 px, comfortably scannable on the screen */
-    const int qr_side = m_guide_qr.Empty() ? 0 : m_guide_qr.Size() * module;
+    /* The code sits in its own card under the text, with the caption beside it.  Its module size
+       is derived from the space that is actually left: a fixed 7 px per module overflowed the
+       page once the explanation grew to four lines, and the footer then covered the code's last
+       module rows (measured on hardware: ink down to y=657 against a footer starting at ~648). */
     const int card_top = text_card_bottom + kCardGap;
-    const int qr_pad = 20;
+    const int qr_pad = 12;
+    const int space_for_code = page_bottom - card_top - qr_pad * 2;
+    int module = 7; /* 37 modules -> 259 px, the size that reads best on the console screen */
+    if (!m_guide_qr.Empty()) {
+        const int fits = space_for_code / (m_guide_qr.Size() + 2); /* + the quiet zone */
+        module = std::clamp(fits, 4, 7);
+    }
+    const int qr_side = m_guide_qr.Empty() ? 0 : m_guide_qr.Size() * module;
     const int card_height = std::max(qr_side + qr_pad * 2 + module * 2, 120);
     FillRoundedRect(page, kMargin, card_top, width, card_height, 14, kCard);
     StrokeRect(page, kMargin, card_top, width, card_height, 3, kBorder);
@@ -1967,10 +1976,14 @@ void App::RenderGuide(Surface surface) {
            stays well inside the plate, so what the decoder sees is unchanged. */
         const int mark_size = module * 4;
         const int mark_width = m_font.Measure(Tr(i18n::StringId::GuideMark), mark_size);
+        /* Centre the mark on the plate.  The line box is taller than the glyphs and hangs them a
+           little high: measured on hardware the ink landed 4 px above the code's centre, hence
+           the downward bias. */
+        constexpr int kMarkBiasY = 5;
         const int qr_centre_x = qr_x + module + qr_side / 2;
         const int qr_centre_y = qr_y + module + qr_side / 2;
         m_font.Draw(page, qr_centre_x - mark_width / 2,
-                    qr_centre_y - m_font.LineHeight(mark_size) / 2, mark_size, kText,
+                    qr_centre_y - m_font.LineHeight(mark_size) / 2 + kMarkBiasY, mark_size, kText,
                     Tr(i18n::StringId::GuideMark));
         const int text_x = qr_x + qr_side + module * 2 + kCardPadX;
         const int text_width = kMargin + width - kCardPadX - text_x;

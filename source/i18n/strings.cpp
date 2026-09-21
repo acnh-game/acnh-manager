@@ -55,7 +55,8 @@ constexpr Entry kStrings[] = {
     {"当前文件", "Current file"},  /* LabelProgressFile */
     {"聊天码是什么?", "What is a chat code?"},  /* GuideTitle */
     {"游戏里能直接把物品放进背包的短码:物品编号的十六进制写法,例如 9C9。", "A short code that puts an item straight into your bag: the item's id written in hex, for example 9C9."},  /* GuideWhat */
-    {"打开聊天栏(按 R),行首输入 /9C9 再发送;一行可以写多个,用空格隔开,最多 10 个。", "Open the chat (press R) and send a line that starts with /9C9. Several codes fit on one line, separated by spaces, up to 10."},  /* GuideHow */
+    {"在游戏里打开聊天栏(按 R), 行首输入 /9c9 再发送, 则会在背包第一个槽位生成\"金矿\"", "Open the chat in game (press R) and send a line that starts with /9c9: the first pocket slot gets a \"gold nugget\"."},  /* GuideHow */
+    {"一行一次可以写入多个聊天码, 用空格隔开, 最多 10 个, 例如: /9c9 9c6 9c4", "One line can carry several codes, separated by spaces, up to 10, for example: /9c9 9c6 9c4"},  /* GuideHowMore */
     {"编号从《森友物码册》小程序里查:搜到物品就能复制它的聊天码。", "Look the id up in the mini-app: find the item and copy its chat code."},  /* GuideWhere */
     {"微信扫一扫,打开《森友物码册》", "Scan with WeChat to open the mini-app"},  /* GuideScan */
     {"说明", "Guide"},  /* TabGuide */
