@@ -39,3 +39,36 @@
       文件名的版本号来自 Makefile 的 `APP_VERSION`,由 `tools/release.sh` 第 5 步拷入;
 - [ ] 本地测试仓库(`repo.json` + Sphaira 自定义商店源)能完成搜索→安装→更新→卸载;
 - [ ] PR 里带上 `icon.png`(必需)与 `screen.png`/截图(推荐)。
+
+## 提交前怎么验(2026-09-21 实测流程)
+
+官方商店的构建器是 **`fortheusers/spinarak`**(数据仓库 `fortheusers/switch-hbas-repo` 的 CI 跑的就是它),
+它下载 pkgbuild 里的资产、生成 `manifest.install` 与 `info.json`、打包 zip 并汇总 `repo.json`。
+**不要凭印象写这几个文件**——直接跑它,用它的产物当基准:
+
+```bash
+# 1. 生成我们的包材料(build/scratch/store/)
+python3 tools/make-store-package.py
+
+# 2. 造一个只含本包的构建目录,把 pkgbuild 与 icon 放进去
+mkdir -p build/scratch/spinarak-check/packages/acnh-manager
+cp build/scratch/store/packages/acnh-manager/{pkgbuild.json,icon.png} \
+   build/scratch/spinarak-check/packages/acnh-manager/
+curl -fsSL -o build/scratch/spinarak-check/spinarak.py \
+   https://raw.githubusercontent.com/fortheusers/spinarak/main/spinarak.py
+
+# 3. 在 packages/ 目录下运行它(它会从 Gitee raw 下载 NRO,需要联网)
+cd build/scratch/spinarak-check/packages && python3 ../spinarak.py
+```
+
+成功时会打印 `Built 1 of 1 packages.`,产物在 `packages/public/`。**逐项对比**:
+
+| 文件 | 必须一致的部分 |
+|---|---|
+| `zips/<name>.zip` 里的 `manifest.install` | 形如 `U: switch/ACNH-Manager/acnh-manager.nro` —— 客户端按 `line.substr(3)` 取路径,**少一个 `": "` 就会把 `switch/…` 读成 `witch/…`** |
+| `zips/<name>.zip` 里的 `info.json` | 九个字段:title/description/author/version/license/url/category/details/changelog |
+| `repo.json` 的包条目 | 除 `md5`/`sha256`(它们是各自 zip 的哈希,顺序/时间戳不同就会不同)以外逐字段一致 |
+
+`tools/make-store-package.py` 生成的本地测试仓库就是照着这套规格写的(2026-09-21 重写:早先的版本
+写成了 `U <路径>` 且带多余的 `G:` 行,客户端会解析错)。Sphaira 把它当自定义商店源时,走的才是
+真实代码路径;如果只是"看着像",这个测试没有意义。

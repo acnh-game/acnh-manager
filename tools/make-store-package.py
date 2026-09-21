@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import time
 import zipfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -48,14 +49,16 @@ def build_zip(root: pathlib.Path, nro: pathlib.Path, name: str, version: str,
     zips = root / "zips"
     zips.mkdir(parents=True, exist_ok=True)
     zip_path = zips / f"{name}.zip"
-    nro_remote = f"switch/ACNH-Manager/{nro.name}"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(info["install_path"], nro.read_bytes())
-        # Sphaira/hb-appstore only understands lines starting with E/U/G; U means overwrite.
-        archive.writestr(MANIFEST_INSTALL, f"U {info['install_path']}\nG info.json\nG manifest.install\n")
-        archive.writestr(info["info_path"], json.dumps(
-            {"name": name, "title": info["title"], "author": info["author"],
-             "version": version, "description": info["description"]}, indent=2) + "\n")
+        # Byte-for-byte what spinarak (the store's own builder) writes:
+        #   * `manifest.install` lines are `<op>: <path relative to the SD root>` -- the client
+        #     parses the path as `line.substr(3)`, so a missing ": " silently turns
+        #     "switch/..." into "witch/...";
+        #   * only the installed files are listed (no G lines for info.json/manifest.install);
+        #   * info.json carries the nine metadata fields spinarak copies out of the pkgbuild.
+        archive.writestr(MANIFEST_INSTALL, f"U: {info['install_path']}\n")
+        archive.writestr(info["info_path"], json.dumps(info["info_json"], indent=1))
     return zip_path
 
 
@@ -97,6 +100,18 @@ def main(argv: list[str] | None = None) -> int:
         "title": listing["title"],
         "author": listing["author"],
         "description": listing["summary"]["en"],
+        # Exactly the fields spinarak copies into the package's info.json.
+        "info_json": {
+            "title": listing["title"],
+            "description": listing["summary"]["en"],
+            "author": listing["author"],
+            "version": version,
+            "license": listing["license"],
+            "url": listing["url"],
+            "category": listing["category"],
+            "details": listing["details"]["en"],
+            "changelog": listing["changelog"]["en"],
+        },
     }
     zip_path = build_zip(root, args.nro, name, version, info)
 
@@ -123,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
             "license": listing["license"],
             "description": listing["summary"]["en"],
             "details": listing["details"]["en"],
+            # What the store shows as the app to launch after installing (spinarak would guess
+            # it from the manifest; stating it keeps the guesswork -- and its warning -- out).
+            "binary": f"/{info['install_path']}",
         },
         "changelog": listing["changelog"]["en"],
         "assets": [
@@ -134,32 +152,44 @@ def main(argv: list[str] | None = None) -> int:
         pkgbuild["assets"].append({"type": "banner", "url": "screen.png"})
     (package_dir / "pkgbuild.json").write_text(json.dumps(pkgbuild, indent=2) + "\n")
 
-    # Local test repository: same layout as the official CDN, usable as a custom shop source.
+    # Local test repository: the same layout AND the same fields as the official CDN, so Sphaira
+    # pointed at this directory exercises the real code path (a "replica" that differs from
+    # spinarak's output is worse than no test at all -- the first version of this file wrote
+    # `U <path>` instead of `U: <path>`, which the client parses as a path starting one
+    # character in).  Field set and formats copied from spinarak.py (2026-09-21).
+    def stamp(path: pathlib.Path) -> str:
+        # spinarak: datetime.utcfromtimestamp(...).strftime("%d/%m/%Y")
+        return time.strftime("%d/%m/%Y", time.gmtime(path.stat().st_mtime))
+
+    # spinarak sums the sizes of the files the manifest names; here that is the NRO alone.
+    extracted_bytes = args.nro.stat().st_size
     repo = {
         "packages": [
             {
                 "name": name,
                 "title": listing["title"],
-                "author": listing["author"],
-                "category": listing["category"],
-                "version": version,
                 "description": listing["summary"]["en"],
-                "details": listing["details"]["en"],
-                "changelog": listing["changelog"]["en"],
+                "author": listing["author"],
+                "version": version,
                 "license": listing["license"],
                 "url": listing["url"],
-                "binary": f"/{info['install_path']}",
-                "updated": "01/01/2026",
-                "app_dls": 0,
-                "screens": 0,
-                "extracted": args.nro.stat().st_size // 1024,
+                "category": listing["category"],
+                "details": listing["details"]["en"],
+                "changelog": listing["changelog"]["en"],
                 "filesize": zip_path.stat().st_size // 1024,
+                "extracted": extracted_bytes // 1024,
                 "md5": md5_of(zip_path),
                 "sha256": sha256_of(zip_path),
+                "updated": stamp(package_dir / "pkgbuild.json"),
+                "appCreated": stamp(args.nro),
+                "binary": f"/{info['install_path']}",
+                "screens": 0,
+                "web_dls": -1,  # spinarak leaves the stats to the CDN pipeline
+                "app_dls": -1,
             }
         ]
     }
-    (root / "repo.json").write_text(json.dumps(repo, indent=2) + "\n")
+    (root / "repo.json").write_text(json.dumps(repo, indent=1) + "\n")
 
     print(f"store package for {listing['title']} {version} -> {root}")
     print(f"  zip:        {(zip_path.relative_to(root))} ({zip_path.stat().st_size} B)")

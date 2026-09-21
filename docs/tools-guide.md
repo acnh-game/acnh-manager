@@ -20,7 +20,7 @@
 | `tools/make-signing-key.py` | 生成发布签名密钥对(ECDSA P-256,私钥放仓库外,默认给成 `~/.acnh/acnh-manager-signing-key.pem`),并把公钥写进 `data/agent_pubkey.bin`(入库、编进 NRO)。已有私钥时拒绝覆盖,除非 `--force` | 只做一次:项目第一次发布前;换密钥等于换身份(见 `docs/architecture.md` 9.2) |
 | `tools/sign-manifest.py` | 用 `--key`(默认 `~/.acnh/acnh-manager-signing-key.pem`)给根目录 `agent-manifest.json` 签名 → `agent-manifest.json.sig`,先核对私钥与内嵌公钥配套,再用 openssl 复验;`--manifest/--signature` 可指向别处的副本(本地镜像测试用) | 每次发布,导入清单之后、push 之前 |
 | `tools/verify-release.py` | 核对"锁 ↔ 发布记录 ↔ `data/` ↔ 已构建 NRO"四处一致,并验一次对外清单的签名;`--nro` 时还会在 NRO 里搜内嵌清单与三个 payload 的原始字节,并校验 **NRO 构建戳的 `src:` 哈希 == 当前源码树**(抓"源码改了但 NRO 没重建") | 发布链的第 6 步;也可单独挂 CI |
-| `tools/make-store-package.py` | 生成官方商店 `pkgbuild.json`、图标/横幅与本地测试仓库(`repo.json` + zip) | 打包上架材料或验证商店流程时 |
+| `tools/make-store-package.py` | 生成官方商店 `pkgbuild.json`、图标/横幅与本地测试仓库(`repo.json` + zip)。产物按**上游 spinarak 的格式**写(manifest 行 `U: <相对路径>`、`info.json` 九字段、`repo.json` 含 md5/sha256/binary/screens 等),可用上游构建器逐项比对(流程见 `docs/store-listing.md`) | 打包上架材料或验证商店流程时 |
 | `tools/device-tests.py` | 真机回归测试两组。**故障注入**:`t1a/t1b`(可清理 / 清不掉的 `.acnh-tmp` 残留)、`t2`(记录写不进去)、`restore`(清注入并重装),`all` 连跑;断言"要么全落位、要么卡片逐字节不变",用 `log.txt` 的 `collect:`/`cleanup:` 行 + 卡上逐文件哈希。**启停循环**:`cycles [--cycles N]` 连续"相册 → 应用 → 退出",每轮都要求日志有首帧与干净退出的两行(守相册黑屏那个回归)。截图落在 `build/scratch/device-tests/` | 改过 `source/install/engine.cpp` 的写盘/回滚逻辑、或改动退出路径(`__nx_applet_exit_mode` / 显示层)之后 |
 | `tools/ui-measure.py` | 像素尺子:`bbox`(窗口内墨迹外框与左右内缩)、`lines`(按文本行分段,每行的内缩/高度/宽度)、`runs`(某一行的墨迹段,看左边缘与居中)、`color`(某颜色的外框/中心/像素数)。背景可用 `--bg page\|card\|header\|border` 指名(与 `source/ui/app.cpp` 的调色板一致) | 改过任何排版(间距、居中、内缩)之后;把"看着有点歪"变成数字 |
 

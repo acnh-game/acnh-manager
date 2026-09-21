@@ -128,7 +128,7 @@ python3 tools/make-store-package.py       # 产出 build/scratch/store/
 
 | 路径 | 用途 |
 |---|---|
-| `packages/acnh-manager/pkgbuild.json` | 提交给官方数据仓库 `forusers/switch-hbas-repo` 的元数据(update 资产指向本仓库 `packaging/nro/` 里那份 NRO 的 raw 地址) |
+| `packages/acnh-manager/pkgbuild.json` | 提交给官方数据仓库 `fortheusers/switch-hbas-repo` 的元数据(update 资产指向本仓库 `packaging/nro/` 里那份 NRO 的 raw 地址) |
 | `packages/acnh-manager/icon.png`、`screen.png` | 商店图标与横幅 |
 | `zips/acnh-manager.zip` | 包内容(`switch/ACNH-Manager/acnh-manager.nro` + `manifest.install` + `info.json`) |
 | `repo.json` | **本地测试仓库**:与官方 CDN 同布局,可作为 Sphaira 自定义商店源验证"搜索→安装→更新→卸载" |
@@ -140,7 +140,7 @@ python3 tools/make-store-package.py       # 产出 build/scratch/store/
    `gitee release create --tag v<版本> -n "ACNH-Manager <版本>" -b "<说明>"` 建一个给人看的发行版页面;
    **下载不走发行版资产**(Gitee CLI 传不了附件),`pkgbuild.json` 的 update 资产指向仓库里的
    `packaging/nro/acnh-manager-<版本>.nro` 的 raw 地址(见第 6 节,地址形状 2026-09-20 核对过);
-2. 向 `forusers/switch-hbas-repo` 提 PR:新增 `packages/acnh-manager/{pkgbuild.json,icon.png,screen.png}`;
+2. 向 `fortheusers/switch-hbas-repo` 提 PR:新增 `packages/acnh-manager/{pkgbuild.json,icon.png,screen.png}`;
 3. PR 阶段 CI 会构建出一个预览仓库并评论在 PR 里,先按评论自查;
 4. 合并到 main 后 CI(spinarak)重建并部署到 `switch.cdn.fortheusers.org`,当天生效;
    客户端受 repo.json 缓存影响,可能需要等一会儿或重新打开商店。
