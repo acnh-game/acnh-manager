@@ -58,7 +58,9 @@ constexpr Entry kStrings[] = {
     {"打开聊天栏(按 R),行首输入 /9C9 再发送;一行可以写多个,用空格隔开,最多 10 个。", "Open the chat (press R) and send a line that starts with /9C9. Several codes fit on one line, separated by spaces, up to 10."},  /* GuideHow */
     {"编号从《森友物码册》小程序里查:搜到物品就能复制它的聊天码。", "Look the id up in the mini-app: find the item and copy its chat code."},  /* GuideWhere */
     {"微信扫一扫,打开《森友物码册》", "Scan with WeChat to open the mini-app"},  /* GuideScan */
-    {"没装微信?完整指南:lextuo.com/acnh-chat-code/guide/", "No WeChat? Full guide: lextuo.com/acnh-chat-code/guide/"},  /* GuideMore */
+    {"说明", "Guide"},  /* TabGuide */
+    /* The brand mark from the mini-app's logo; it is an emblem, so it is not translated. */
+    {"物码", "物码"},  /* GuideMark */
     {"网络不可用", "no network"},  /* UpdateShortOffline */
     {"服务器返回 %ld", "server returned %ld"},  /* UpdateShortHttp */
     {"清单签名校验失败", "manifest signature check failed"},  /* UpdateShortSignature */

@@ -95,6 +95,7 @@ constexpr int kActionTabStatus = 10;  /* L: the status page (also a touch target
 constexpr int kActionTabDetails = 11; /* R: the details page (also a touch target) */
 constexpr int kActionFooterBack = 12; /* the footer's "Ⓑ exit / back" hint */
 constexpr int kActionLanguage = 13;   /* the details page's language row */
+constexpr int kActionGuide = 14;      /* the header's "+" entry: the chat-code explainer */
 
 /* Player settings (language today).  Separate from state.json because uninstall deletes that. */
 constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
@@ -783,14 +784,7 @@ void App::HandleKeys(u32 down) {
     if ((down & HidNpadButton_Plus) != 0) {
         /* + is the chat-code explainer, from any page: the first press opens it, the next one
            (or B) goes back.  Exiting stays on B, which is where the footer points. */
-        if (m_page == Page::Guide) {
-            m_page = m_guide_return;
-        } else {
-            m_guide_return = m_page;
-            m_page = Page::Guide;
-            Trace("guide: opened from page %d", static_cast<int>(m_guide_return));
-        }
-        m_focus = FirstEnabled(m_actions);
+        ToggleGuide();
         return;
     }
     if (m_page == Page::Home) {
@@ -942,6 +936,7 @@ void App::ActivateAction(int id) {
             }
             break;
         case kActionCheckUpdate: StartUpdateCheck(); break;
+        case kActionGuide: ToggleGuide(); break;
         case kActionUninstall:
             if (m_page == Page::Home && m_have_state) {
                 m_page = Page::Uninstall;
@@ -1115,18 +1110,30 @@ void App::RenderHeader(Surface surface) {
     struct Tab {
         const char *key;
         i18n::StringId label;
-        Page page;
+        int action;
     };
-    const Tab tabs[2] = {{"L", i18n::StringId::TabStatus, Page::Home},
-                         {"R", i18n::StringId::TabDetails, Page::Details}};
-    int label_width[2] = {0, 0};
-    for (int i = 0; i < 2; ++i) {
+    /* The guide entry comes first so the status/details pair keeps its place at the right edge
+       (the device tests read their underline position to tell the two pages apart). */
+    const Tab tabs[kHeaderTabCount] = {{"+", i18n::StringId::TabGuide, kActionGuide},
+                                       {"L", i18n::StringId::TabStatus, kActionTabStatus},
+                                       {"R", i18n::StringId::TabDetails, kActionTabDetails}};
+    int label_width[kHeaderTabCount] = {};
+    for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(tabs[i].label), kFontHeading);
     }
     const HeaderTabLayout layout = LayoutHeaderTabs(surface.width, label_width);
-    for (int i = 0; i < 2; ++i) {
-        const bool active = m_page == tabs[i].page ||
-                            (i == 0 && m_page != Page::Details);
+    for (int i = 0; i < kHeaderTabCount; ++i) {
+        /* Which entry reads as "where I am": the guide while it is open, otherwise status
+           everywhere except the details page. */
+        bool active = false;
+        switch (tabs[i].action) {
+            case kActionGuide: active = m_page == Page::Guide; break;
+            case kActionTabStatus:
+                active = m_page != Page::Details && m_page != Page::Guide;
+                break;
+            case kActionTabDetails: active = m_page == Page::Details; break;
+            default: break;
+        }
         const char *label = Tr(tabs[i].label);
         m_font.Draw(surface, layout.label_x[i], 36, kFontHeading,
                     active ? kOnHeader : kHeaderSubtle, label);
@@ -1155,11 +1162,18 @@ void App::AddChromeActions(int surface_width, int surface_height) {
     if (m_page == Page::Progress) {
         return;
     }
-    int label_width[2] = {m_font.Measure(Tr(i18n::StringId::TabStatus), kFontHeading),
-                          m_font.Measure(Tr(i18n::StringId::TabDetails), kFontHeading)};
+    const i18n::StringId header_labels[kHeaderTabCount] = {
+        i18n::StringId::TabGuide, i18n::StringId::TabStatus, i18n::StringId::TabDetails};
+    const int header_actions[kHeaderTabCount] = {kActionGuide, kActionTabStatus,
+                                                 kActionTabDetails};
+    int label_width[kHeaderTabCount] = {};
+    for (int i = 0; i < kHeaderTabCount; ++i) {
+        label_width[i] = m_font.Measure(Tr(header_labels[i]), kFontHeading);
+    }
     const HeaderTabLayout layout = LayoutHeaderTabs(surface_width, label_width);
-    m_actions.push_back({kActionTabStatus, layout.hit[0], true});
-    m_actions.push_back({kActionTabDetails, layout.hit[1], true});
+    for (int i = 0; i < kHeaderTabCount; ++i) {
+        m_actions.push_back({header_actions[i], layout.hit[i], true});
+    }
 
     if (!HasOwnBackButton()) {
         const i18n::StringId label_id =
@@ -1948,22 +1962,41 @@ void App::RenderGuide(Surface surface) {
         const int qr_x = kMargin + kCardPadX + qr_pad / 2;
         const int qr_y = card_top + (card_height - qr_side) / 2 - module;
         DrawQrCode(page, m_guide_qr, qr_x, qr_y, module);
+        /* The middle of the code is the white plate (the logo it covered is not part of the
+           matrix); put the brand mark there, the way the original code carries its logo.  It
+           stays well inside the plate, so what the decoder sees is unchanged. */
+        const int mark_size = module * 4;
+        const int mark_width = m_font.Measure(Tr(i18n::StringId::GuideMark), mark_size);
+        const int qr_centre_x = qr_x + module + qr_side / 2;
+        const int qr_centre_y = qr_y + module + qr_side / 2;
+        m_font.Draw(page, qr_centre_x - mark_width / 2,
+                    qr_centre_y - m_font.LineHeight(mark_size) / 2, mark_size, kText,
+                    Tr(i18n::StringId::GuideMark));
         const int text_x = qr_x + qr_side + module * 2 + kCardPadX;
         const int text_width = kMargin + width - kCardPadX - text_x;
-        int text_y = card_top + 26;
+        const int text_y = card_top + (card_height - m_font.LineHeight(kFontBody)) / 2;
         m_font.Draw(page, text_x, text_y, kFontBody, kText,
                     m_font.Fit(Tr(i18n::StringId::GuideScan), kFontBody, text_width, 2),
                     text_width);
-        text_y += m_font.LineHeight(kFontBody) * 2 + 6;
-        m_font.Draw(page, text_x, text_y, kFontSmall, kSubtle,
-                    m_font.Fit(Tr(i18n::StringId::GuideMore), kFontSmall, text_width, 2),
-                    text_width);
     } else {
-        /* No code in this build: say so rather than leaving a hole, and still give the address. */
+        /* No code in this build: say where the numbers come from instead of leaving a hole. */
         m_font.Draw(page, kMargin + kCardPadX, card_top + 26, kFontBody, kText,
-                    m_font.Fit(Tr(i18n::StringId::GuideMore), kFontBody, value_width, 2),
+                    m_font.Fit(Tr(i18n::StringId::GuideWhere), kFontBody, value_width, 3),
                     value_width);
     }
+}
+
+/* One place for "open the chat-code explainer, or leave it": the + key and the header's "+"
+   entry both come through here, so they cannot drift apart. */
+void App::ToggleGuide() {
+    if (m_page == Page::Guide) {
+        m_page = m_guide_return;
+    } else {
+        m_guide_return = m_page;
+        m_page = Page::Guide;
+        Trace("guide: opened from page %d", static_cast<int>(m_guide_return));
+    }
+    m_focus = FirstEnabled(m_actions);
 }
 
 void App::RenderProgress(Surface surface) {

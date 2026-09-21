@@ -676,36 +676,39 @@ void TestHeaderTabs() {
     using acnh_manager::ui::HitTest;
     using acnh_manager::ui::kHeaderBarHeight;
     using acnh_manager::ui::kHeaderTabBadge;
+    using acnh_manager::ui::kHeaderTabCount;
     using acnh_manager::ui::kHeaderTabTop;
     using acnh_manager::ui::LayoutHeaderTabs;
 
-    const int label_width[2] = {110, 120}; /* the two header tab labels, measured on hardware */
+    /* The three header entries: "+ guide" / "L status" / "R details", measured on hardware. */
+    const int label_width[kHeaderTabCount] = {70, 110, 120};
     const auto layout = LayoutHeaderTabs(1280, label_width);
 
-    /* Both tabs are hit-testable in the middle of the group they draw. */
-    const std::vector<acnh_manager::ui::Action> tabs = {
-        {1, layout.hit[0], true},
-        {2, layout.hit[1], true},
-    };
-    CHECK(HitTest(tabs, layout.badge_x[0] + kHeaderTabBadge / 2, kHeaderTabTop + 20) == 1);
-    CHECK(HitTest(tabs, layout.label_x[0] + label_width[0] / 2, 56) == 1);
-    CHECK(HitTest(tabs, layout.badge_x[1] + kHeaderTabBadge / 2, kHeaderTabTop + 20) == 2);
-    CHECK(HitTest(tabs, layout.label_x[1] + label_width[1] / 2, 56) == 2);
+    /* Every entry is hit-testable in the middle of the group it draws. */
+    std::vector<acnh_manager::ui::Action> tabs;
+    for (int i = 0; i < kHeaderTabCount; ++i) {
+        tabs.push_back({i + 1, layout.hit[i], true});
+    }
+    for (int i = 0; i < kHeaderTabCount; ++i) {
+        CHECK(HitTest(tabs, layout.badge_x[i] + kHeaderTabBadge / 2, kHeaderTabTop + 20) == i + 1);
+        CHECK(HitTest(tabs, layout.label_x[i] + label_width[i] / 2, 56) == i + 1);
+    }
 
     /* A tap can never be ambiguous, and the targets stay inside the header bar. */
-    CHECK(layout.hit[0].x + layout.hit[0].w <= layout.hit[1].x);
-    CHECK(layout.badge_x[0] < layout.badge_x[1]);
+    for (int i = 0; i + 1 < kHeaderTabCount; ++i) {
+        CHECK(layout.hit[i].x + layout.hit[i].w <= layout.hit[i + 1].x);
+        CHECK(layout.badge_x[i] < layout.badge_x[i + 1]);
+        CHECK(layout.hit[i].y >= 0);
+        CHECK(layout.hit[i].y + layout.hit[i].h <= kHeaderBarHeight);
+    }
     CHECK(layout.hit[0].x >= 0);
-    CHECK(layout.hit[0].y >= 0);
-    CHECK(layout.hit[1].x + layout.hit[1].w <= 1280);
-    CHECK(layout.hit[0].y + layout.hit[0].h <= kHeaderBarHeight);
-    CHECK(layout.hit[1].y + layout.hit[1].h <= kHeaderBarHeight);
+    CHECK(layout.hit[kHeaderTabCount - 1].x + layout.hit[kHeaderTabCount - 1].w <= 1280);
 
     /* Wider labels push the group to the left instead of running off the screen. */
-    const int wide[2] = {200, 200};
+    const int wide[kHeaderTabCount] = {200, 200, 200};
     const auto wide_layout = LayoutHeaderTabs(1280, wide);
     CHECK(wide_layout.badge_x[0] < layout.badge_x[0]);
-    CHECK(wide_layout.hit[1].x + wide_layout.hit[1].w <= 1280);
+    CHECK(wide_layout.hit[kHeaderTabCount - 1].x + wide_layout.hit[kHeaderTabCount - 1].w <= 1280);
 }
 
 /* Home-screen state: the eight states and their priority.  Getting the order wrong would

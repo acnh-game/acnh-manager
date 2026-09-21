@@ -105,7 +105,9 @@ private:
     void RenderInstall(Surface surface);
     void RenderUninstall(Surface surface);
     void RenderProgress(Surface surface);
-    /* The chat-code explainer, opened with + from anywhere and left the same way. */
+    /* The chat-code explainer: + (or the header's "+" entry) opens it, pressing again or B
+       goes back to where it was opened from. */
+    void ToggleGuide();
     void RenderGuide(Surface surface);
     /* Confirmation pages share one implementation: action, outcome, two buttons. */
     void BuildConfirmActions(int width, int height, bool uninstall);
