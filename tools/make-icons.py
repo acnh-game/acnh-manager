@@ -3,16 +3,8 @@
 
 Outputs (both committed; they are small):
     assets/icon.jpg   256x256 JPEG -- embedded into the NACP, shown by hbmenu/album
-    assets/icon.png   256x150 PNG  -- store icon, see "why not square" below
+    assets/icon.png   256x256 PNG  -- Homebrew App Store listing icon (uploaded when packaging)
     assets/screen.png 848x208 PNG  -- store banner (details page), derived from screen-org.png
-
-Why the store icon is 256x150 and not square: the store client draws the details-page icon at
-its *native* size into a 256x150 box and clips whatever overflows (Sphaira, ui/menus/appstore.cpp:
-`icon_vec(968, ..., 256, 150)` plus a DrawIcon that centres without scaling).  A square icon
-therefore loses its top and bottom ~53 px there -- measured on hardware 2026-09-21.  Every other
-package in the store ships a 256x150 icon, so this one is composed the same way: a centred band
-of the master, scaled to 150 px tall, with the leftover width filled with the artwork's own sky
-colour.  The NACP/hbmenu icon stays square: that one is what the console's homebrew menu shows.
 
 The master images are assets/icon-org.png and assets/screen-org.png (the design sources,
 committed, single source of truth): replace them and re-run this tool.  History: the first
@@ -40,11 +32,6 @@ DEFAULT_SOURCE = REPO_ROOT / "assets" / "icon-org.png"
 SIZE = 256
 DEFAULT_BANNER_SOURCE = REPO_ROOT / "assets" / "screen-org.png"
 BANNER_SIZE = (848, 208)
-# The store icon: the box the client draws it into, and how much of the master to keep.  900 of
-# the master's 1254 rows keeps the parcel (including the arrow's tip) whole; the remaining width
-# is padded, so nothing important ends up outside the 256x150 window.
-STORE_ICON_SIZE = (256, 150)
-STORE_ICON_BAND = 900
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -72,25 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(exist_ok=True)
     with Image.open(args.source) as image:
         print(f"source: {args.source} {image.size} {image.mode}")
-        master = image.convert("RGB")
-        rgb = master.resize((args.size, args.size), Image.LANCZOS)
+        rgb = image.convert("RGB").resize((args.size, args.size), Image.LANCZOS)
         jpg = out_dir / "icon.jpg"
         rgb.save(jpg, "JPEG", quality=args.jpeg_quality, optimize=True)
-        # Store icon: centred band of the master -> STORE_ICON_SIZE, padded with the sky colour.
-        width, height = STORE_ICON_SIZE
-        band = min(STORE_ICON_BAND, master.height)
-        top = (master.height - band) // 2
-        art = master.crop((0, top, master.width, top + band))
-        art = art.resize((round(master.width * height / band), height), Image.LANCZOS)
-        if art.width > width:
-            art = art.crop(((art.width - width) // 2, 0, (art.width - width) // 2 + width, height))
-        store_icon = Image.new("RGB", STORE_ICON_SIZE,
-                               master.getpixel((master.width // 2, 2)))  # the sky at the top
-        store_icon.paste(art, ((width - art.width) // 2, 0))
         png = out_dir / "icon.png"
-        store_icon.save(png, "PNG", optimize=True)
-        print(f"store icon: kept rows {top}..{top + band} of {master.height}, "
-              f"padded {(width - art.width) // 2} px each side")
+        rgb.save(png, "PNG", optimize=True)
     for path in (jpg, png):
         print(f"wrote {path.relative_to(REPO_ROOT)} ({path.stat().st_size} B)")
 
