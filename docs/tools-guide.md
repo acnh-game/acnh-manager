@@ -11,7 +11,7 @@
 | `tools/build.sh` | 在固定镜像 `devkitpro/devkita64:20260219` 里执行 `make`,产出 `acnh-manager.nro` | 每次改完源码构建时 |
 | `tools/deploy-nro.py` | 经 sys-agent 的内置 FTP(默认 `switch:6001`)把 NRO 推到 `/switch/ACNH-Manager/`;`--fetch-log` 取回 `spike.log`、`spike-history.log`、`log.txt`(后者 M1 起产生) | 真机迭代:构建 → 部署 → 启动 → 回读日志 |
 | `tools/summarize-spike-log.py` | 解析环境探测日志:打印 `ns` 内容表、`ncm` 的更新标题 version 与 Program 内容 id、`dmnt:cht` 的 ModuleId,按当前判据(①ns 版本 ②ncm 内容 id ③ModuleId 复核)给出 PASS/FAIL;`fsp-ldr` 相关行仅作历史信息 | 每次真机探测后复核结论 |
-| `tools/make-icons.py` | 从两张主图生成三种素材:`assets/icon-org.png` → `assets/icon.jpg`(256×256 JPEG,NACP/hbmenu 图标)+ `assets/icon.png`(256×256 PNG,商店图标);`assets/screen-org.png` → `assets/screen.png`(**848×208** 商店横幅,按 848:208 居中裁带,绝不拉伸填满)。`--source`/`--banner-source` 可换主图,`--skip-banner` 跳过横幅;需带 Pillow 的运行时 | 换图标/横幅或商店素材时 |
+| `tools/make-icons.py` | 从两张主图生成三种素材:`assets/icon-org.png` → `assets/icon.jpg`(256×256 JPEG,NACP/hbmenu 图标)+ `assets/icon.png`(256×256 PNG,商店图标);`assets/screen-org.png`(可选,不入库)→ `assets/screen.png`(**848×208** 商店横幅,按 848:208 居中裁带,绝不拉伸填满;主图不在就跳过)。`--source`/`--banner-source` 可指向别处的主图,`--skip-banner` 跳过横幅;需带 Pillow 的运行时 | 换图标/横幅或商店素材时 |
 | `tools/check-i18n.py` | 校验 `StringId` 枚举与 `strings.cpp` 文案表**逐条同序**并打印条目总数(死文案/漏文案会让两边错位);`make -C tests` 已内建调用 | 每次改动 `source/i18n/*` 之后,或本地测试前 |
 | `tools/make-dev-manifest.py` | 从 acnh-agent 的 `dist/` 产物生成开发用清单与 payload 目录(`build/scratch/dev-payload/`),保留真实的 `buildFlags`/`dirty` | M4 之前做真机干跑;发布门控默认会拒绝这类清单 |
 | `tools/deploy-nro.py --push-file <本地> --remote <相对路径>` | 把单个文件推到 `/switch/ACNH-Manager/<相对路径>`(推 payload 与开发用清单用),上传后校验大小 | 部署 NRO 之外的文件时 |
