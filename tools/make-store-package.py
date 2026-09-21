@@ -95,6 +95,13 @@ def main(argv: list[str] | None = None) -> int:
     banner = REPO_ROOT / "assets" / "screen.png"
 
     name = listing["name"]
+    # The store catalog has exactly one text per field and the client shows it verbatim
+    # (no language negotiation: Sphaira renders `details`/`changelog` as-is and only
+    # translates its own labels), so the body text is written twice, Chinese first.
+    # `description` stays English on purpose: the store also searches it, and "ACNH" /
+    # "manager" are the keywords people type.
+    details_text = listing["details"]["zh"] + "\n\n" + listing["details"]["en"]
+    changelog_text = listing["changelog"]["zh"] + "\n\n" + listing["changelog"]["en"]
     root = args.out
     package_dir = root / "packages" / name
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -114,8 +121,8 @@ def main(argv: list[str] | None = None) -> int:
             "license": listing["license"],
             "url": listing["url"],
             "category": listing["category"],
-            "details": listing["details"]["en"],
-            "changelog": listing["changelog"]["en"],
+            "details": details_text,
+            "changelog": changelog_text,
         },
     }
     zip_path = build_zip(root, args.nro, name, version, info)
@@ -157,12 +164,12 @@ def main(argv: list[str] | None = None) -> int:
             "url": listing["url"],
             "license": listing["license"],
             "description": listing["summary"]["en"],
-            "details": listing["details"]["en"],
+            "details": details_text,
             # What the store shows as the app to launch after installing (spinarak would guess
             # it from the manifest; stating it keeps the guesswork -- and its warning -- out).
             "binary": f"/{info['install_path']}",
         },
-        "changelog": listing["changelog"]["en"],
+        "changelog": changelog_text,
         "assets": [
             {"url": release_url, "dest": f"/{info['install_path']}", "type": "update"},
             {"type": "icon", "url": "icon.png"},
@@ -194,8 +201,8 @@ def main(argv: list[str] | None = None) -> int:
                 "license": listing["license"],
                 "url": listing["url"],
                 "category": listing["category"],
-                "details": listing["details"]["en"],
-                "changelog": listing["changelog"]["en"],
+                "details": details_text,
+                "changelog": changelog_text,
                 "filesize": zip_path.stat().st_size // 1024,
                 "extracted": extracted_bytes // 1024,
                 "md5": md5_of(zip_path),
