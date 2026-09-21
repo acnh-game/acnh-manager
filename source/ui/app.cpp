@@ -166,6 +166,8 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     m_log = log;
     m_sd = &sd;
     m_update_task.SetLog(log);
+    /* The chat-code explainer reads its code once; empty when the build carries none. */
+    m_guide_qr = ui::QrMatrix::FromEmbedded();
     LoadSettings();
     Trace("ui: font init ...");
     if (!m_font.Init(log, error)) {
@@ -772,12 +774,23 @@ void App::HandleKeys(u32 down) {
             m_should_exit = true; /* B on the home screen leaves the app, as before */
             return;
         }
-        m_page = Page::Home;
+        /* Leaving the guide goes back to whatever it was opened from; everywhere else B is
+           "back to the status page". */
+        m_page = m_page == Page::Guide ? m_guide_return : Page::Home;
         m_focus = FirstEnabled(m_actions);
         return;
     }
     if ((down & HidNpadButton_Plus) != 0) {
-        m_should_exit = true;
+        /* + is the chat-code explainer, from any page: the first press opens it, the next one
+           (or B) goes back.  Exiting stays on B, which is where the footer points. */
+        if (m_page == Page::Guide) {
+            m_page = m_guide_return;
+        } else {
+            m_guide_return = m_page;
+            m_page = Page::Guide;
+            Trace("guide: opened from page %d", static_cast<int>(m_guide_return));
+        }
+        m_focus = FirstEnabled(m_actions);
         return;
     }
     if (m_page == Page::Home) {
@@ -874,6 +887,11 @@ void App::ActivateAction(int id) {
                 m_focus = FirstEnabled(m_actions);
                 return;
             }
+            break;
+        /* The progress page takes no input at all (the engine owns the thread) and the guide
+           page is read-only: both fall through to the shared handling below. */
+        case Page::Progress:
+        case Page::Guide:
             break;
         case Page::Uninstall:
             if (id == kActionPrimary) {
@@ -1036,6 +1054,7 @@ void App::Render() {
         case Page::Install: RenderInstall(surface); break;
         case Page::Uninstall: RenderUninstall(surface); break;
         case Page::Progress: RenderProgress(surface); break;
+        case Page::Guide: RenderGuide(surface); break;
         case Page::Result: RenderResult(surface); break;
     }
     /* Every page shows the same chrome (header tabs, footer hint), added after the page's own
@@ -1876,6 +1895,75 @@ void App::UpdateProgress(const install::Progress &progress) {
     m_progress_index = progress.index;
     m_progress_total = progress.total;
     Render();
+}
+
+/* Paints the recovered code as squares: one filled rect per black module, on a white plate.
+   `module` is the on-screen size of one module, so the caller picks how large it lands. */
+void DrawQrCode(Surface surface, const ui::QrMatrix &qr, int x, int y, int module) {
+    const int side = qr.Size() * module;
+    FillRect(surface, x, y, side + module * 2, side + module * 2, Color{0xFF, 0xFF, 0xFF, 0xFF});
+    for (int row = 0; row < qr.Size(); ++row) {
+        for (int column = 0; column < qr.Size(); ++column) {
+            if (qr.At(row, column)) {
+                FillRect(surface, x + module + column * module, y + module + row * module, module,
+                         module, Color{0x00, 0x00, 0x00, 0xFF});
+            }
+        }
+    }
+}
+
+/* The chat-code explainer.  Text first (what a code is, how to send one, where the numbers come
+   from), then the mini-app's code with its caption and the guide address for people who would
+   rather not install WeChat. */
+void App::RenderGuide(Surface surface) {
+    /* Read-only page: no controls of its own (the header tabs and the footer come from the
+       shared chrome, and both go through the action table). */
+    m_actions.clear();
+    const int width = surface.width - kMargin * 2;
+    const int value_width = width - kCardPadX * 2 - kLabelColumn;
+    const int page_top = kHeaderHeight + kMargin / 2;
+    const int page_bottom = surface.height - kFooterHeight - kCardGap;
+    const Surface page = surface.Clipped(0, page_top, surface.width, page_bottom - page_top);
+
+    std::vector<Row> rows;
+    rows.push_back({nullptr, Tr(i18n::StringId::GuideTitle), kText, 1, kFontTitle});
+    rows.push_back({nullptr, Tr(i18n::StringId::GuideWhat), kText, 2});
+    rows.push_back({nullptr, Tr(i18n::StringId::GuideHow), kText, 2});
+    rows.push_back({nullptr, Tr(i18n::StringId::GuideWhere), kText, 2});
+    const int text_card_bottom = page_top + RowsHeight(rows, value_width, kRowGap) +
+                                 kCardPadBottom * 2 + 24;
+    DrawCard(page, page_top, text_card_bottom, width, value_width, nullptr, rows, kRowGap, false,
+             kCardPadBottom);
+
+    /* The code sits in its own card under the text, with the caption beside it. */
+    const int module = 7; /* 37 modules -> 259 px, comfortably scannable on the screen */
+    const int qr_side = m_guide_qr.Empty() ? 0 : m_guide_qr.Size() * module;
+    const int card_top = text_card_bottom + kCardGap;
+    const int qr_pad = 20;
+    const int card_height = std::max(qr_side + qr_pad * 2 + module * 2, 120);
+    FillRoundedRect(page, kMargin, card_top, width, card_height, 14, kCard);
+    StrokeRect(page, kMargin, card_top, width, card_height, 3, kBorder);
+
+    if (!m_guide_qr.Empty()) {
+        const int qr_x = kMargin + kCardPadX + qr_pad / 2;
+        const int qr_y = card_top + (card_height - qr_side) / 2 - module;
+        DrawQrCode(page, m_guide_qr, qr_x, qr_y, module);
+        const int text_x = qr_x + qr_side + module * 2 + kCardPadX;
+        const int text_width = kMargin + width - kCardPadX - text_x;
+        int text_y = card_top + 26;
+        m_font.Draw(page, text_x, text_y, kFontBody, kText,
+                    m_font.Fit(Tr(i18n::StringId::GuideScan), kFontBody, text_width, 2),
+                    text_width);
+        text_y += m_font.LineHeight(kFontBody) * 2 + 6;
+        m_font.Draw(page, text_x, text_y, kFontSmall, kSubtle,
+                    m_font.Fit(Tr(i18n::StringId::GuideMore), kFontSmall, text_width, 2),
+                    text_width);
+    } else {
+        /* No code in this build: say so rather than leaving a hole, and still give the address. */
+        m_font.Draw(page, kMargin + kCardPadX, card_top + 26, kFontBody, kText,
+                    m_font.Fit(Tr(i18n::StringId::GuideMore), kFontBody, value_width, 2),
+                    value_width);
+    }
 }
 
 void App::RenderProgress(Surface surface) {

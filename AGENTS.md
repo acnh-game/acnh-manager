@@ -154,7 +154,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   `ui/settings.hpp`(`settings.json` 的往返:界面语言必须活过重启与卸载)——
   改规则时先改头文件与 `tests/host_tests.cpp`。
 - `data/`:内嵌发布清单与 payload 的 bin2s 构建输入(由导入工具生成,入库),外加
-  `data/agent_pubkey.bin` —— 验签用的公钥(由 `tools/make-signing-key.py` 生成,入库,编进 NRO)。
+  `data/agent_pubkey.bin`(验签公钥,由 `tools/make-signing-key.py` 生成)与 `data/qr_miniapp.bin`
+  (《森友物码册》小程序码的模块矩阵,由 `tools/make-qr.py` 从 miniapp 仓库的 `resources/小程序码.jpg`
+  采样而来)—— 三个都由 bin2s 编进 NRO。
 - `packaging/agent/<版本>/`:发布记录(subsdk9 / main.npdm / acnh-agent.version / manifest.json),
   与 `data/` 同源,也是对外托管的四个文件(玩家侧靠 Gitee raw 直取;仓库根目录还有一份
   `agent-manifest.json` 是它的副本,给 App 的更新检查读);`packaging/agent-lock.json` 是发布锁。

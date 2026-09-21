@@ -53,6 +53,12 @@ constexpr Entry kStrings[] = {
     {"正在卸载 agent", "Removing the agent"},  /* ProgressUninstalling */
     {"请不要关机,也不要退出应用", "Do not power off or leave the app"},  /* ProgressNote */
     {"当前文件", "Current file"},  /* LabelProgressFile */
+    {"聊天码是什么?", "What is a chat code?"},  /* GuideTitle */
+    {"游戏里能直接把物品放进背包的短码:物品编号的十六进制写法,例如 9C9。", "A short code that puts an item straight into your bag: the item's id written in hex, for example 9C9."},  /* GuideWhat */
+    {"打开聊天栏(按 R),行首输入 /9C9 再发送;一行可以写多个,用空格隔开,最多 10 个。", "Open the chat (press R) and send a line that starts with /9C9. Several codes fit on one line, separated by spaces, up to 10."},  /* GuideHow */
+    {"编号从《森友物码册》小程序里查:搜到物品就能复制它的聊天码。", "Look the id up in the mini-app: find the item and copy its chat code."},  /* GuideWhere */
+    {"微信扫一扫,打开《森友物码册》", "Scan with WeChat to open the mini-app"},  /* GuideScan */
+    {"没装微信?完整指南:lextuo.com/acnh-chat-code/guide/", "No WeChat? Full guide: lextuo.com/acnh-chat-code/guide/"},  /* GuideMore */
     {"网络不可用", "no network"},  /* UpdateShortOffline */
     {"服务器返回 %ld", "server returned %ld"},  /* UpdateShortHttp */
     {"清单签名校验失败", "manifest signature check failed"},  /* UpdateShortSignature */

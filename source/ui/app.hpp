@@ -18,6 +18,7 @@
 #include "net/update.hpp"
 #include "net/update_task.hpp"
 #include "payload/embedded.hpp"
+#include "ui/guide_qr.hpp"
 #include "ui/action.hpp"
 #include "ui/font.hpp"
 #include "ui/header_tabs.hpp"
@@ -52,7 +53,7 @@ private:
        Result reports what happened. */
     /* Progress is shown while the engine works: the install runs on this thread, so this page
        is drawn once before the first byte moves and again after every file. */
-    enum class Page { Home, Details, Install, Uninstall, Progress, Result };
+    enum class Page { Home, Details, Install, Uninstall, Progress, Guide, Result };
 
     void Collect();
     void RefreshPlan();
@@ -104,6 +105,8 @@ private:
     void RenderInstall(Surface surface);
     void RenderUninstall(Surface surface);
     void RenderProgress(Surface surface);
+    /* The chat-code explainer, opened with + from anywhere and left the same way. */
+    void RenderGuide(Surface surface);
     /* Confirmation pages share one implementation: action, outcome, two buttons. */
     void BuildConfirmActions(int width, int height, bool uninstall);
     void RenderConfirm(Surface surface, bool uninstall);
@@ -149,6 +152,10 @@ private:
     Framebuffer m_fb{};
     bool m_fb_ready{false};
     Page m_page{Page::Home};
+    /* Where + sends the player back to when the guide page is closed again. */
+    Page m_guide_return{Page::Home};
+    /* The mini-app's code, read once from the embedded asset (empty when the build has none). */
+    ui::QrMatrix m_guide_qr{};
     i18n::Language m_language{i18n::Language::ZhHans};
     Touch m_touch{};
     /* Touch press tracking: a tap only fires when the finger goes down and comes back up on
