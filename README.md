@@ -46,13 +46,6 @@ python3 tools/deploy-nro.py
 产物为 `acnh-manager.nro`;正式发布经官方 Homebrew App Store,打包、上架与托管地址见
 `docs/release-process.md`(发行流程)与 `docs/store-listing.md`(条目元数据)。
 
-## 图标
-
-设计主图是 `assets/icon-org.png`(1254×1254,包裹 + 向下箭头 + 海滩元素,与"森友物码册"共用青绿/奶油/沙色
-家族配色,不含文字)。由它生成两个产物并提交:`assets/icon.jpg`(256×256 JPEG,给 NACP/hbmenu/相册显示)
-与 `assets/icon.png`(256×256 PNG,给商店条目);换图标时替换主图后跑 `tools/make-icons.py`。
-首版曾直接沿用微信小程序图标,上架前改为这枚专用设计稿以区分两个应用并提升小尺寸可读性。
-
 ## 许可
 
 GPL-3.0(见 `LICENSE`)。
