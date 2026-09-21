@@ -10,8 +10,8 @@
     "zh": "《集合啦!动物森友会》游戏内增强 Mod(agent)的安装与管理工具。"
   },
   "details": {
-    "en": "Installs the in-game agent for Animal Crossing: New Horizons into the game's own directory, and removes it again in one tap.\n\nIt detects the installed game build and supports ACNH 3.0.3 only -- anything else is refused. Every file is checked with SHA-256 before it is written, and a failed install leaves nothing behind.",
-    "zh": "把 agent(游戏内增强 Mod)装进《集合啦!动物森友会》的游戏目录,也可以一键删除还原。\n\n自动识别当前游戏构建,只支持 3.0.3,不认识的一律拒绝;写入前逐文件校验 SHA-256,失败不留半成品。"
+    "en": "Installs the in-game agent for Animal Crossing: New Horizons into the game's own directory, and removes it again in one tap.\n\nIt detects the installed game build and supports ACNH 3.0.3 only -- anything else is refused. Every file is checked with SHA-256 before it is written, and a failed install leaves nothing behind.\n\nAfter installing, restart the game and use chat codes: type `/9C9` at the start of a chat line (the slash marks it as a code, the rest is the item's id) and the item goes straight into your bag.",
+    "zh": "把 agent(游戏内增强 Mod)装进《集合啦!动物森友会》的游戏目录,也可以一键删除还原。\n\n自动识别当前游戏构建,只支持 3.0.3,不认识的一律拒绝;写入前逐文件校验 SHA-256,失败不留半成品。\n\n装好后重启游戏即可使用聊天码:在聊天栏行首输入 `/9C9`(`/` 是标记,后面是物品编号),物品就会直接放进背包。"
   },
   "changelog": {
     "en": "1.0.0 - first public build: environment detection, verified install/uninstall with one-tap rollback, offline install from the bundled agent, signed update check with one-tap update, Chinese/English interface.",
