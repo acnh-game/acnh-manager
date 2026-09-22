@@ -59,7 +59,7 @@ constexpr Entry kStrings[] = {
     {"一行一次可以写入多个聊天码, 用空格隔开, 最多 10 个, 例如: /9c9 9c6 9c4", "One line can carry several codes, separated by spaces, up to 10, for example: /9c9 9c6 9c4"},  /* GuideHowMore */
     {"编号从《森友物码册》小程序里查:搜到物品就能复制它的聊天码。", "Look the id up in the mini-app: find the item and copy its chat code."},  /* GuideWhere */
     {"微信扫一扫,打开《森友物码册》", "Scan with WeChat to open the mini-app"},  /* GuideScan */
-    {"说明", "Guide"},  /* TabGuide */
+    {"功能说明", "Guide"},  /* TabGuide */
     /* The brand mark from the mini-app's logo; it is an emblem, so it is not translated. */
     {"物码", "物码"},  /* GuideMark */
     {"网络不可用", "no network"},  /* UpdateShortOffline */
