@@ -1112,11 +1112,11 @@ void App::RenderHeader(Surface surface) {
         i18n::StringId label;
         int action;
     };
-    /* The guide entry comes first so the status/details pair keeps its place at the right edge
-       (the device tests read their underline position to tell the two pages apart). */
-    const Tab tabs[kHeaderTabCount] = {{"+", i18n::StringId::TabGuide, kActionGuide},
-                                       {"L", i18n::StringId::TabStatus, kActionTabStatus},
-                                       {"R", i18n::StringId::TabDetails, kActionTabDetails}};
+    /* Order matters twice: it is what the player reads left to right, and the device tests
+       identify the current page by which entry carries the underline. */
+    const Tab tabs[kHeaderTabCount] = {{"L", i18n::StringId::TabStatus, kActionTabStatus},
+                                       {"R", i18n::StringId::TabDetails, kActionTabDetails},
+                                       {"+", i18n::StringId::TabGuide, kActionGuide}};
     int label_width[kHeaderTabCount] = {};
     for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(tabs[i].label), kFontHeading);
@@ -1164,9 +1164,9 @@ void App::AddChromeActions(int surface_width, int surface_height) {
         return;
     }
     const i18n::StringId header_labels[kHeaderTabCount] = {
-        i18n::StringId::TabGuide, i18n::StringId::TabStatus, i18n::StringId::TabDetails};
-    const int header_actions[kHeaderTabCount] = {kActionGuide, kActionTabStatus,
-                                                 kActionTabDetails};
+        i18n::StringId::TabStatus, i18n::StringId::TabDetails, i18n::StringId::TabGuide};
+    const int header_actions[kHeaderTabCount] = {kActionTabStatus, kActionTabDetails,
+                                                 kActionGuide};
     int label_width[kHeaderTabCount] = {};
     for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(header_labels[i]), kFontHeading);

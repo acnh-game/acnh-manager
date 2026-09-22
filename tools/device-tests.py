@@ -96,39 +96,58 @@ def classify(path):
 def app_page(path):
     """Which page of the app a capture shows, or the screen name when it is not the app.
 
-    home / details / action / unknown.  "action" covers the confirmation and the result page --
-    enough to tell "A opens a confirmation" from "A did nothing", which is what the cases need.
+    home / details / action / guide / unknown.  The decision comes from each page's own content
+    rather than from the header's tab underline: the entries can be reordered or renamed (the
+    header now reads 状态 / 详情 / 功能说明) and a check that keys off "the underline is at the
+    right margin" then quietly answers "home" for the details page -- which would let the cases
+    press Y on the wrong page, and Y toggles a setting there.
+
+    Deliberately conservative: "home" is only reported when the home page's two secondary
+    buttons are visible, so a page the classifier does not recognise falls through to "details"
+    (whose prelude is "press B"), never to "home".
     """
     state = classify(path)
     if state != "manager":
         return state
     im = Image.open(path).convert("RGB")
-    # The big action button is tested first: the status page's own button row (y=267..415) stops
-    # well above y=603, while the confirmation and result pages draw their button across it.
+
+    # The big action button of the confirmation / result pages (home's own buttons stop at y=558).
     teal = im.getpixel((334, 603))
     if teal[0] < 120 and teal[1] > 150 and teal[2] > 120:
         return "action"
-    # The selected tab carries a white underline under its label (y=82..86, 4 px tall), and the
-    # tabs are laid out from the right edge -- so the right-hand tab's underline ends at the page
-    # margin (x=1240 for a 1280 wide frame) while the left-hand one ends around x=1040.  Reading
-    # that instead of a fixed badge position keeps this working in both languages: the tab group
-    # slides left when the labels are wider, which silently broke the old fixed-x check.
-    for y in (82, 83, 84, 85, 86):
-        runs = []
-        start = None
-        for x in range(700, 1280):
-            is_white = min(im.getpixel((x, y))) > 225
-            if is_white and start is None:
-                start = x
-            elif not is_white and start is not None:
-                runs.append((start, x - 1))
-                start = None
-        if start is not None:
-            runs.append((start, 1279))
-        wide = [run for run in runs if run[1] - run[0] >= 40]
-        if wide:
-            return "details" if max(run[1] for run in wide) >= 1200 else "home"
-    return "unknown"
+
+    def teal_badge(cx, cy):
+        """A key badge: a teal disc (the app's accent colour) with a white letter in it.  Counted
+        over a small box rather than sampled at one pixel -- the letter sits in the middle, so a
+        single centre sample reads white."""
+        teal = 0
+        total = 0
+        for y in range(cy - 22, cy + 23, 3):
+            for x in range(cx - 22, cx + 23, 3):
+                pixel = im.getpixel((x, y))
+                total += 1
+                if abs(pixel[0] - 47) < 70 and abs(pixel[1] - 191) < 55 and abs(pixel[2] - 168) < 55:
+                    teal += 1
+        return total and teal / total > 0.3
+
+    # Home: the two half-width buttons (检查更新 / 卸载 agent) sit side by side, each with its
+    # teal badge about 46 px in from the page margin and centred at y=515.
+    if teal_badge(86, 515) and teal_badge(698, 515):
+        return "home"
+
+    # Guide: the mini-app code occupies the lower-left quadrant and is a dense black block.
+    dark = 0
+    total = 0
+    for y in range(420, 620, 4):
+        for x in range(90, 320, 4):
+            pixel = im.getpixel((x, y))
+            total += 1
+            if max(pixel) < 90:
+                dark += 1
+    if total and dark / total > 0.3:
+        return "guide"
+
+    return "details"
 
 
 # --------------------------------------------------------------------------- card access
