@@ -49,6 +49,12 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   某个版本的 update 资产必须永远指向那个版本的 NRO)。
 - 推送与打 tag 直接用 git:**普通 `git push` 就行**(SSH,本机 key 已注册):
   `git push`、`git tag v<版本> && git push origin v<版本>`。
+- **两个远端,推送必须两边都走**:`origin` 是 Gitee(默认),`github` =
+  `https://github.com/acnh-game/acnh-manager.git`(同一份代码的第二处)。只推一边两边就会分叉,
+  所以改完是 `git push origin main && git push github main`;tag 同理
+  `git push origin v<版本> && git push github v<版本>`(推送前 `git remote -v` 确认两条都在)。
+  GitHub 侧走 HTTPS,凭据是钥匙串里的 `gh` token,沙盒里需 escalation。**但对外发布的地址仍然只有
+  Gitee**:`packaging/listing.json`、清单、NRO、商店 update 资产一律指 Gitee raw,不要改成 GitHub。
 - 工作区里别的项目仍在 GitHub(根 `AGENTS.md` 里 `gh` 那条规矩),两者不要混用;
   Gitee CLI 与 `gh` 是两套身份,别拿 `gh` 去碰本仓库的远端。
 
