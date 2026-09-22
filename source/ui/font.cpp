@@ -257,6 +257,27 @@ std::string Font::Fit(std::string_view utf8, int size, int max_width, int max_li
     return head + tail + kEllipsis;
 }
 
+int Font::DrawBold(Surface surface, int x, int y, int size, Color color, std::string_view utf8,
+                   int max_width) {
+    if (!Ready()) {
+        return 0;
+    }
+    /* Three extra passes: right, down and the diagonal between them.  The glyphs are blended, so
+       the edges gain weight without the shape turning into a blob -- and one pixel of growth is
+       the right amount at the badge sizes (18 px letters in a 40 px circle).  The base position
+       is shifted half a pixel back so the fatter glyph stays optically centred. */
+    int width = 0;
+    for (int dy = 0; dy <= 1; ++dy) {
+        for (int dx = 0; dx <= 1; ++dx) {
+            const int drawn = Draw(surface, x + dx, y + dy, size, color, utf8, max_width);
+            if (drawn > width) {
+                width = drawn;
+            }
+        }
+    }
+    return width;
+}
+
 int Font::Draw(Surface surface, int x, int y, int size, Color color, std::string_view utf8,
                int max_width) {
     if (!Ready()) {

@@ -37,6 +37,11 @@ public:
        max_width. */
     int Draw(Surface surface, int x, int y, int size, Color color, std::string_view utf8,
              int max_width = 0);
+    /* Synthetic bold: the console's shared faces come in one weight, so a "bold" run is the same
+       glyph drawn once more one pixel right and one pixel down.  Used for the key letters in the
+       badges (Ⓐ / Ⓛ / Ⓡ / Ⓑ), which read thin at 18 px otherwise. */
+    int DrawBold(Surface surface, int x, int y, int size, Color color, std::string_view utf8,
+                 int max_width = 0);
     int Measure(std::string_view utf8, int size, int max_width = 0);
     /* Line count after wrapping at max_width (at least 1).  Layout uses it for row heights,
        sharing the exact wrapping rules with Draw. */

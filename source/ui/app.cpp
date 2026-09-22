@@ -1143,8 +1143,9 @@ void App::RenderHeader(Surface surface) {
         /* Centre the letter on both axes: our Draw() treats y as the top of the line box, so
            bias it by half the box to land the glyph in the middle of the circle. */
         const int key_width = m_font.Measure(tabs[i].key, kFontSmall);
-        m_font.Draw(surface, layout.badge_x[i] + (kHeaderTabBadge - key_width) / 2,
-                    kHeaderTabTop + 10, kFontSmall, active ? kHeader : kOnHeader, tabs[i].key);
+        m_font.DrawBold(surface, layout.badge_x[i] + (kHeaderTabBadge - key_width) / 2,
+                        kHeaderTabTop + 10, kFontSmall, active ? kHeader : kOnHeader,
+                        tabs[i].key);
         if (active) {
             FillRect(surface, layout.badge_x[i] + kHeaderTabBadge + kHeaderTabBadgeGap,
                      kHeaderHeight - 14, label_width[i], 4, kOnHeader);
@@ -1204,8 +1205,8 @@ void App::RenderFooter(Surface surface) {
         FillRoundedRect(surface, hint.badge_x, hint.badge_y, hint.badge, hint.badge,
                         hint.badge / 2, kBorder);
         const int key_width = m_font.Measure("B", kFontSmall);
-        m_font.Draw(surface, hint.badge_x + (hint.badge - key_width) / 2, hint.badge_y + 6,
-                    kFontSmall, kText, "B");
+        m_font.DrawBold(surface, hint.badge_x + (hint.badge - key_width) / 2, hint.badge_y + 6,
+                        kFontSmall, kText, "B");
         /* Measured on the console: the layout's offset puts the label's optical centre on the
            badge's (the glyph box is not the visual box). */
         m_font.Draw(surface, hint.label_x, hint.text_y, kFontSmall, kSubtle, label);
@@ -1330,7 +1331,7 @@ void DrawKeyBadge(Surface surface, Font &font, int cx, int cy, int radius, const
                   Color face, Color text) {
     FillRoundedRect(surface, cx - radius, cy - radius, radius * 2, radius * 2, radius, face);
     const int width = font.Measure(key, kFontBody);
-    font.Draw(surface, cx - width / 2, cy - kFontBody / 2 - 1, kFontBody, text, key);
+    font.DrawBold(surface, cx - width / 2, cy - kFontBody / 2 - 1, kFontBody, text, key);
 }
 
 /* Busy indicator: eight dots in a ring, the brightest one walking around, drawn where the key
