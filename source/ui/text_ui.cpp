@@ -95,7 +95,9 @@ void TextUi::Run(acnh_manager::Log *log, FsFileSystem &sd) {
                         static_cast<unsigned long long>(file.size));
         }
         if (report.legacy_cheat_present) {
-            std::printf("legacy : cheat file present: %s\n", report.legacy_cheat_name.c_str());
+            std::printf("legacy : cheat file present: %s (%s)\n", report.legacy_cheat_path.c_str(),
+                        report.legacy_cheat_entry.empty() ? "file unreadable"
+                                                          : report.legacy_cheat_entry.c_str());
         }
         std::printf("\nmanifest: %s\n", has_manifest ? "dev file loaded" : "not available");
         if (!manifest_error.empty()) {

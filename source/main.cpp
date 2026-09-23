@@ -7,6 +7,8 @@
 #include "env/detect.hpp"
 #include "install/gate.hpp"
 #include "log.hpp"
+#include "manifest/manifest.hpp"
+#include "payload/embedded.hpp"
 #include "probe.hpp"
 #include "ui/app.hpp"
 #include "ui/text_ui.hpp"
@@ -125,17 +127,42 @@ void ReportEnvironment(acnh_manager::Log &log,
         log.Line("  %s (%llu B)", file.name.c_str(), static_cast<unsigned long long>(file.size));
     }
     if (report.legacy_cheat_present) {
-        log.Line("legacy cheat present: %s (may conflict with the agent; move it to a backup)",
-                 report.legacy_cheat_name.c_str());
+        log.Line("legacy cheat present: %s entry=\"%s\" (same chat path as the agent)",
+                 report.legacy_cheat_path.c_str(),
+                 report.legacy_cheat_entry.empty() ? "(file unreadable)"
+                                                   : report.legacy_cheat_entry.c_str());
     }
     if (!report.problems.empty()) {
         log.Line("problems: %s", report.problems.c_str());
     }
 
-    /* No embedded manifest yet: the gate falls back to NoManifest, and we say so. */
-    const auto gate = Evaluate(nullptr, report.build);
+    /* The manifest this build installs from: the embedded release channel, which the interface
+       calls "bundled with the app".  This block used to evaluate with a null manifest and print a
+       hard-coded "no embedded release manifest", written before the release import existed -- so
+       every real build logged a gate of `no-manifest` while its own screen said `supported`,
+       and log.txt is what support reads.  The network check runs later and may adopt a newer
+       manifest; what it adopted is reported by the details page and by the update-check rows, not
+       here (this line is about what the build carries). */
+    acnh_manager::manifest::Manifest active;
+    std::string manifest_line;
+    bool have_manifest = false;
+    if (acnh_manager::payload::EmbeddedAvailable()) {
+        const auto parsed = acnh_manager::manifest::Parse(
+            acnh_manager::payload::EmbeddedManifestJson(), acnh_manager::kAppVersion);
+        if (parsed.ok) {
+            active = parsed.manifest;
+            have_manifest = true;
+            manifest_line = "embedded, agent " + active.agent.version + " (commit " +
+                            active.agent.commit + ")";
+        } else {
+            manifest_line = "embedded manifest rejected: " + parsed.error;
+        }
+    } else {
+        manifest_line = "none embedded (this build carries no release import)";
+    }
+    const auto gate = Evaluate(have_manifest ? &active : nullptr, report.build);
     log.Line("gate: %s (%s)", GateStatusName(gate.status), gate.reason.c_str());
-    log.Line("manifest: no embedded release manifest (waiting for the release import tool)");
+    log.Line("manifest: %s", manifest_line.c_str());
 }
 
 }  // namespace

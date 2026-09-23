@@ -6,6 +6,7 @@ CXX ?= c++
 CXXFLAGS ?= -std=c++17 -O1 -g -Wall -Wextra -Werror
 INCLUDES := -I../source
 SOURCES := host_tests.cpp \
+           ../source/env/cheat_file.cpp \
            ../source/env/config_ini.cpp \
            ../source/i18n/strings.cpp \
            ../source/util/json.cpp \

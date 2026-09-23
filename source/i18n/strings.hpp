@@ -5,7 +5,11 @@
    This is the one place where the source carries Chinese: the UI strings are product
    data, and the language rule in AGENTS.md allows Chinese for i18n.  Everything else is
    English.  Adding a string = add the id here, then fill both columns in strings.cpp
-   (the host tests fail when a column is missing or the format specifiers disagree). */
+   (the host tests fail when a column is missing or the format specifiers disagree).
+
+   Do not put comments between the enumerators: tools/check-i18n.py reads every non-blank line of
+   this block as an id (that is how it compares the two orders), so a comment line counts as a
+   string and the check fails with "enum has N ids".  Explanations belong above the enum. */
 
 #include <cstddef>
 #include <string>
@@ -140,6 +144,7 @@ enum class StringId {
     UninstallFailed,
     ResultReadyNote,
     ResultRelinkHint,
+    HomeLegacyCheat,
 };
 
 const char *Text(StringId id, Language language);

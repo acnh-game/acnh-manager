@@ -22,7 +22,7 @@ constexpr Entry kStrings[] = {
     {"游戏版本号", "Game version"},  /* LabelGameVersion */
     {"更新包标识", "Update id"},  /* LabelContentId */
     {"覆盖键提示", "Override key advice"},  /* LabelOverrideConfig */
-    {"旧金手指文件", "Legacy cheat file"},  /* LabelLegacyCheat */
+    {"旧金手指代码", "Legacy cheat code"},  /* LabelLegacyCheat */
     {"检测结果", "Check result"},  /* LabelGateResult */
     {"检测异常", "Detection problems"},  /* LabelProblems */
     {"界面语言", "Language"},  /* LanguageLabel */
@@ -142,6 +142,7 @@ constexpr Entry kStrings[] = {
     {"以下文件无法删除: %s", "could not delete: %s"},  /* UninstallFailed */
     {"重启游戏即可使用聊天码", "Restart the game to use chat codes"},  /* ResultReadyNote */
     {"管理器与存储卡失去联系:退出本程序后重新打开,再试一次", "Lost contact with the card: close the manager, open it again, then retry"},  /* ResultRelinkHint */
+    {"检测到可能冲突的旧金手指代码", "Found an old cheat code that may conflict"},  /* HomeLegacyCheat */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

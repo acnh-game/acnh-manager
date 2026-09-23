@@ -4,6 +4,7 @@
 #include <cstring>
 #include <utility>
 
+#include "env/cheat_file.hpp"
 #include "util/fs_path.hpp"
 
 namespace acnh_manager::env {
@@ -14,6 +15,11 @@ constexpr const char *kExefsDir = kAcnhExefsDir;
 constexpr const char *kCheatsDir = kAcnhCheatsDir;
 constexpr const char *kOverrideConfig = kAcnhOverrideConfig;
 constexpr const char *kTitleConfig = kAcnhTitleConfig;
+
+/* A cheat file is a list of `[entry]` blocks; the cap only exists so a corrupt size cannot make
+   the read unbounded.  The known pack is about 6 KB, so 256 KB is generous. */
+constexpr std::size_t kCheatFileMaxBytes = 256 * 1024;
+constexpr std::size_t kConfigFileMaxBytes = 64 * 1024;
 
 void Hex(char *out, const u8 *data, std::size_t size) {
     static const char digits[] = "0123456789ABCDEF";
@@ -33,14 +39,15 @@ void Note(EnvironmentReport *report, const char *what, Result rc) {
     report->problems += buf;
 }
 
-bool ReadTextFile(FsFileSystem &sd, const char *path, std::string *out) {
+bool ReadTextFile(FsFileSystem &sd, const char *path, std::string *out, std::size_t max_size) {
     const util::FsPath arg(path);
     FsFile file{};
     if (R_FAILED(fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file))) {
         return false;
     }
     s64 size = 0;
-    if (R_FAILED(fsFileGetSize(&file, &size)) || size <= 0 || size > 64 * 1024) {
+    if (R_FAILED(fsFileGetSize(&file, &size)) || size <= 0 ||
+        size > static_cast<s64>(max_size)) {
         fsFileClose(&file);
         return false;
     }
@@ -201,12 +208,12 @@ EnvironmentReport Collect(FsFileSystem &sd) {
 
     /* Override configuration: whether a key must be held at launch */
     std::string override_text;
-    if (ReadTextFile(sd, kOverrideConfig, &override_text)) {
+    if (ReadTextFile(sd, kOverrideConfig, &override_text, kConfigFileMaxBytes)) {
         report.have_override_config = true;
         const OverrideConfig config = ParseOverrideConfig(override_text);
         OverrideKey title_key;
         std::string title_text;
-        if (ReadTextFile(sd, kTitleConfig, &title_text)) {
+        if (ReadTextFile(sd, kTitleConfig, &title_text, kConfigFileMaxBytes)) {
             report.have_title_config = true;
             title_key = ParseTitleConfig(title_text);
         }
@@ -215,14 +222,29 @@ EnvironmentReport Collect(FsFileSystem &sd) {
         report.advice = Advise(OverrideConfig{}, OverrideKey{});
     }
 
-    /* Current install state and the legacy-cheat check */
+    /* Current install state and the legacy-cheat check.  Both halves of the check live in
+       env/cheat_file.* and are host-tested: the file has to carry the name dmnt loads, and one of
+       its entries has to be the chat-code one.  A pack of unrelated entries is not a conflict, and
+       a file whose contents cannot be read is reported anyway -- an unreadable cheat file is not a
+       reason to stay quiet.  (The name test used to ask for 32 hex digits -- "36 characters" --
+       which is a shape no card carries, so nothing was ever reported at all.) */
     report.exefs = ListDirectory(sd, kExefsDir);
     for (const ExefsFile &file : ListDirectory(sd, kCheatsDir)) {
-        if (file.name.size() == 36 && file.name.compare(32, 4, ".txt") == 0) {
-            report.legacy_cheat_present = true;
-            report.legacy_cheat_name = file.name;
-            break;
+        if (!IsLegacyCheatFileName(file.name)) {
+            continue;
         }
+        std::string text;
+        const std::string path = std::string(kCheatsDir) + "/" + file.name;
+        if (ReadTextFile(sd, path.c_str(), &text, kCheatFileMaxBytes)) {
+            const std::string entry = ChatCodeCheatEntry(text);
+            if (entry.empty()) {
+                continue; /* unrelated entries only: not a conflict, nothing to say */
+            }
+            report.legacy_cheat_entry = entry;
+        }
+        report.legacy_cheat_present = true;
+        report.legacy_cheat_path = path;
+        break;
     }
     return report;
 }

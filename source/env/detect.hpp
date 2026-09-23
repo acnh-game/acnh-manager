@@ -55,7 +55,12 @@ struct EnvironmentReport {
     /* Current install state */
     std::vector<ExefsFile> exefs;
     bool legacy_cheat_present{false};
-    std::string legacy_cheat_name;
+    /* The same file as the interface has to name it: the path on the card, not just the file
+       name.  The player has to be able to find it without knowing which directory it lives in. */
+    std::string legacy_cheat_path;
+    /* The entry inside that file which drives the chat-code path; empty when the file could not
+       be read, in which case the file is reported without naming an entry. */
+    std::string legacy_cheat_entry;
 
     /* Failure diagnostics: empty means every reading succeeded */
     std::string problems;

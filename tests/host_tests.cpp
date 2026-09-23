@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "env/cheat_file.hpp"
 #include "env/config_ini.hpp"
 #include "i18n/strings.hpp"
 #include "install/gate.hpp"
@@ -234,6 +235,78 @@ void TestHelpers() {
     CHECK(CompareVersions("0.2.0", "0.2.0") == 0);
     CHECK(CompareVersions("0.10.0", "0.9.0") > 0);
     CHECK(CompareVersions("1.0", "1.0.0") == 0);
+}
+
+/* The cheat-file rules: which files the loader reads, and which of their entries conflict.
+   The names on the left are the ones found on real hardware and in the guide's download
+   (docs/architecture.md section 5); the 36-character case is the shape the first implementation
+   asked for, which no card carries -- which is why the conflict warning never appeared until it
+   was rewritten.  The entry names inside the fixtures stay ASCII on purpose (source is English):
+   the matcher keys on the code, so what the entry is called must not matter to it. */
+void TestCheatFile() {
+    using acnh_manager::env::IsLegacyCheatFileName;
+
+    CHECK(IsLegacyCheatFileName("FF1D1C05670DB602.txt"));   /* what the guide ships */
+    CHECK(IsLegacyCheatFileName("ff1d1c05670db602.txt"));   /* what dmnt formats */
+    CHECK(IsLegacyCheatFileName("0123456789ABCDEF.txt"));
+
+    CHECK(!IsLegacyCheatFileName("toggles.txt"));           /* dmnt's own toggle state */
+    CHECK(!IsLegacyCheatFileName("FF1D1C05670DB6021C85B624A710B963.txt")); /* 32 digits */
+    CHECK(!IsLegacyCheatFileName("FF1D1C05670DB60.txt"));
+    CHECK(!IsLegacyCheatFileName("FF1D1C05670DB602.TXT"));
+    CHECK(!IsLegacyCheatFileName("FF1D1C05670DB602.txt.bak"));
+    CHECK(!IsLegacyCheatFileName("GG1D1C05670DB602.txt"));
+    CHECK(!IsLegacyCheatFileName(""));
+
+    using acnh_manager::env::ChatCodeCheatEntry;
+
+    /* A pack like the one on the author's card: fifteen entries, of which exactly one drives the
+       chat-code path; the miles entry reads the player chain too, so the pair of addresses is what
+       tells them apart. */
+    const char *pack =
+        "[Animal Crossing New Horizons v3.0.3 TID 01006F8002326000 BID FF1D1C05670DB602]\n"
+        "\n"
+        "[Stamina]\n"
+        "011A0000 B9763A00 0000000A\n"
+        "\n"
+        "[Copy slot 1 to slot 2]\n"
+        "80002300\n"
+        "581D0000 B28ED6C8\n"
+        "20000000\n"
+        "\n"
+        "[Chat codes to bag (up to 10)]\n"
+        "80004004\n"
+        "580A0000 05255A60\n"
+        "580A1000 00000468\n"
+        "58060000 05474040\n"
+        "20000000\n"
+        "\n"
+        "[Max miles]\n"
+        "580F0000 05474040\n"
+        "20000000\n";
+    CHECK(ChatCodeCheatEntry(pack) == "Chat codes to bag (up to 10)");
+
+    /* The entry is identified by its code, so renaming it -- which players do -- changes nothing. */
+    CHECK(ChatCodeCheatEntry("[my own name]\n580A0000 05255A60\n58060000 05474040\n20000000\n") ==
+          "my own name");
+
+    /* Comments, brace blocks, CRLF and irregular spacing are the same code. */
+    CHECK(ChatCodeCheatEntry("// pack\r\n[entry]\r\n{ 580A0000   05255A60 // text input\r\n"
+                             "58060000\t05474040 }\r\n") == "entry");
+
+    /* A UTF-8 BOM (what Notepad writes by default) must not hide the first entry: a line that is
+       not read as a header loses its code, and the entry after it would be found instead. */
+    CHECK(ChatCodeCheatEntry("\xEF\xBB\xBF[Chat codes to bag]\n580A0000 05255A60\n"
+                             "58060000 05474040\n20000000\n") == "Chat codes to bag");
+    CHECK(ChatCodeCheatEntry("\xEF\xBB\xBF[renamed]\n580A0000 05255A60\n58060000 05474040\n")
+          == "renamed");
+
+    /* Half the pair is not the chat-code entry: the miles cheat reads the player chain only, and
+       nothing else in the pack reads the text-input object. */
+    CHECK(ChatCodeCheatEntry("[Max miles]\n580F0000 05474040\n20000000\n").empty());
+    CHECK(ChatCodeCheatEntry("[Something else]\n580A0000 05255A60\n20000000\n").empty());
+    CHECK(ChatCodeCheatEntry("").empty());
+    CHECK(ChatCodeCheatEntry("no entries in here\n").empty());
 }
 
 acnh_manager::install::DetectedBuild Detected() {
@@ -485,8 +558,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::ResultRelinkHint) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ResultRelinkHint); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::HomeLegacyCheat) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::HomeLegacyCheat); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -832,6 +905,7 @@ int main() {
     TestManifestOk();
     TestManifestRejects();
     TestHelpers();
+    TestCheatFile();
     TestGate();
     TestUpdateAdoption();
     TestPlan();

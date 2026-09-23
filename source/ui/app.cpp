@@ -50,7 +50,15 @@ constexpr Color kBorder{0xD8, 0xCF, 0xB6, 0xFF};
 constexpr Color kText{0x2B, 0x2B, 0x2B, 0xFF};
 constexpr Color kSubtle{0x6B, 0x6B, 0x6B, 0xFF};
 constexpr Color kGood{0x1B, 0x7F, 0x5A, 0xFF};
-constexpr Color kWarn{0xB5, 0x5A, 0x1E, 0xFF};
+/* Warnings are amber, not red.  The old value sat at a hue of 24 degrees, which read as brick red
+   on the console; kBad is the palette's only red, and it means "the action failed".  Amber is a
+   hue near 40 degrees: kWarn carries text and the status dot, kWarnBright is the strip's border
+   and mark -- decoration, so it can be lighter than a legible text colour. */
+constexpr Color kWarn{0x9A, 0x62, 0x00, 0xFF};
+constexpr Color kWarnBright{0xD2, 0x9A, 0x00, 0xFF};
+/* Fill behind the home warning strip: pale yellow rather than peach, so the whole strip reads as
+   a caution instead of a pinkish alert. */
+constexpr Color kWarnTint{0xFB, 0xF1, 0xCE, 0xFF};
 constexpr Color kOnHeader{0xFF, 0xFF, 0xFF, 0xFF};
 constexpr Color kHeaderSubtle{0xD5, 0xF2, 0xEC, 0xFF};
 constexpr Color kHeaderBadge{0x59, 0xCD, 0xB9, 0xFF};
@@ -1326,6 +1334,27 @@ constexpr int kHomeSecondaryY = 450;
 constexpr int kHomeSecondaryHeight = 110;
 constexpr int kHomeGap = 24;
 
+/* The legacy-cheat strip.  Home carries one message that is not a state: a cheat file left in
+   the game directory drives the same in-game input path as the agent, so missing that message
+   changes what happens in the game.  It therefore sits above the buttons rather than being
+   folded into the state line (a healthy install and a leftover cheat file are both true at
+   once), and the buttons step down for it instead of the strip being squeezed into the gap.
+   The geometry is derived from the status block so a font or copy change cannot make them
+   overlap: the status block ends at `status_y + title line + 6 + body line`. */
+constexpr int kHomeStatusBlockBottom =
+    kHomeStatusY + (kFontTitle + kFontTitle / 3) + 6 + (kFontBody + kFontBody / 3);
+/* The line is the path, so it is long: one size below the body text keeps the whole strip on one
+   line in both languages (the English label is the longer of the two). */
+constexpr int kHomeWarnFont = kFontSmall;
+constexpr int kHomeWarnPad = 18; /* above and below the line, inside the border */
+constexpr int kHomeWarnHeight =
+    (kHomeWarnFont + kHomeWarnFont / 3) + kHomeWarnPad * 2;
+constexpr int kHomeWarnY = kHomeStatusBlockBottom + 12;
+/* What the two button rows move down while the strip is shown: exactly the room it takes plus the
+   gap that keeps it off the primary button. */
+constexpr int kHomeWarnShift = (kHomeWarnY + kHomeWarnHeight + 20) - kHomePrimaryY;
+static_assert(kHomeWarnShift > 0, "the warning strip has to push the buttons down");
+
 /* Key badge: the physical button that also triggers this control, drawn inside it. */
 void DrawKeyBadge(Surface surface, Font &font, int cx, int cy, int radius, const char *key,
                   Color face, Color text) {
@@ -1352,6 +1381,31 @@ void DrawSpinner(Surface surface, int cx, int cy, int radius, Color color) {
         const u8 alpha = static_cast<u8>(40 + (215 * (kDots - i)) / kDots);
         FillRoundedRect(surface, x - 3, y - 3, 7, 7, 3, Color{color.r, color.g, color.b, alpha});
     }
+}
+
+/* The attention mark of the home warning strip: a filled triangle with an exclamation mark
+   knocked out of it.  The drawing layer has no polygon primitive, so the triangle is painted one
+   scanline at a time.  `size` is its height and the base is a fifth wider -- an equilateral
+   warning triangle is wider than tall, and the first version of this mark (base twice the height)
+   read as a stretched blob on the console.  `cut` is the strip's own fill colour, so the mark
+   works on any background the strip is given. */
+void DrawWarnMark(Surface surface, int cx, int cy, int size, Color color, Color cut) {
+    const int top = cy - size / 2;
+    const int base = (size * 6) / 5;
+    for (int row = 0; row < size; ++row) {
+        const int width = ((row + 1) * base) / size;
+        FillRect(surface, cx - width / 2, top + row, width, 1, color);
+    }
+    /* The glyph is centred in the triangle's interior: a stem, a gap, and a dot.  Its rows are
+       measured down from the apex so a change of `size` keeps the proportions. */
+    constexpr int kStroke = 3;
+    constexpr int kDot = 3;
+    constexpr int kGap = 3;
+    const int stem_height = size / 3;
+    const int glyph_height = stem_height + kGap + kDot;
+    const int stem_top = top + (size - glyph_height) / 2;
+    FillRect(surface, cx - kStroke / 2, stem_top, kStroke, stem_height, cut);
+    FillRect(surface, cx - kStroke / 2, stem_top + stem_height + kGap, kStroke, kDot, cut);
 }
 
 /* Centre a single line in a rectangle.  The line box is what gets centred, so the ink lands in
@@ -1381,18 +1435,24 @@ void App::BuildHomeActions(int width, int height) {
        cannot be handled at all. */
     const bool primary_enabled =
         m_home_kind != HomeKind::UpToDate && m_home_kind != HomeKind::Unsupported;
+    /* One shift for both rows, and it lives here because the touch targets are built from the
+       same rectangles: moving the buttons in the renderer alone would leave the finger hitting
+       the old place. */
+    const int shift = m_report.legacy_cheat_present ? kHomeWarnShift : 0;
     m_actions.clear();
     m_actions.push_back(
-        {kActionPrimary, Rect{kHomeMargin, kHomePrimaryY, inner, kHomeButtonHeight}, primary_enabled});
+        {kActionPrimary, Rect{kHomeMargin, kHomePrimaryY + shift, inner, kHomeButtonHeight},
+         primary_enabled});
     /* Without the uninstall button there is nothing to pair with, and a half-width button next
        to empty space reads as a missing control, so the check button takes the full row. */
     const int check_width = installed ? half : inner;
     m_actions.push_back({kActionCheckUpdate,
-                         Rect{kHomeMargin, kHomeSecondaryY, check_width, kHomeSecondaryHeight},
+                         Rect{kHomeMargin, kHomeSecondaryY + shift, check_width,
+                              kHomeSecondaryHeight},
                          true});
     if (installed) {
         m_actions.push_back({kActionUninstall,
-                             Rect{kHomeMargin + half + kHomeGap, kHomeSecondaryY, half,
+                             Rect{kHomeMargin + half + kHomeGap, kHomeSecondaryY + shift, half,
                                   kHomeSecondaryHeight},
                              true});
     }
@@ -1400,7 +1460,7 @@ void App::BuildHomeActions(int width, int height) {
 
 void App::RenderHome(Surface surface) {
     BuildHomeActions(surface.width, surface.height);
-    /* Colour carries the state: teal = ready to act, green = fine, orange = needs attention,
+    /* Colour carries the state: teal = ready to act, green = fine, amber = needs attention,
        red = something failed. */
     Color dot = kHeader;
     switch (m_home_kind) {
@@ -1486,7 +1546,7 @@ void App::RenderHome(Surface surface) {
     /* The state dot is an indicator, not a control: at 44 px it read like a button.  32 px with
        the text pulled in to match keeps the same optical gap. */
     /* 24 px: clearly an indicator, not a control.  The colour already differs per state --
-       teal = ready to install, green = fine, orange = needs attention, red = failed -- see the
+       teal = ready to install, green = fine, amber = needs attention, red = failed -- see the
        switch above. */
     constexpr int kStatusDot = 24;
     constexpr int kStatusTextX = 44;
@@ -1495,6 +1555,35 @@ void App::RenderHome(Surface surface) {
     m_font.Draw(surface, kHomeMargin + kStatusTextX, status_top, kFontTitle, kText, Tr(headline));
     m_font.Draw(surface, kHomeMargin + kStatusTextX, status_top + headline_height + 6, kFontBody, kSubtle,
                 second_line);
+
+    /* The one message on this screen that is not the install state: an old cheat code left in the
+       game directory drives the same in-game input path as the agent, and a missing warning here
+       changes what happens in the game.  The warning is about that code, not about the file it
+       happens to sit in -- a file full of unrelated entries is not reported at all (see
+       env/cheat_file.*) -- but it still names the file by its full path on the card, because that
+       is what the player has to open: a bare file name says nothing about where it lives. */
+    if (m_report.legacy_cheat_present) {
+        const int left = kHomeMargin;
+        const int width = surface.width - kHomeMargin * 2;
+        constexpr int kBorderWidth = 3;
+        constexpr int kRadius = 16;
+        FillRoundedRect(surface, left, kHomeWarnY, width, kHomeWarnHeight, kRadius, kWarnBright);
+        FillRoundedRect(surface, left + kBorderWidth, kHomeWarnY + kBorderWidth,
+                        width - kBorderWidth * 2, kHomeWarnHeight - kBorderWidth * 2,
+                        kRadius - kBorderWidth, kWarnTint);
+        const int line = m_font.LineHeight(kHomeWarnFont);
+        /* No kLabelOpticalBias here: that bias corrects a button label inside a 110 px control, and
+           on this strip it pushed the copy visibly below the mark.  The line box is what has to
+           line up with the mark; the before/after measurements are in docs/device-acceptance.md. */
+        const int text_y = kHomeWarnY + (kHomeWarnHeight - line) / 2;
+        DrawWarnMark(surface, left + 38, kHomeWarnY + kHomeWarnHeight / 2, 24, kWarnBright,
+                     kWarnTint);
+        const char *label = Tr(i18n::StringId::HomeLegacyCheat);
+        const int label_width =
+            m_font.DrawBold(surface, left + 64, text_y, kHomeWarnFont, kWarn, label);
+        m_font.Draw(surface, left + 64 + label_width + 16, text_y, kHomeWarnFont, kWarn,
+                    m_report.legacy_cheat_path);
+    }
 
     /* Buttons, with their key badge and the focus ring. */
     const Action *primary = nullptr;
@@ -1674,7 +1763,7 @@ void App::RenderDetails(Surface surface) {
     }
     if (m_report.legacy_cheat_present) {
         version_rows.push_back(
-            {Tr(i18n::StringId::LabelLegacyCheat), m_report.legacy_cheat_name, kWarn, 2});
+            {Tr(i18n::StringId::LabelLegacyCheat), m_report.legacy_cheat_path, kWarn, 2});
     }
 
     std::vector<Row> advanced_rows;
@@ -1703,35 +1792,60 @@ void App::RenderDetails(Surface surface) {
     /* The details page carries every row we keep; the language switch can make the text longer
        (the English override advice wraps to two lines) and the lower card used to be clipped.
        The tightening order lives in one table instead of a chain of ifs: row gap first, then
-       the bottom padding, and 16 px is the measured minimum that still reads right.  Clipping
-       remains the last resort (docs/architecture.md section 7). */
+       the bottom padding, then the whole page one size down (16 px is the measured minimum that
+       still reads right, and smaller type is still readable where a clipped row is not).
+       Clipping remains the last resort (docs/architecture.md section 7). */
     struct LayoutTier {
         int row_gap;
         int bottom_pad;
+        int font;
     };
-    const LayoutTier tiers[] = {{kRowGap, kCardPadBottom}, {0, kCardPadBottom}, {0, 16}};
+    const LayoutTier tiers[] = {
+        {kRowGap, kCardPadBottom, kFontBody},
+        {0, kCardPadBottom, kFontBody},
+        {0, 16, kFontBody},
+        {0, 16, kFontSmall}, /* one size down beats cutting the last row off the card */
+    };
+    /* Row carries its own size, so the smaller step needs its own copies of both lists. */
+    std::vector<Row> version_rows_small = version_rows;
+    std::vector<Row> advanced_rows_small = advanced_rows;
+    for (Row &row : version_rows_small) {
+        row.size = kFontSmall;
+    }
+    for (Row &row : advanced_rows_small) {
+        row.size = kFontSmall;
+    }
     const int available = page_bottom - page_top - kCardGap;
     LayoutTier tier = tiers[sizeof(tiers) / sizeof(tiers[0]) - 1];
+    const std::vector<Row> *version_shown = &version_rows_small;
+    const std::vector<Row> *advanced_shown = &advanced_rows_small;
     for (const LayoutTier &candidate : tiers) {
-        const int needed = kCardHeader + RowsHeight(version_rows, value_width, candidate.row_gap) +
+        const bool small = candidate.font == kFontSmall;
+        const std::vector<Row> &version_at = small ? version_rows_small : version_rows;
+        const std::vector<Row> &advanced_at = small ? advanced_rows_small : advanced_rows;
+        const int needed = kCardHeader + RowsHeight(version_at, value_width, candidate.row_gap) +
                            candidate.bottom_pad + kCardHeader +
-                           RowsHeight(advanced_rows, value_width, candidate.row_gap) +
+                           RowsHeight(advanced_at, value_width, candidate.row_gap) +
                            candidate.bottom_pad;
         if (needed <= available) {
             tier = candidate;
+            /* Points at the vectors declared above the loop -- not at anything local to this
+               iteration. */
+            version_shown = small ? &version_rows_small : &version_rows;
+            advanced_shown = small ? &advanced_rows_small : &advanced_rows;
             break;
         }
     }
     const int row_gap = tier.row_gap;
     const int bottom_pad = tier.bottom_pad;
     int y = DrawCard(page, page_top, page_bottom, width, value_width,
-                     Tr(i18n::StringId::SectionInstall), version_rows, row_gap, false, bottom_pad);
+                     Tr(i18n::StringId::SectionInstall), *version_shown, row_gap, false, bottom_pad);
     const int advanced_top = y;
     DrawCard(page, y, page_bottom, width, value_width, Tr(i18n::StringId::SectionAdvanced),
-             advanced_rows, row_gap, false, bottom_pad);
+             *advanced_shown, row_gap, false, bottom_pad);
     /* The language row is a control, so it is tappable like everything else: one row, one
        action, same code path as the A key on this page. */
-    const int row_height = m_font.LineHeight(kFontBody);
+    const int row_height = m_font.LineHeight(tier.font);
     m_actions.push_back({kActionLanguage,
                          Rect{kMargin, advanced_top + kCardHeader, width, row_height + kRowGap},
                          true, /*focusable=*/true});
