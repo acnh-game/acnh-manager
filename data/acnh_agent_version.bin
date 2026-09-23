@@ -2,8 +2,8 @@
   "agentVersion": "0.11.0",
   "protocolVersion": 1,
   "abiVersion": 3,
-  "commit": "c15e41858935",
+  "commit": "8fe1c2669d88",
   "dirty": false,
   "buildFlags": 2,
-  "sha256": "c47d2b4783a15978aa863d71a4b82f384b7abae636f085a88b4bf041f404c0ba"
+  "sha256": "20e380d534243f4f047721d58c01acf44ccab25b1d94ff1c593f9772c69ffa01"
 }

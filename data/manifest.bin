@@ -7,7 +7,7 @@
   },
   "agent": {
     "version": "0.11.0",
-    "commit": "c15e41858935",
+    "commit": "8fe1c2669d88",
     "dirty": false,
     "buildFlags": 2
   },
@@ -26,8 +26,8 @@
           "name": "subsdk9",
           "source": "subsdk9",
           "target": "atmosphere/contents/01006F8002326000/exefs/subsdk9",
-          "size": 73986,
-          "sha256": "c47d2b4783a15978aa863d71a4b82f384b7abae636f085a88b4bf041f404c0ba",
+          "size": 73985,
+          "sha256": "20e380d534243f4f047721d58c01acf44ccab25b1d94ff1c593f9772c69ffa01",
           "restart": "game"
         },
         {
@@ -43,7 +43,7 @@
           "source": "acnh-agent.version",
           "target": "atmosphere/contents/01006F8002326000/exefs/acnh-agent.version",
           "size": 219,
-          "sha256": "3eb52d5d7912df914b76bc91f0bd786dcbd040ff4fcf899f06d494778c6540d8",
+          "sha256": "4ce2cd7fb1773713eee58f945d01c4a9297797d7ebd180bb4f356f0c30b19039",
           "restart": "none"
         }
       ]
