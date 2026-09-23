@@ -606,3 +606,23 @@ sdmc:/atmosphere/contents/%016lx/cheats/%02x%02x%02x%02x%02x%02x%02x%02x.txt
 |---|---|---|
 | 门控 | `gate: supported (supported build v3_0_3 (3.0.3))` | 检测结果 `supported build v3_0_3 (3.0.3) [install]` |
 | 清单 | `manifest: embedded, agent 0.11.0 (commit c15e41858935)` | 清单来源 `随应用自带` / 联网检查 `清单可用, agent 0.11.0` |
+
+## 版本 1.0.1 与真机验证(2026-09-23)
+
+发布件:NRO sha256 `3ad1c969…`(2 734 221 B),构建戳 `2026-09-23T05:04:19Z+35192a5+src:32e690c8`
+—— **不带 `-dirty`**。链跑了两次才拿到这个戳,顺序和 1.0.0 那次一样:第一次运行生成发布记录并导入,
+提交之后用 `--skip-agent-build` 重跑,让 NRO 从干净树构建(发布链第 7 步 39 项自检全过)。
+导入同时把 agent 从 `c15e41858935` 抬到了 `8fe1c2669d88`(中间是文档提交,但 commit 字符串编进二进制,
+所以 `subsdk9` 由 73 986 B 变成 73 985 B),`agent-manifest.json` 与内嵌副本随之重建并重签。
+
+真机(`/switch/ACNH-Manager/acnh-manager.nro` 是同一份字节,部署时逐字节核对):
+
+- hbmenu 里版本显示 **1.0.1** —— NACP 版本来自 Makefile 的 `APP_VERSION`,与商店 `version`、
+  页脚构建戳同源,不会各改各的;
+- 启动日志首行 `… (ACNH-Manager 1.0.1)`,并且 `gate: supported (supported build v3_0_3 (3.0.3))`、
+  `manifest: embedded, agent 0.11.0 (commit 8fe1c2669d88)` 与详情页一致;
+- 正好撞上"版本号相同、构建不同"这个真实场景:卡上装的是上一个构建,首页按设计显示
+  `现在安装的 agent 不是当前发布版本` + `当前 0.11.0(C47D2B47) · 最新 0.11.0(20E380D5)`;
+- 走完首页 → 确认页(列出将要写入的三个文件)→ 进度 → 结果页"安装成功";卡上三个文件更新为
+  73 985 B 的新构建,回到首页变成"已是最新";
+- 冲突警告条全程在位,1.0.1 的新界面流程(确认页)也一并走到。
