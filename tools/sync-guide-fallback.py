@@ -38,7 +38,6 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_GUIDE = REPO_ROOT.parent / "acnh-chat-code-guide"
 DEFAULT_LOCK = REPO_ROOT / "packaging" / "agent-lock.json"
 DEFAULT_NRO_DIR = REPO_ROOT / "packaging" / "nro"
-MANIFEST_URL = "https://gitee.com/acnh-game/acnh-manager/raw/main/agent-manifest.json"
 AGENT_FILES_JSON = "agent-files.json"
 
 
@@ -119,7 +118,6 @@ def main(argv: list[str] | None = None) -> int:
     files_json = {
         "schema": 1,
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "manifestUrl": MANIFEST_URL,
         "game": {
             "titleId": game["titleId"],
             "displayVersion": game["displayVersion"],
