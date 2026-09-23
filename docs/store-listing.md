@@ -19,7 +19,7 @@
 |---|---|---|
 | 图标 | `assets/icon.png`(256×256,与 NRO 内图标同源) | 必需;商店网格里要能一眼认出。**已知取舍**:列表与详情页共用这一个文件 —— 列表按磁贴宽度等比画(方形最饱满),详情页却把图标按原始像素画进 256×150 的槽并裁掉溢出(`ui/menus/appstore.cpp`:`icon_vec(968, …, 256, 150)`,DrawIcon 不缩放),所以方形图标在详情页上下各少约 53 px(2026-09-21 真机实测)。两个视图无法同时完美,已试过改成 256×150:详情页完整了,但列表里的主体明显变小(+两条补边),故维持 256×256 |
 | 横幅 `screen.png` | `assets/screen.png`(848×208,由设计主图居中裁带得到;主图不入库) | 商店客户端把详情页顶部那块画成 **848×208**(Sphaira `ui/menus/appstore.cpp`:`banner_vec(70, …, 848.f, 208.f)`),缺图时回退成图标。**按比例裁切、不要缩放填满**;图里不写字(标题与说明由商店自己画)。换图:把新设计放成 `assets/screen-org.png`(仅本地需要,不入库)后跑 `tools/make-icons.py`,它会按 848:208 裁带生成 `screen.png`;没有主图时该步自动跳过 |
-| 截图 | `assets/screenshots/{status,install,done,uninstall}.png`(真机 1280×720,四张) | 商店按 `packages/<name>/screen<N>.png` 取图,所以 `tools/make-store-package.py` 会按 `SCREENSHOT_ORDER` 把它们声明成 `screenshot` 资产,并**额外**在包目录里生成 `screen1..4.png`(本地测试仓库与 CDN 布局用)。上游 README 明确说这类构建期文件可以不入 PR |
+| 截图 | `assets/screenshots/{status,install,done,uninstall}.png`(真机、英文界面、1280×720 真 PNG,2026-09-23 重抓) | 商店按 `packages/<name>/screen<N>.png` 取图,所以 `tools/make-store-package.py` 会按 `SCREENSHOT_ORDER` 把它们声明成 `screenshot` 资产,并**额外**在包目录里生成 `screen1..4.png`(本地测试仓库与 CDN 布局用)。上游 README 明确说这类构建期文件可以不入 PR。**界面用英文**:商店目录每个字段只有一份文本,客户端不做翻译,英文图对中英用户都可用;顺序是 首页(已安装)/ 安装确认页 / 安装成功页 / 卸载确认页,真机抓取过程见 `device-acceptance.md` 末节 |
 
 ## 文案要点
 
