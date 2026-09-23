@@ -13,8 +13,8 @@
     "en": "Installs the in-game agent for Animal Crossing: New Horizons 3.0.3 -- every file is SHA-256 checked before it is written -- so a chat line starting with  /9C9  puts that item in your bag, and one tap removes it again.",
     "zh": "把 agent(游戏内增强 Mod)装进《集合啦!动物森友会》游戏目录(仅支持 3.0.3,写入前逐文件校验),装好后在聊天栏行首输入  /9C9  就能把物品放进背包,也可一键删除还原。"
   },
-  "changelog": {
-    "en": "1.0.0 - first public build: environment detection, verified install/uninstall with one-tap rollback, offline install from the bundled agent, signed update check with one-tap update, Chinese/English interface.",
-    "zh": "1.0.0 - 首个公开版本:环境识别、逐文件校验的安装/卸载与一键回滚、内置 agent 离线安装、带签名的更新检查与一键更新、中英双语界面。"
-  }
+    "changelog": {
+        "en": "1.0.1 - the conflict warning about an old cheat code now actually appears, on the status screen and with the file's full path; the log reports the manifest the build carries instead of claiming there is none.\n1.0.0 - first public build: environment detection, verified install/uninstall with one-tap rollback, offline install from the bundled agent, signed update check with one-tap update, Chinese/English interface.",
+        "zh": "1.0.1 - 与旧金手指代码冲突的警告现在真的会出现,位置在状态页并写出完整路径;日志改为如实报告本构建携带的清单,不再声称没有。\n1.0.0 - 首个公开版本:环境识别、逐文件校验的安装/卸载与一键回滚、内置 agent 离线安装、带签名的更新检查与一键更新、中英双语界面。"
+    }
 }
