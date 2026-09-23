@@ -66,6 +66,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   原始文件名)与 `data/`(bin2s 构建输入,必须带 `.bin` 后缀)。不得手工拷入未校验的二进制;
   发布后跑 `tools/verify-release.py --nro acnh-manager.nro` 核对四处一致。
 - 过程性材料(spike 日志、截图、构建输出)放已忽略的 `build/scratch/`,不进 `docs/`。
+- **指南页的兜底文件由工具生成,不要手抄**:`tools/sync-guide-fallback.py` 把当前发布版本的 NRO 与 agent
+  三件套按 SD 卡目录结构写进 `src/acnh-chat-code-guide/public/`(另一个仓库,单独提交、单独部署),
+  并刷新页面读的 `agent-files.json`;它先核对哈希再落盘,所以不会与发布记录分叉。
 - 新增/改名/删除工具或文档时,同一次改动内更新 `docs/tools-guide.md` 与本文档导航。
 - **退出路径不许改回"返回加载器"**:`source/main.cpp` 必须保留 `__nx_applet_exit_mode = 1`。
   hbl 整个相册会话只用一个进程,退回加载器会把 applet 的显示层留在进程里累积,数次启动/退出后

@@ -41,6 +41,19 @@
 2. `git tag v<版本> && git push && git push origin v<版本>`;
 3. 可选:`gitee release create --tag v<版本> -n "ACNH-Manager <版本>" -b "<说明 + raw 下载地址>"`
    建一个给人看的发行版页面。
+4. **同步指南页兜底**(另一个仓库,单独提交、单独部署):
+
+   ```bash
+   python3 tools/sync-guide-fallback.py --dry-run   # 先看会改哪些文件
+   python3 tools/sync-guide-fallback.py            # 默认写到 ../acnh-chat-code-guide/public/
+   ```
+
+   它按 **SD 卡同款目录结构**写入指南页自己的副本 ——
+   `switch/ACNH-Manager/acnh-manager.nro`(与卡上同名,玩家下载后不用改名)与
+   `atmosphere/contents/01006F8002326000/exefs/{subsdk9,main.npdm,acnh-agent.version}` —— 并刷新页面
+   运行时读的 `agent-files.json`(版本 / 大小 / sha256 / 路径)。每个文件在写入前都用发布锁与发布记录的
+   哈希核对过,所以"指南页发什么"和"App 装什么"不会悄悄分叉。**工具不碰 git**:在指南页仓库里自己
+   提交,再按它的 README 部署 `dist/`。
 
 **没 push 就等于没发布**:App 读的是 Gitee raw 上已推送的内容,清单与签名留在本地时线上表现为
 "检查失败: 清单签名校验失败 / 清单不可用"。
