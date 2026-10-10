@@ -23,7 +23,7 @@ INCLUDES	:=	source
 
 APP_TITLE	:=	ACNH-Manager
 APP_AUTHOR	:=	acnh-game
-APP_VERSION	:=	1.0.1
+APP_VERSION	:=	1.0.2
 
 # The build stamp comes from tools/build.sh (UTC time + commit); a manual make gets a stub.
 BUILD_STAMP	?=	manual

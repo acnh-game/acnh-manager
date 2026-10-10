@@ -38,6 +38,13 @@ GateResult Evaluate(const manifest::Manifest *manifest, const DetectedBuild &det
         result.reason = "no manifest available";
         return result;
     }
+    /* Nothing detected at all: there is no title on this console to look up.  A bare 1.0.0 copy
+       is not this case -- it has an Application content meta, and its version 0 is a version. */
+    if (detected.title_id.empty()) {
+        result.status = GateStatus::TitleMissing;
+        result.reason = "no application content meta for the Animal Crossing title";
+        return result;
+    }
     const std::string title = Upper(detected.title_id);
     const manifest::GameEntry *same_title = nullptr;
     for (const auto &game : manifest->games) {
@@ -53,6 +60,9 @@ GateResult Evaluate(const manifest::Manifest *manifest, const DetectedBuild &det
         result.reason = Describe("no games[] entry for title %s", title.c_str());
         return result;
     }
+    /* Kept for the interface even when the version check below fails: "not supported" has to
+       name what this build supports. */
+    result.title_entry = same_title;
     if (same_title->version != detected.version) {
         result.status = GateStatus::VersionNotSupported;
         result.reason = Describe("title supported but version %u != detected %u",

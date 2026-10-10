@@ -1,5 +1,6 @@
 #include "detect.hpp"
 
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -30,6 +31,13 @@ void Hex(char *out, const u8 *data, std::size_t size) {
     out[size * 2] = '\0';
 }
 
+/* The title id spelled the way the manifest and the gate spell it. */
+std::string TitleIdHex(u64 id) {
+    char text[17];
+    std::snprintf(text, sizeof(text), "%016llX", static_cast<unsigned long long>(id));
+    return text;
+}
+
 void Note(EnvironmentReport *report, const char *what, Result rc) {
     char buf[96];
     std::snprintf(buf, sizeof(buf), "%s rc=0x%08X", what, rc);
@@ -37,6 +45,13 @@ void Note(EnvironmentReport *report, const char *what, Result rc) {
         report->problems += "; ";
     }
     report->problems += buf;
+}
+
+void NoteText(EnvironmentReport *report, const char *text) {
+    if (!report->problems.empty()) {
+        report->problems += "; ";
+    }
+    report->problems += text;
 }
 
 bool ReadTextFile(FsFileSystem &sd, const char *path, std::string *out, std::size_t max_size) {
@@ -97,7 +112,13 @@ void CollectDmnt(EnvironmentReport *report) {
     report->build.module_id_known = true;
 }
 
-void CollectNcm(EnvironmentReport *report) {
+/* `update_absent` means we already know from the ns content table that no update package is
+   installed (the list came back and carried no Patch meta).  That is not a fault: a bare 1.0.0
+   copy has no update title at all, so `ncm` answering "no such content meta" is the expected
+   answer and must not be dressed up as a detection problem on the details page (measured on a
+   1.0.0 console: rc=0x00000E05).  With a patch installed the same failure *is* a problem and is
+   reported. */
+void CollectNcm(EnvironmentReport *report, bool update_absent) {
     if (R_FAILED(ncmInitialize())) {
         report->problems += "ncmInitialize failed";
         return;
@@ -112,7 +133,9 @@ void CollectNcm(EnvironmentReport *report) {
     const Result rc_key =
         ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &key, kAcnhUpdateTitleId);
     if (R_FAILED(rc_key)) {
-        Note(report, "ncm latest key", rc_key);
+        if (!update_absent) {
+            Note(report, "ncm latest key", rc_key);
+        }
         serviceClose(&db.s);
         return;
     }
@@ -135,6 +158,63 @@ void CollectNcm(EnvironmentReport *report) {
         break;
     }
     serviceClose(&db.s);
+}
+
+/* NACP display version: the console's own answer to "which version is installed", and the exact
+   string the home menu shows under "Ver." when a title is selected.  A bare 1.0.0 copy carries
+   numeric title version 0, so without this string there is nothing human-readable to compare a
+   manifest entry against.
+
+   The buffer has to cover the whole declaration (`ns` maps it as a single out buffer, so a
+   window that reaches past the end of a mapping is rejected): it is a page-aligned static array
+   of the full control data -- NACP 0x4000 + icon 0x20000 = 0x24000 bytes.  144 KB does not
+   belong on the thread stack, and a static local keeps exactly one copy. */
+bool CollectControlData(EnvironmentReport *report, bool title_present) {
+    alignas(0x1000) static u8 control[sizeof(NsApplicationControlData)];
+    u64 actual = 0;
+    const Result rc = nsGetApplicationControlData(
+        NsApplicationControlSource_Storage, kAcnhTitleId,
+        reinterpret_cast<NsApplicationControlData *>(control), sizeof(control), &actual);
+    if (R_FAILED(rc)) {
+        /* Without a game on the console this call is expected to fail, and the home screen
+           already says so; only report it when there is a game we failed to describe. */
+        if (title_present) {
+            Note(report, "nsGetApplicationControlData", rc);
+        }
+        return false;
+    }
+    /* The service decides how much it writes.  A full answer is NACP plus icon, so anything
+       shorter than the field we read means the answer is not the structure we asked for and the
+       string cannot be trusted. */
+    constexpr std::size_t kVersionOffset = offsetof(NacpStruct, display_version);
+    constexpr std::size_t kVersionSize = sizeof(NacpStruct::display_version);
+    if (actual < kVersionOffset + kVersionSize) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "nsGetApplicationControlData returned %llu bytes",
+                      static_cast<unsigned long long>(actual));
+        NoteText(report, buf);
+        return false;
+    }
+    const auto *nacp = reinterpret_cast<const NacpStruct *>(control);
+    std::string text;
+    for (std::size_t i = 0; i < kVersionSize; ++i) {
+        const char c = nacp->display_version[i];
+        if (c == '\0') {
+            break;
+        }
+        text.push_back(c);
+    }
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) {
+        text.pop_back();
+    }
+    for (unsigned char c : text) {
+        if (c < 0x20 || c == 0x7F) {
+            text.clear(); /* garbled NACP: say nothing rather than print control characters */
+            break;
+        }
+    }
+    report->game_display_version = text;
+    return true;
 }
 
 }  // namespace
@@ -171,17 +251,25 @@ EnvironmentReport Collect(FsFileSystem &sd) {
                   hos & 0xFF);
     report.hos_version = version;
     report.applet_type = static_cast<int>(appletGetAppletType());
-    report.build.title_id = "01006F8002326000";
+
+    /* Whether the content table answered at all: only then does "no Patch meta" prove that no
+       update package is installed (the ncm step below reads that). */
+    bool meta_list_ok = false;
 
     /* 1. ns: content table (version and patch storage) + whether an app is running */
     if (R_SUCCEEDED(nsInitialize())) {
+        bool title_present = false;
         NsApplicationContentMetaStatus status[16]{};
         s32 count = 0;
         const Result rc = nsListApplicationContentMetaStatus(kAcnhTitleId, 0, status, 16, &count);
         if (R_SUCCEEDED(rc)) {
+            meta_list_ok = true;
             for (s32 i = 0; i < count && i < 16; ++i) {
                 report.metas.push_back({status[i].meta_type, status[i].storageID, status[i].version,
                                         status[i].application_id});
+                if (status[i].meta_type == 0x80) { /* Application: the base game itself */
+                    title_present = true;
+                }
                 if (status[i].meta_type == 0x81) { /* Patch */
                     report.patch_found = true;
                     report.patch_storage = status[i].storageID;
@@ -190,16 +278,28 @@ EnvironmentReport Collect(FsFileSystem &sd) {
         } else {
             Note(&report, "nsListApplicationContentMetaStatus", rc);
         }
+        /* "The game is on this console" is decided by presence, never by the version number: a
+           bare 1.0.0 copy is an installed game whose title version is 0, and reading 0 as "not
+           installed" is how a console that has 1.0.0 was told the game was missing (the details
+           page said "version 2228224 != detected 0").
+
+           Two witnesses, either of which counts: the Application content meta above (read from
+           the storage that holds it) and the control data below, which the console only has for
+           a title that is really there. */
+        const bool have_control_data = CollectControlData(&report, title_present);
         bool running = false;
         if (R_SUCCEEDED(nsIsAnyApplicationRunning(&running))) {
             report.application_running = running;
+        }
+        if (title_present || have_control_data) {
+            report.build.title_id = TitleIdHex(kAcnhTitleId);
         }
     } else {
         report.problems += "nsInitialize failed";
     }
 
     /* 2. ncm: the update title's Program content id (the gate's primary input) */
-    CollectNcm(&report);
+    CollectNcm(&report, meta_list_ok && !report.patch_found);
 
     /* 3. dmnt:cht: main ModuleId while the game runs (the strengthened input) */
     if (report.application_running) {

@@ -33,6 +33,7 @@ const char *GateName(install::GateStatus status) {
     switch (status) {
         case install::GateStatus::Supported: return "supported";
         case install::GateStatus::NoManifest: return "no manifest";
+        case install::GateStatus::TitleMissing: return "game not installed";
         case install::GateStatus::TitleNotSupported: return "title not supported";
         case install::GateStatus::VersionNotSupported: return "version not supported";
         case install::GateStatus::ContentIdMissing: return "content id unavailable";
@@ -82,8 +83,10 @@ void TextUi::Run(acnh_manager::Log *log, FsFileSystem &sd) {
                     kBuildStamp);
         std::printf("system : HOS %s, applet=%d\n", report.hos_version.c_str(),
                     report.applet_type);
-        std::printf("game   : running=%s  version=%u  contentId=%s\n",
+        std::printf("game   : running=%s  version=%u  display=%s  contentId=%s\n",
                     report.application_running ? "yes" : "no", report.build.version,
+                    report.game_display_version.empty() ? "(unavailable)"
+                                                        : report.game_display_version.c_str(),
                     report.build.content_id.empty() ? "(unavailable)"
                                                     : report.build.content_id.c_str());
         if (report.build.module_id_known) {

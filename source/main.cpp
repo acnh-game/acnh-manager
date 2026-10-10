@@ -76,6 +76,7 @@ const char *GateStatusName(acnh_manager::install::GateStatus status) {
     switch (status) {
         case GateStatus::Supported: return "supported";
         case GateStatus::NoManifest: return "no-manifest";
+        case GateStatus::TitleMissing: return "title-missing";
         case GateStatus::TitleNotSupported: return "title-not-supported";
         case GateStatus::VersionNotSupported: return "version-not-supported";
         case GateStatus::ContentIdMissing: return "content-id-missing";
@@ -118,6 +119,9 @@ void ReportEnvironment(acnh_manager::Log &log,
     log.Line("detected build: title=%s version=%u contentId=%s", report.build.title_id.c_str(),
              report.build.version,
              report.build.content_id.empty() ? "(unavailable)" : report.build.content_id.c_str());
+    log.Line("game version: %s (NACP display version, from nsGetApplicationControlData)",
+             report.game_display_version.empty() ? "(unavailable)"
+                                                 : report.game_display_version.c_str());
     if (report.build.module_id_known) {
         log.Line("  running main ModuleId=%s (dmnt:cht)", report.build.module_id.c_str());
     }

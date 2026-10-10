@@ -367,6 +367,49 @@ std::string App::BuildLabel(const std::string &version, const std::string &sha25
     return out;
 }
 
+/* The installed game's version in the words the console itself uses.  The NACP display string
+   comes first: it is what the home menu prints under "Ver.", and for a bare 1.0.0 copy it is the
+   only human-readable version there is (that build's numeric title version is 0). */
+std::string App::InstalledGameVersion() const {
+    if (!m_report.game_display_version.empty()) {
+        return m_report.game_display_version;
+    }
+    /* When the detected build matched a manifest entry, that entry describes the same build, so
+       its display version is a fair fallback if the NACP could not be read. */
+    if (m_gate.game != nullptr && !m_gate.game->display_version.empty()) {
+        return m_gate.game->display_version;
+    }
+    if (m_report.build.version != 0) {
+        return std::to_string(m_report.build.version);
+    }
+    return std::string(Tr(i18n::StringId::ValueNotAvailable));
+}
+
+/* What this build of the app can install, but only when it is a *different* version from the one
+   on the console.  The gate keeps the manifest entry even when it refused, so the "not supported"
+   wording can name a version instead of only saying "no".  Empty means "do not name a version
+   here": either nothing lists this title, or the versions agree and the gate refused for another
+   reason (a content id or build id mismatch) -- printing the same number on both sides would read
+   like a contradiction. */
+std::string App::SupportedGameVersionNote() const {
+    const manifest::GameEntry *entry =
+        m_gate.game != nullptr ? m_gate.game : m_gate.title_entry;
+    if (entry == nullptr) {
+        return std::string();
+    }
+    /* The gate compares numeric title versions, people read display strings: only name a version
+       when both of those say the two sides differ, so the note can never contradict the headline
+       (a content id or build id refusal happens at the same version, and a stale NACP would show
+       the same string on both sides). */
+    if (entry->version == m_report.build.version) {
+        return std::string();
+    }
+    const std::string supported = !entry->display_version.empty()
+                                      ? entry->display_version
+                                      : std::to_string(entry->version);
+    return supported == InstalledGameVersion() ? std::string() : supported;
+}
+
 /* Settings live in their own file because the install record is deleted by uninstall; the
    language has to outlive that.  A missing or unreadable file is not an error: the defaults
    stand and the reason goes to the log. */
@@ -472,7 +515,10 @@ void App::VerifyRecordAgainstCard() {
 /* Fold everything the app knows into the single home-screen state. */
 void App::UpdateHomeState() {
     HomeInputs in;
-    in.game_found = !m_report.build.title_id.empty() && m_report.build.version != 0;
+    /* Presence is what the content table says, not the version number: a bare 1.0.0 copy is
+       installed and carries title version 0, and asking "version != 0" here reported exactly
+       that console as "the game was not found". */
+    in.game_found = !m_report.build.title_id.empty();
     in.supported = m_gate.status == install::GateStatus::Supported;
     in.last_failed = m_last_failed;
     in.files_incomplete = m_files_incomplete;
@@ -1486,12 +1532,7 @@ void App::RenderHome(Surface surface) {
         case HomeKind::UpdateAvailable: headline = i18n::StringId::StateUpdateAvailable; break;
         case HomeKind::UpToDate: headline = i18n::StringId::StateInstalled; break;
     }
-    std::string game_version = Tr(i18n::StringId::ValueNotAvailable);
-    if (m_gate.game != nullptr && !m_gate.game->display_version.empty()) {
-        game_version = m_gate.game->display_version;
-    } else if (m_report.build.version != 0) {
-        game_version = std::to_string(m_report.build.version);
-    }
+    const std::string game_version = InstalledGameVersion();
     /* Two different questions, two different answers: "what is on the card" (the install
        record) and "what a tap would install" (the manifest in use).  They only diverge after a
        network update, and calling the version this build carries "installed" would be wrong. */
@@ -1516,9 +1557,18 @@ void App::RenderHome(Surface surface) {
         case HomeKind::GameMissing:
             second_line = Tr(i18n::StringId::StateGameMissingSub);
             break;
-        case HomeKind::Unsupported:
-            second_line = Tr(i18n::StringId::StateUnsupportedSub);
+        case HomeKind::Unsupported: {
+            /* "Not supported" on its own leaves the player comparing nothing: name the version
+               that is installed and the one this build accepts.  When there is no *different*
+               version to name (no manifest, or a refusal that is not about the version), the line
+               falls back to pointing at the details page. */
+            const std::string supported = SupportedGameVersionNote();
+            second_line = supported.empty()
+                              ? std::string(Tr(i18n::StringId::StateUnsupportedSub))
+                              : i18n::Format(i18n::StringId::HomeVersionsUnsupported,
+                                             game_version.c_str(), supported.c_str());
             break;
+        }
         case HomeKind::Failed:
             second_line = Tr(i18n::StringId::SubRetry);
             break;
@@ -1692,11 +1742,19 @@ void App::RenderDetails(Surface surface) {
     const int page_bottom = surface.height - kFooterHeight - kCardGap;
     const Surface page = surface.Clipped(0, page_top, surface.width, page_bottom - page_top);
 
+    /* The game on this console.  When the manifest knows this title and lists a different version,
+       the row carries both: the home screen states "not supported" and points here, so whoever
+       answers the question finds what the installed version was compared against.  The second
+       version rides along in the existing row (same shape as the agent row above) instead of
+       taking a row of its own, which would push the English page down a font size. */
     std::string game = Tr(i18n::StringId::ValueNotAvailable);
-    if (m_gate.game != nullptr && !m_gate.game->display_version.empty()) {
-        game = "Animal Crossing: New Horizons " + m_gate.game->display_version;
-    } else if (m_report.build.version != 0) {
-        game = std::to_string(m_report.build.version);
+    if (!m_report.build.title_id.empty()) {
+        const std::string name = "Animal Crossing: New Horizons " + InstalledGameVersion();
+        const std::string supported = SupportedGameVersionNote();
+        game = (m_gate.status != install::GateStatus::Supported && !supported.empty())
+                   ? i18n::Format(i18n::StringId::ValueGameVersionSupported, name.c_str(),
+                                  supported.c_str())
+                   : name;
     }
     /* The version on the card first -- that is the fact about this console; the commit is a
        development detail and lives in the log.  When this build of the app carries a different

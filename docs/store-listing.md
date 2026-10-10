@@ -104,11 +104,11 @@ cd build/scratch/spinarak-check/packages && python3 ../spinarak.py
 3. 键盘输入名称(随意,例如 `ACNH-Test`),再输入 URL:**`http://<Mac 的局域网 IP>:8080`**
    —— Sphaira 会自己补上 `/repo.json`(`ui/menus/appstore.cpp` 里 `suffix{"/repo.json"}`),
    所以你写不写 `/repo.json` 都行;
-4. 它会切到这个商店并加载:应能看到 `ACNH-Manager`(Tools,1.0.0),详情页顶部是横幅、
+4. 它会切到这个商店并加载:应能看到 `ACNH-Manager`(Tools,1.0.2),详情页顶部是横幅、
    下方是四张截图 —— 这一眼就把 `screen.png` 的尺寸/比例与截图顺序一起验了;
 5. **安装**:按 `A` → 完成后卡上应出现 `/switch/ACNH-Manager/acnh-manager.nro`
    (商店包只包含这一个文件;agent 的三件套是 App 自己装的,不受影响);
-6. **更新**:把本地包换成更高版本(`python3 tools/make-store-package.py --version 1.0.1`),
+6. **更新**:把本地包换成更高版本(`python3 tools/make-store-package.py --version 1.0.3`),
    回商店刷新 → 应显示可更新 → 更新后版本号变化、卡上文件被替换;
 7. **卸载**:在商店里卸载 → `acnh-manager.nro` 从卡上消失(其余目录与 `state.json` 不动);
 8. 测完清掉:切到该商店 → `X` → **删除当前商店**。

@@ -17,7 +17,10 @@
 namespace acnh_manager::install {
 
 struct DetectedBuild {
-    std::string title_id;   /* 16 hex digits */
+    /* 16 hex digits; empty when no Application content meta for the title is on this console.
+       Presence is not the same question as the version: a bare 1.0.0 copy is installed and
+       carries title version 0, so `version == 0` must never be read as "no game here". */
+    std::string title_id;
     std::uint32_t version{0};
     std::string content_id; /* 32 hex digits; empty when unreadable */
     bool module_id_known{false};
@@ -27,6 +30,7 @@ struct DetectedBuild {
 enum class GateStatus {
     Supported,
     NoManifest,
+    TitleMissing,      /* nothing on this console carries the Animal Crossing title id */
     TitleNotSupported,
     VersionNotSupported,
     ContentIdMissing,
@@ -36,6 +40,10 @@ enum class GateStatus {
 
 struct GateResult {
     GateStatus status{GateStatus::NoManifest};
+    /* The games[] entry for a title this console has, even when its version does not match (the
+       "not supported" case).  The home screen needs it to say what this build *would* accept.
+       `game` stays null unless the entry passed every check. */
+    const manifest::GameEntry *title_entry{nullptr};
     const manifest::GameEntry *game{nullptr};
     std::string reason; /* diagnostic text; the UI turns it into player-facing wording */
 };

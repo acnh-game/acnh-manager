@@ -46,6 +46,11 @@ struct EnvironmentReport {
     bool patch_found{false};
     std::uint8_t patch_storage{0};
     install::DetectedBuild build;
+    /* The console's own version string for the installed game, read from the NACP (controls
+       data): the text the home menu prints next to a selected title, e.g. "1.0.0" or "3.0.3".
+       Empty when it could not be read.  It is the only human-readable version a bare 1.0.0
+       copy has -- that build's numeric title version is 0. */
+    std::string game_display_version;
 
     /* Override configuration (whether a key must be held when launching the game) */
     bool have_override_config{false};

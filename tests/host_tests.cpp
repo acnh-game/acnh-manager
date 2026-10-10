@@ -332,6 +332,29 @@ void TestGate() {
     unknown_title.title_id = "0100000000000000";
     CHECK(Evaluate(manifest, unknown_title).status == GateStatus::TitleNotSupported);
 
+    /* No Application content meta on the console: the game is not here at all.  This is the
+       only case that may be reported as "not found" -- see the 1.0.0 case below. */
+    auto no_title = Detected();
+    no_title.title_id.clear();
+    no_title.version = 0;
+    no_title.content_id.clear();
+    CHECK(Evaluate(manifest, no_title).status == GateStatus::TitleMissing);
+
+    /* A bare 1.0.0 copy: the title is installed, its title version is 0, and no manifest entry
+       covers it.  The verdict has to be "version not supported" (with the entry kept so the home
+       screen can name the version this build accepts), never "no game here" -- a console in
+       exactly this state was told the game was missing (details page: "title supported but
+       version 2228224 != detected 0"). */
+    auto base_1_0_0 = Detected();
+    base_1_0_0.version = 0;
+    base_1_0_0.content_id.clear();
+    base_1_0_0.module_id_known = false;
+    base_1_0_0.module_id.clear();
+    const auto base = Evaluate(manifest, base_1_0_0);
+    CHECK(base.status == GateStatus::VersionNotSupported);
+    CHECK(base.game == nullptr);
+    CHECK(base.title_entry != nullptr && base.title_entry->display_version == "3.0.3");
+
     auto other_version = Detected();
     other_version.version = 1310720; /* 2.0.x */
     CHECK(Evaluate(manifest, other_version).status == GateStatus::VersionNotSupported);

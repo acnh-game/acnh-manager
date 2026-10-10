@@ -53,7 +53,8 @@ fail-closed 也不用"最接近的匹配",理由见第 6.2 节里每种状态的
 
 ```text
 ① ns   nsListApplicationContentMetaStatus(01006F8002326000)
-        → Application/Patch 的 version(期望 2228224)与 Patch 所在 storage(期望 SD=5)
+        → 是否有 Application(基础游戏)/Patch 条目;Patch 的 version(期望 2228224)与所在
+          storage(期望 SD=5)
 ② ncm  ncmOpenContentMetaDatabase(SD) + GetLatestContentMetaKey(01006F8002326800) + ListContentInfo
         → 更新标题的 content meta:version 必须 == 2228224、type == Patch(0x81);
           其内容表中 type=1(Program)的 content id 必须 == E10617820DB06889E1638499478DA0DE
@@ -69,6 +70,54 @@ fail-closed 也不用"最接近的匹配",理由见第 6.2 节里每种状态的
 - 注意区分两个 content id:`ncm` 里更新标题(type=1)的 `E1061782…` 才随构建变化;
   `lr` 解析 base title id 得到的 `80CBC793…` 是**基础标题 1.0.0 的 Program NCA**(version 0),
   对所有更新版本都一样,不能用作门控(实测确认)。
+
+### 3.1 "有游戏"与"什么版本"是两个问题
+
+门控需要两个独立事实,混在一起就会得出错误结论:
+
+**"这台机器上有这个游戏"由 ① 的 Application 条目决定,不由版本号决定。** 只装了基础版
+(没有更新包)时,Application 条目的 version 就是 **0** —— 0 是一个版本,不是"没有游戏"。
+曾经首页把 `version != 0` 当作"检测到游戏"的条件,于是"删掉 3.0.3 更新包、只剩 1.0.0"的机器
+被首页报成"没有找到《集合啦!动物森友会》"(详情页的检测结果却正确地写着
+`title supported but version 2228224 != detected 0`)。现在的判据是 Application 条目是否存在
+(旁证是 NACP 能读到,见下;两者任一成立即算"游戏在这台机器上"):不存在 → `TitleMissing`
+(首页"没有找到",详情页给出检测原文);存在但版本不在 `games[]` 里 →
+`VersionNotSupported`(首页"不支持当前安装的游戏版本",并在状态行下方给出实际版本与本应用支持的
+版本)。
+
+**"1.0.0 / 3.0.3"这种给人看的版本串来自 NACP。** 选中的游戏在系统菜单里按 `-` 显示的
+`Ver. 1.0.0`,就是应用控制数据(control.nacp)里的 DisplayVersion 字段:
+
+```text
+nsGetApplicationControlData(NsApplicationControlSource_Storage, 01006F8002326000, buf, 0x24000, &actual)
+  buf                        = NsApplicationControlData { NacpStruct nacp; u8 icon[0x20000]; }   (0x24000)
+  nacp->display_version      = NACP + 0x3060,16 字节(0x10),以 NUL 结尾的 UTF-8,如 "1.0.0"
+```
+
+偏移与大小由 libnx 的 `switch/nacp.h` 决定,用 `offsetof(NacpStruct, display_version)` 与
+`sizeof` 复核(`0x3060` / `0x10`;`sizeof(NacpStruct) == 0x4000`),代码里不写死 0x3060。
+这条读取**不需要游戏在运行**,相册 applet 模式即可。缓冲区必须自带整个声明窗口(见 4.2 节的同类
+规则),并且是页对齐的静态数组:0x24000 = 144 KB 不该放在线程栈上。读不到(游戏不在,或服务拒绝)
+时 `game_display_version` 为空,界面的回退顺序是:门控匹配上的那个清单条目的 `displayVersion`
+(只有构建被支持时才有)、最后是数字版本号。设计上它拿到的就是系统菜单显示图标/标题名/`Ver.` 用的
+那份"当前生效"控制数据(装了更新包的标题,这三项跟着更新走);这一条本次没条件在真机确认(验收时
+机器上只有基础版,列在 `docs/device-acceptance.md` 的未覆盖项里),所以日志把它与数字版本并列打印,
+方便随时对照。
+
+只装基础版的情形已在真机上验过(2026-10-10,一台没有更新包的机器):`log.txt` 给出
+`game version: 1.0.0 (NACP display version, from nsGetApplicationControlData)`,同一份日志里
+`meta type=Application(0x80) storage=5 version=0(0)`、`detected build: title=01006F8002326000
+version=0 contentId=(unavailable)`、`gate: version-not-supported (title supported but version
+2228224 != detected 0)` 三行同时成立。装了更新包的机器还要确认读到的串**与系统菜单 `-` 显示的
+`Ver.` 完全一致**(那时 `detected build: version=` 应是更新标题的数字版本,如 2228224);两者若
+不一致,以数字版本为准排查:界面显示的是控制台自报的串,数字版本才是门控输入。
+
+同一情形还有一条附带规则:**"没装更新包"不是异常**。1.0.0 机器的 `ncm` 读更新标题会返回
+`0x00000E05`(ncm 的 ContentMetaNotFound,2026-10-10 实测),而那时 `ns` 的内容表里本来就没有
+Patch 条目 —— 先把"没有更新包"写进 `problems`,详情页就会给一台健康机器挂一行"检测异常"。
+现在只有一种情况才算异常:`ns` 的内容表确实列出了 Patch 条目、`ncm` 却仍然读不到更新标题。
+那个失败本身不需要丢证据:同一份 `log.txt` 里的 `meta type=…` 列表与
+`detected build: … contentId=(unavailable)` 仍然逐行写着实际读到了什么。
 
 ## 4. SD 写入约定(实现约束)
 
@@ -189,7 +238,7 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 | `source/install/gate.*` | 门控判定 `Evaluate()`、安装决策 `Plan()`、`state.json` 的序列化/解析 |
 | `source/env/config_ini.*` | `override_config.ini` 与 per-title `config.ini` 的语义解析,产出"启动游戏要不要按键"的人话提示(纯逻辑) |
 | `source/env/cheat_file.*` | 旧金手指冲突的**两半判据**:文件名(`IsLegacyCheatFileName`:主模块号前 8 字节的十六进制 + `.txt`,20 字符,大小写都认)与内容(`ChatCodeCheatEntry`:文件里存在同时读 `main+0x05255A60`(文字输入对象)和 `main+0x5474040`(玩家链)的条目)。文件名形状来自 dmnt 的载入路径,内容判据来自 cheat 本身的关键地址:重命名条目不影响识别,而只带玩家链的条目(里程数那条)不会被误报。解析容忍注释、花括号、CRLF 与开头的 UTF-8 BOM(记事本默认就写 BOM,而 BOM 会让第一行不再被当成条目头、连带丢掉那条代码)。纯逻辑,主机侧有回归用例。**这两个地址是版本绑定的**:重生成 cheat(换游戏版本、改偏移)必须同步改常量与夹具,否则检测会静默不再命中 |
-| `source/env/detect.*` | 真机取数(只读):`ns` 内容表、`ncm` 更新标题 Program 内容 id、`dmnt:cht` ModuleId、覆盖配置、exefs 现状与旧金手指检测 → `EnvironmentReport` |
+| `source/env/detect.*` | 真机取数(只读):`ns` 内容表(含"游戏在不在这台机器上")、`ns` NACP 的 DisplayVersion(给人看的版本串)、`ncm` 更新标题 Program 内容 id、`dmnt:cht` ModuleId、覆盖配置、exefs 现状与旧金手指检测 → `EnvironmentReport` |
 
 ### 6.1 覆盖键提示的精确语义(实测澄清)
 
@@ -218,12 +267,22 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 | 状态 | 触发条件 | 处理 |
 |---|---|---|
 | `Supported` | 命中 `games[]` 条目:title 与 version 相同、内容 id 相同;若游戏在运行且条目有 `buildId`,ModuleId 也必须相同 | 允许安装 |
-| `NoManifest` | App 没有可用清单(M1 阶段即如此,清单由 M4 导入) | 不写盘,提示"清单不可用" |
+| `NoManifest` | App 没有可用清单(M1 阶段即如此,清单由 M4 导入) | 不写盘;首页文案见本表下面那段说明 |
+| `TitleMissing` | 控制台上既没有该 title 的 Application 条目,也读不到它的 NACP(游戏真的不在这台机器上) | 首页"没有找到" |
 | `TitleNotSupported` | 清单里没有该 title | 拒绝 |
-| `VersionNotSupported` | title 有但版本不同 | 拒绝 |
+| `VersionNotSupported` | title 有但版本不同(含"只装了基础版、version 0"的情形) | 拒绝;首页给出实际版本与本应用支持的版本 |
 | `ContentIdMissing` | `ncm` 读不到内容 id(权限或异常) | 拒绝(fail-closed,不做"降级为仅版本匹配") |
 | `ContentIdMismatch` | 版本相同但内容指纹不同(重打包/未支持的新构建) | 拒绝 |
 | `BuildIdMismatch` | 游戏正在运行,且 `dmnt:cht` 的 ModuleId 与条目不符 | 拒绝 |
+
+**已知且接受的措辞缺口(`NoManifest`)**:首页的状态分类只看"支持 / 不支持"这一个布尔量,没有
+"应用自己没有可安装内容"这一态,所以游戏在的时候 `NoManifest` 会借用"不支持当前安装的游戏版本"
+这个标题 —— 真原因是 `no manifest available`,写在详情页的检测结果行。正式发布件碰不到它:清单随
+NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失或不一致的产物;只有自己从源码
+构建、且没有导入发布记录的开发件才会看到。要真正修好得新增第九种首页状态(改 `ui/home_state.hpp`
+的分类与优先级、主机用例、以及本文件与 `AGENTS.md` 里"首页八态"的契约),另写一条不含"清单"这类
+内部词的玩家文案,再决定那一态的主按钮给什么,所以 2026-10-10 明确决定**不修**,记录在此以免后人
+重新判断一次。
 
 ### 6.3 安装动作(`Plan`)
 
@@ -252,8 +311,10 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 
 ### 6.5 测试与阶段说明
 
-- 主机测试:`make -C tests`(覆盖 JSON 解析/拒绝、清单校验、路径安全、版本比较、门控七种状态、
+- 主机测试:`make -C tests`(覆盖 JSON 解析/拒绝、清单校验、路径安全、版本比较、门控八种状态、
   安装四种动作、state 与 settings 往返、首页八态分类、触摸判定、页眉命中矩形、覆盖键语义多种情形)。
+  门控那八种状态里有一条 2026-10-10 新增的用例:只装了 1.0.0 基础版时必须判成"版本不支持",
+  而不是"找不到游戏"。
 - 清单与内嵌 payload 由导入工具从 acnh-agent 的发布产物生成(门控与落盘清单见
   `docs/release-process.md` 第 2 节)。**没导入时**状态页显示"未内置(等待发布导入)",App 仍能
   启动并显示环境,只是无法安装。

@@ -20,7 +20,9 @@ enum class HomeKind {
 };
 
 struct HomeInputs {
-    bool game_found{false};    /* the game is installed and its build was readable */
+    /* The console reports the game's Application content meta.  A bare 1.0.0 copy counts -- its
+       title version is 0, which is a version, so presence must never be derived from it. */
+    bool game_found{false};
     bool supported{false};     /* gate verdict is Supported (build matches the manifest) */
     bool last_failed{false};   /* the previous install/uninstall ended in an error */
     bool files_incomplete{false}; /* the card no longer matches the install record */

@@ -62,6 +62,14 @@ private:
     void LoadSettings();
     void SaveSettings();
     void UpdateHomeState();
+    /* The installed game's version as a person reads it: the console's NACP display string
+       ("1.0.0"), the entry this build matched, or the numeric title version. */
+    std::string InstalledGameVersion() const;
+    /* The game version this build of the app can install (from the manifest entry for the detected
+       title) -- but only when it differs from the installed one, because that is the only case
+       where naming it explains anything.  Empty when no manifest lists this title, or when both
+       sides carry the same version and the gate refused for another reason. */
+    std::string SupportedGameVersionNote() const;
     /* "0.11.0(c47d2b47)" -- version plus the first bytes of its payload hash, which is what
        tells two builds of the same version apart. */
     std::string BuildLabel(const std::string &version, const std::string &sha256) const;

@@ -71,6 +71,7 @@ constexpr Entry kStrings[] = {
     {"从发布端下载(agent %s)", "downloaded (agent %s)"},  /* ValueNetworkManifest */
     /* The version on the card, plus what this build of the app carries when the two differ. */
     {"%s(随应用自带 %s)", "%s (bundled %s)"},  /* ValueAgentCarried */
+    {"%s(本应用支持 %s)", "%s (this build supports %s)"},  /* ValueGameVersionSupported */
     {"覆盖始终生效(override_key 没有有效按键)", "Override always applies (override_key has no valid key)"},  /* OverrideAlwaysOn */
     {"覆盖永不生效(override_key 为空或按键名无法识别):请改成 !L 或删除该项", "Override never applies (override_key empty or the key name is unknown): change it to !L or remove the entry"},  /* OverrideNeverApplies */
     {"覆盖默认生效；启动游戏时不要按住 %s", "Override applies by default; do not hold %s while launching the game"},  /* OverrideOnByDefault */
@@ -88,7 +89,7 @@ constexpr Entry kStrings[] = {
     {"state.json 解析失败: %s", "state.json parse failed: %s"},  /* InstallErrStateParse */
     {"没有安装记录，无需卸载", "nothing to uninstall (no install record)"},  /* UninstallNoRecord */
     {"没有找到《集合啦!动物森友会》", "Animal Crossing: New Horizons was not found"},  /* StateGameMissing */
-    {"这个游戏版本暂不支持", "This game version is not supported yet"},  /* StateUnsupported */
+    {"不支持当前安装的游戏版本", "The installed game version is not supported"},  /* StateUnsupported */
     {"上次安装失败", "The last install failed"},  /* StateFailed */
     {"现在安装的 agent 不是当前发布版本", "The installed agent is not the current release"},  /* StateRepair */
     {"已安装的文件不完整", "The installed files are incomplete"},  /* StateIncomplete */
@@ -98,6 +99,7 @@ constexpr Entry kStrings[] = {
     {"请先在这台机器上安装游戏，回来按一下重新检测", "Install the game on this console first, then check again"},  /* StateGameMissingSub */
     {"原因写在详情里", "The reason is in Details"},  /* StateUnsupportedSub */
     {"游戏 %s · agent %s", "Game %s - agent %s"},  /* HomeVersions */
+    {"游戏 %s · 本应用支持 %s", "Game %s - this build supports %s"},  /* HomeVersionsUnsupported */
     {"游戏 %s · 可安装 agent %s", "Game %s - agent %s ready to install"},  /* HomeVersionsAvailable */
     {"游戏 %s · agent %s → %s", "Game %s - agent %s -> %s"},  /* HomeVersionsUpdate */
     {"未安装", "not installed"},  /* ValueNotInstalled */
