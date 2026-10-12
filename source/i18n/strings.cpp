@@ -196,7 +196,7 @@ constexpr Entry kStrings[] = {
     {"这个目录里没有可安装的文件", "No installable file in this directory"},  /* InstallNoFiles */
     {"这个文件不是可安装的安装包(nsp / nsz / xci / xcz)", "This file is not an install package (nsp / nsz / xci / xcz)"},  /* InstallNotAPackage */
     {"这个包里没有可安装的内容", "This package has no installable content"},  /* InstallNoContent */
-    {"agent 不能在即将安装的版本下工作: 本应用只支持 %s", "The agent cannot work with the version being installed - this build supports %s"},  /* InstallAgentUnsupported */
+    {"agent 不能在即将安装的版本下工作: 支持版本为: %s", "The agent cannot work with the version being installed - supported versions: %s"},  /* InstallAgentUnsupported */
     {"已写入 %s · %d 个内容 · %s", "Written to %s - %d contents, %s"},  /* ResultWroteLine */
     {"机器上已经有这个版本,没有改动", "This version is already installed; nothing changed"},  /* ResultSameVersionDetail */
     {"机器上已经有更新的版本(%s),没有改动", "A newer version (%s) is already installed; nothing changed"},  /* ResultNewerVersionDetail */
