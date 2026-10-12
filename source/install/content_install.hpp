@@ -152,6 +152,10 @@ public:
        placeholders and, where possible, the records. */
     bool Finish(const FinishInputs &inputs, std::string *error);
 
+    /* The finish sequence's own record, one entry per step, so a run that reports success but
+       changes nothing on the console can be told apart from one whose write was refused. */
+    const std::vector<std::string> &FinishTrace() const { return m_finish_trace; }
+
     /* Undo what Finish() registered for `inputs` (the cancel/rollback path).  Metas and records
        the console already had are never touched. */
     bool Rollback(const FinishInputs &inputs, std::string *error);
@@ -165,6 +169,7 @@ private:
     NcmContentMetaDatabase m_meta{};
     NxServices m_services;
     bool m_open{false};
+    std::vector<std::string> m_finish_trace;
 };
 
 /* 32 hex digits <-> NcmContentId, 16 hex digits <-> NcmPlaceHolderId.  Kept next to the storage

@@ -538,6 +538,11 @@ bool GameInstall::Finish(std::string *error) {
         m_status.error = *error;
         return false;
     }
+    /* One line per finish step: "the install said complete but the console disagrees" needs to
+       be readable from the log, not inferred. */
+    for (const auto &line : m_installer.FinishTrace()) {
+        Note("install: finish %s", line.c_str());
+    }
     m_status.stage = InstallStage::Done;
     RefreshStatus();
     return true;

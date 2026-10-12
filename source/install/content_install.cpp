@@ -632,6 +632,7 @@ bool ContentInstaller::ReadFromContent(const std::string &path, std::uint64_t ti
 }
 
 bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
+    m_finish_trace.clear();
     if (!EnsureOpen(error)) {
         return false;
     }
@@ -646,6 +647,15 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
     key.type = inputs.meta_type;
     key.install_type = 0; /* NcmContentInstallType_Full */
 
+    {
+        char note[160];
+        std::snprintf(note, sizeof(note), "key id=%s version=0x%x type=%u install=%u contents=%zu",
+                      inputs.title_id.c_str(), inputs.version,
+                      static_cast<unsigned>(inputs.meta_type), static_cast<unsigned>(key.install_type),
+                      inputs.content_ids.size());
+        m_finish_trace.push_back(note);
+    }
+
     /* 1. Ticket.  A package without one (a base game only) is legal, so an empty blob is not an
           error; the import failure itself is reported, never swallowed (design section 9). */
     if (!m_options.skip_ticket && !inputs.ticket.empty()) {
@@ -654,6 +664,8 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
             return false;
         }
     }
+
+    m_finish_trace.push_back("ticket " + std::string(inputs.ticket.empty() ? "absent" : "imported"));
 
     /* 2. Delete the older version of this title, across every storage -- the console keeps each
           version's contents otherwise, which is how a second update silently eats the card
@@ -712,11 +724,22 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
     {
         const Result rc = ncmContentMetaDatabaseSet(&m_meta, &key, inputs.meta_blob.data(),
                                                     inputs.meta_blob.size());
+        {
+            char note[96];
+            std::snprintf(note, sizeof(note), "metadb set rc=0x%x blob=%zu", static_cast<unsigned>(rc),
+                          inputs.meta_blob.size());
+            m_finish_trace.push_back(note);
+        }
         if (R_FAILED(rc)) {
             *error = Describe("writing the content meta record", rc);
             return false;
         }
         const Result commit = ncmContentMetaDatabaseCommit(&m_meta);
+        {
+            char note[64];
+            std::snprintf(note, sizeof(note), "metadb commit rc=0x%x", static_cast<unsigned>(commit));
+            m_finish_trace.push_back(note);
+        }
         if (R_FAILED(commit)) {
             *error = Describe("committing the content meta database", commit);
             return false;
@@ -730,6 +753,13 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
         record.key = key;
         record.storage_id = static_cast<std::uint8_t>(ToNcmStorage(m_target));
         const std::vector<ContentStorageRecord> records{record};
+        {
+            char note[96];
+            std::snprintf(note, sizeof(note), "record id=%016llx storage=%u",
+                          static_cast<unsigned long long>(key.id),
+                          static_cast<unsigned>(record.storage_id));
+            m_finish_trace.push_back(note);
+        }
         if (!m_services.PushApplicationRecord(key.id, records, error)) {
             return false;
         }
