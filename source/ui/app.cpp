@@ -2685,239 +2685,29 @@ void App::RenderInstallProgress(Surface surface) {
     }
 }
 
-/* The result screen: four titles, and three rows that say what it was, what happened and what
-   the player can do now.  Nothing here points at another page -- the design keeps the whole
-   answer on this screen (section 8). */
-void App::RenderInstallResult(Surface surface) {
-    m_actions.clear();
-    if (m_game_install == nullptr) {
-        /* The package was dropped after the run (or never parsed): the screen still says what
-           happened, in the player's language. */
-        const int x = kMargin;
-        m_font.Draw(surface, x, kHeaderHeight + 60, kFontTitle, kBad,
-                    Tr(i18n::StringId::ResultFailed));
-        i18n::StringId reason = i18n::StringId::InstallNotAPackage;
-        if (m_install_error == "no-content") {
-            reason = i18n::StringId::InstallNoContent;
-        } else if (m_install_error == "game-running") {
-            reason = i18n::StringId::InstallGameRunning;
-        }
-        m_font.Draw(surface, x, kHeaderHeight + 140, kFontBody, kSubtle, Tr(reason));
-        return;
-    }
-    const install::InstallStatus &status = m_install_status;
-    const int card_x = 180;
-    const int card_top = kHeaderHeight + 40;
-    const int card_width = surface.width - card_x * 2;
-    const int card_height = 340;
-    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
-    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
 
-    i18n::StringId title = i18n::StringId::ResultInstalled;
-    Color colour = kGood;
-    switch (status.stage) {
-        case install::InstallStage::Skipped:
-            /* Decided by the numbers, not by the path that got us here: "the console has a newer
-               version than this package" and "this exact version is already installed" are
-               different sentences, and both are skips. */
-            title = status.installed_version > status.package_version
-                        ? i18n::StringId::ResultSkippedNewer
-                        : i18n::StringId::ResultSkippedInstalled;
-            break;
-        case install::InstallStage::Failed:
-            title = i18n::StringId::ResultFailed;
-            colour = kBad;
-            break;
-        default: break;
-    }
-    m_font.DrawBold(surface, card_x + 36, card_top + 32, kFontTitle, colour, Tr(title));
-
-    const auto row = [&](i18n::StringId label, const std::string &text, int index) {
-        const int y = card_top + 120 + index * 56;
-        m_font.Draw(surface, card_x + 36, y, kFontBody, kSubtle, Tr(label));
-        m_font.Draw(surface, card_x + 280, y, kFontBody, kText, text.c_str());
-    };
-    /* The package's own name when we read it, its title id otherwise. */
-    const std::string what = m_install_status.game_name.empty()
-                                 ? m_game_install->Package().cnmt.title_id
-                                 : m_install_status.game_name;
-    row(i18n::StringId::ResultWhat, what, 0);
-    if (status.stage == install::InstallStage::Failed) {
-        row(i18n::StringId::ResultWhy, m_install_error, 1);
-    } else if (status.stage == install::InstallStage::Skipped) {
-        row(i18n::StringId::ResultWhy,
-            status.installed_version > status.package_version
-                ? Tr(i18n::StringId::ResultSkippedNewer)
-                : Tr(i18n::StringId::ResultSkippedInstalled),
-            1);
-    } else {
-        char written[64];
-        std::snprintf(written, sizeof(written), "%d / %.1f GB", status.total_contents,
-                      static_cast<double>(status.total_bytes) / (1024.0 * 1024.0 * 1024.0));
-        row(i18n::StringId::ResultWritten, written, 1);
-    }
-    /* Same rule as the confirm screen: the agent line is only true for a title this build
-       knows about. */
-    /* What matters after the fact is the version now on the console: for a skip that is the
-       installed one, otherwise the one we just wrote. */
-    const std::uint32_t effective = status.stage == install::InstallStage::Skipped
-                                        ? status.installed_version
-                                        : status.package_version;
-    row(i18n::StringId::ResultNow,
-        AgentSupportedFor(m_game_install->Package().cnmt.title_id, effective)
-            ? Tr(i18n::StringId::ResultAgentReady)
-            : "",
-        2);
-    if (status.modified) {
-        m_font.Draw(surface, card_x + 36, card_top + card_height - 40, kFontSmall, kWarn,
-                    Tr(i18n::StringId::ResultMoreInDetails));
-    }
-}
-
-/* The confirm screen: what this file is, before anything is written.  Rows follow the design
-   (version / type / size / target); the title line shows the title id until the NACP reader
-   lands, which is a separate, bounded piece of work. */
-void App::RenderInstallConfirm(Surface surface) {
-    m_actions.clear();
-    const int card_x = 180;
-    const int card_top = kHeaderHeight + 40;
-    const int card_width = surface.width - card_x * 2;
-    const int card_height = 400;
-    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
-    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
-
-    const install::PackageInfo &package = m_game_install->Package();
-    m_font.Draw(surface, card_x + 36, card_top + 28, kFontSmall, kSubtle,
-                Tr(i18n::StringId::ConfirmStart));
-    /* The package's own NACP supplies the name and the version string the player knows; the title
-       id is only a fallback for a package whose control content could not be read. */
-    const std::string title = m_install_status.game_name.empty() ? package.cnmt.title_id
-                                                                : m_install_status.game_name;
-    m_font.Draw(surface, card_x + 36, card_top + 56, kFontTitle, kText, title.c_str());
-
-    const int row_x = card_x + 36;
-    const int value_x = card_x + 296;
-    int y = card_top + 136;
-    const auto row = [&](i18n::StringId label, const std::string &text) {
-        m_font.Draw(surface, row_x, y, kFontBody, kSubtle, Tr(label));
-        m_font.Draw(surface, value_x, y, kFontBody, kText, text.c_str());
-        y += 46;
-    };
-    /* The version row shows the game's own display version ("2.0.0").  It used to be built out of
-       the raw title version, which produced "22.0.0" -- a string that reads as an *system* version
-       and is simply wrong.  When the NACP could not be read, the row is left out rather than
-       filled with a made-up number. */
-    if (!m_install_status.game_version.empty()) {
-        row(i18n::StringId::ConfirmVersion, m_install_status.game_version);
-    }
-    switch (package.cnmt.type) {
-        case install::MetaType::Application:
-            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeBase));
-            break;
-        case install::MetaType::Patch:
-            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeUpdate));
-            break;
-        case install::MetaType::AddOnContent:
-            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeDlc));
-            break;
-        default:
-            row(i18n::StringId::ConfirmType, install::MetaTypeLabel(package.cnmt.type));
-            break;
-    }
-    {
-        char buffer[32];
-        std::snprintf(buffer, sizeof(buffer), "%.1f GB",
-                      static_cast<double>(install::TotalBytes(m_game_install->Task())) /
-                          (1024.0 * 1024.0 * 1024.0));
-        row(i18n::StringId::ConfirmSize, buffer);
-    }
-    row(i18n::StringId::ConfirmTarget,
-        Tr(i18n::StringId::StorageSdCard)); /* 1.1.0 installs to the card unless the space check
-                                               asks about the console's own memory */
-    /* "The agent can be installed afterwards" is only true for a title this build knows about:
-       installing some other game with this tool leaves that game alone and our agent has nothing
-       to attach to. */
-    if (AgentSupportedFor(package.cnmt.title_id, package.cnmt.version)) {
-        m_font.Draw(surface, row_x, y + 10, kFontSmall, kGood,
-                    Tr(i18n::StringId::ConfirmAgentNote));
-    }
-    m_actions.push_back({kActionInstallStart,
-                         Rect{card_x, card_top, card_width, card_height}, true});
-}
-
-void App::RenderInstallFiles(Surface surface) {
-    m_actions.clear();
-    const int card_x = kMargin;
-    const int card_top = kHeaderHeight + 24;
-    const int card_width = surface.width - kMargin * 2;
-    const int card_height = surface.height - card_top - kFooterHeight - 24;
-    /* The list leaves room for a one-line reason at the bottom: the close-the-game hint lives
-       there, and a clamped row would draw it half off the card. */
-    m_file_list.SetBox(card_width, card_height - 60 - 34);
-    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
-    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
-
-    m_font.Draw(surface, card_x + 24, card_top + 14, kFontHeading, kText,
-                Tr(i18n::StringId::InstallPickFile));
-    m_font.Draw(surface, card_x + 24 + m_font.Measure(Tr(i18n::StringId::InstallPickFile),
-                                                      kFontHeading) + 18,
-                card_top + 24, kFontSmall, kSubtle, m_file_dir.c_str());
-
-    if (!m_install_error.empty()) {
-        m_font.Draw(surface, card_x + 24, card_top + card_height - 46, kFontSmall, kBad,
-                    m_install_error == "game-running" ? Tr(i18n::StringId::InstallGameRunning)
-                                                     : m_install_error.c_str());
-    }
-    const ui::ListWindow window = m_file_list.Window();
-    const int list_top = card_top + 60;
-    const std::vector<ui::ListItem> &items = m_file_list.Items();
-    if (items.empty()) {
-        m_font.Draw(surface, card_x + 24, list_top + 8, kFontBody, kSubtle,
-                    Tr(i18n::StringId::InstallNoFiles));
-        return;
-    }
-    for (int row = 0; row < window.count; ++row) {
-        const int index = window.first + row;
-        if (index >= static_cast<int>(items.size())) {
-            break;
-        }
-        const ui::ListItem &item = items[static_cast<std::size_t>(index)];
-        const int y = list_top + row * ui::ListView::kRowHeight;
-        const Rect hit{card_x + 16, y - 6, card_width - 32, ui::ListView::kRowHeight - 8};
-        if (index == m_file_list.Focus()) {
-            /* The focus mark sits on the *bottom* edge of the row: reading a list, the eye runs
-               downward, and a line under the current row reads as "here", while the same line
-               above it reads as "the row before this one". */
-            FillRoundedRect(surface, hit.x, hit.y, hit.w, hit.h, 12, kCardDisabled);
-            FillRoundedRect(surface, hit.x, hit.y + hit.h - 3, hit.w, 3, 0, kHeader);
-        }
-        const Color ink = item.selectable ? kText : kSubtle;
-        m_font.Draw(surface, card_x + 34, y, kFontBody, ink, item.name.c_str());
-        const int note_width = m_font.Measure(item.note.c_str(), kFontSmall);
-        m_font.Draw(surface, card_x + card_width - 34 - note_width, y + 4, kFontSmall, ink,
-                    item.note.c_str());
-        /* Only selectable rows are actions: a dimmed row must not be tappable either. */
-        if (item.selectable) {
-            m_actions.push_back({kActionInstallPickRow, hit, true});
-        }
-    }
-}
-
-
-/* The installer's first screen: pick a source.  Everything else on this page follows from that
-   choice, so the screen shows nothing but the three entries and what formats are accepted. */
+/* The installer's own page.  Which of its screens shows is one variable, so the dispatcher is a
+   switch and each screen draws itself; nothing else in the app is allowed to draw while this page
+   is up (see AddChromeActions), which is what makes "install is exclusive" true on screen too. */
 void App::RenderGameInstall(Surface surface) {
     if (m_install_screen == InstallScreen::Files) {
         RenderInstallFiles(surface);
         return;
     }
+    if (m_install_screen == InstallScreen::Confirm) {
+        RenderInstallConfirm(surface);
+        return;
+    }
     switch (m_install_screen) {
-        case InstallScreen::Confirm: RenderInstallConfirm(surface); return;
         case InstallScreen::Progress: RenderInstallProgress(surface); return;
         case InstallScreen::Result: RenderInstallResult(surface); return;
+        case InstallScreen::Choose:
         case InstallScreen::Files:
-        case InstallScreen::Choose: break;
+        case InstallScreen::Confirm: break;
     }
+
+    /* Pick a source.  This screen shows nothing but the three entries and what formats are
+       accepted: everything after it follows from that choice. */
     m_actions.clear();
     const int width = surface.width - kMargin * 2;
     m_font.Draw(surface, kMargin, kHeaderHeight + 24, kFontSmall, kSubtle,
@@ -2929,12 +2719,13 @@ void App::RenderGameInstall(Surface surface) {
         i18n::StringId sub;
         int action;
     };
-    const Entry entries[3] = {{"Y", i18n::StringId::InstallPickFile, i18n::StringId::InstallPickFileSub,
-                               kActionInstallLocal},
-                              {"X", i18n::StringId::InstallDownload, i18n::StringId::InstallDownloadSub,
-                               kActionInstallDownload},
-                              {"A", i18n::StringId::InstallUpload, i18n::StringId::InstallUploadSub,
-                               kActionInstallUpload}};
+    const Entry entries[3] = {
+        {"Y", i18n::StringId::InstallPickFile, i18n::StringId::InstallPickFileSub,
+         kActionInstallLocal},
+        {"X", i18n::StringId::InstallDownload, i18n::StringId::InstallDownloadSub,
+         kActionInstallDownload},
+        {"A", i18n::StringId::InstallUpload, i18n::StringId::InstallUploadSub,
+         kActionInstallUpload}};
     constexpr int kCardGap = 24;
     constexpr int kCardHeight = 210;
     const int card_top = kHeaderHeight + 70;
@@ -2958,6 +2749,129 @@ void App::RenderGameInstall(Surface surface) {
         m_actions.push_back({entries[i].action, rect, true});
     }
     m_focus = m_actions.empty() ? -1 : 0;
+}
+
+/* The result screen: four titles, and three rows that say what it was, what happened and what
+   the player can do now.  Nothing here points at another page -- the design keeps the whole
+   answer on this screen (section 8). */
+void App::RenderInstallResult(Surface surface) {
+    m_actions.clear();
+    if (m_game_install == nullptr) {
+        /* The package was dropped after the run (or never parsed): the screen still says what
+           happened, in the player's language. */
+        const int x = kMargin;
+        m_font.Draw(surface, x, kHeaderHeight + 60, kFontTitle, kBad,
+                    Tr(i18n::StringId::ResultFailed));
+        i18n::StringId reason = i18n::StringId::InstallNotAPackage;
+        if (m_install_error == "no-content") {
+            reason = i18n::StringId::InstallNoContent;
+        } else if (m_install_error == "game-running") {
+            reason = i18n::StringId::InstallGameRunning;
+        }
+        m_font.Draw(surface, x, kHeaderHeight + 140, kFontBody, kSubtle, Tr(reason));
+        return;
+    }
+    const install::InstallStatus &status = m_install_status;
+    const install::PackageInfo &package = m_game_install->Package();
+
+    /* One screen, three things: what this is, what happened, and what the player can do now.
+       The first version of this page used "what / result / now" labels in a table and read like a
+       form; a result the player only looks at once should read like a sentence. */
+    const int card_x = 140;
+    const int card_top = kHeaderHeight + 40;
+    const int card_width = surface.width - card_x * 2;
+    const int card_height = 330;
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    i18n::StringId title = i18n::StringId::ResultInstalled;
+    Color colour = kGood;
+    switch (status.stage) {
+        case install::InstallStage::Skipped:
+            /* Decided by the numbers, not by the path that got us here. */
+            title = status.installed_version > status.package_version
+                        ? i18n::StringId::ResultSkippedNewer
+                        : i18n::StringId::ResultSkippedInstalled;
+            break;
+        case install::InstallStage::Failed:
+            title = i18n::StringId::ResultFailed;
+            colour = kBad;
+            break;
+        default: break;
+    }
+    m_font.DrawBold(surface, card_x + 40, card_top + 34, kFontTitle, colour, Tr(title));
+
+    /* What this is: name, version, kind -- one line, the way a player reads a package. */
+    const std::string name = m_install_status.game_name.empty() ? package.cnmt.title_id
+                                                               : m_install_status.game_name;
+    const char *kind = install::MetaTypeLabel(package.cnmt.type);
+    i18n::StringId kind_label = i18n::StringId::TypeUpdate;
+    if (package.cnmt.type == install::MetaType::Application) {
+        kind_label = i18n::StringId::TypeBase;
+    } else if (package.cnmt.type == install::MetaType::AddOnContent) {
+        kind_label = i18n::StringId::TypeDlc;
+    }
+    (void)kind;
+    char what[256];
+    if (status.game_version.empty()) {
+        std::snprintf(what, sizeof(what), "%s(%s)", name.c_str(), Tr(kind_label));
+    } else {
+        std::snprintf(what, sizeof(what), "%s %s(%s)", name.c_str(),
+                      status.game_version.c_str(), Tr(kind_label));
+    }
+    m_font.Draw(surface, card_x + 40, card_top + 118, kFontBody + 4, kText, what);
+
+    /* What happened. */
+    char happened[256];
+    switch (status.stage) {
+        case install::InstallStage::Skipped: {
+            char installed_version[32];
+            std::snprintf(installed_version, sizeof(installed_version), "%u.%u.%u",
+                          static_cast<unsigned>((status.installed_version >> 16) & 0xFFFF),
+                          static_cast<unsigned>((status.installed_version >> 8) & 0xFF),
+                          static_cast<unsigned>(status.installed_version & 0xFF));
+            if (status.installed_version > status.package_version) {
+                std::snprintf(happened, sizeof(happened),
+                              Tr(i18n::StringId::ResultNewerVersionDetail), installed_version);
+            } else {
+                std::snprintf(happened, sizeof(happened), "%s",
+                              Tr(i18n::StringId::ResultSameVersionDetail));
+            }
+            break;
+        }
+        case install::InstallStage::Failed:
+            std::snprintf(happened, sizeof(happened), "%s", m_install_error.c_str());
+            break;
+        default: {
+            char size[32];
+            std::snprintf(size, sizeof(size), "%.1f GB",
+                          static_cast<double>(status.total_bytes) / (1024.0 * 1024.0 * 1024.0));
+            std::snprintf(happened, sizeof(happened), Tr(i18n::StringId::ResultWroteLine),
+                          Tr(status.package_version ? i18n::StringId::StorageSdCard
+                                                    : i18n::StringId::StorageSdCard),
+                          status.total_contents, size);
+            break;
+        }
+    }
+    m_font.Draw(surface, card_x + 40, card_top + 176, kFontBody, kSubtle, happened);
+
+    /* What now: only about the agent, and only when it is true. */
+    if (status.stage != install::InstallStage::Failed) {
+        const std::uint32_t effective = status.stage == install::InstallStage::Skipped
+                                            ? status.installed_version
+                                            : status.package_version;
+        if (AgentSupportedFor(package.cnmt.title_id, effective)) {
+            m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
+                        Tr(i18n::StringId::ResultAgentReady));
+        } else if (TitleIsOurs(package.cnmt.title_id)) {
+            m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kWarn,
+                        Tr(i18n::StringId::InstallAgentUnsupported));
+        }
+    }
+    if (status.modified) {
+        m_font.Draw(surface, card_x + 40, card_top + card_height - 40, kFontSmall, kWarn,
+                    Tr(i18n::StringId::ResultMoreInDetails));
+    }
 }
 
 void App::RenderProgress(Surface surface) {

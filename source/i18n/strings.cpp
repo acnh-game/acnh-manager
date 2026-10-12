@@ -196,6 +196,10 @@ constexpr Entry kStrings[] = {
     {"这个目录里没有可安装的文件", "No installable file in this directory"},  /* InstallNoFiles */
     {"这个文件不是可安装的安装包(nsp / nsz / xci / xcz)", "This file is not an install package (nsp / nsz / xci / xcz)"},  /* InstallNotAPackage */
     {"这个包里没有可安装的内容", "This package has no installable content"},  /* InstallNoContent */
+    {"agent 不支持这个版本,装完也用不了 agent", "The agent does not support this version, so installing it will not enable the agent"},  /* InstallAgentUnsupported */
+    {"已写入 %s · %d 个内容 · %s", "Written to %s - %d contents, %s"},  /* ResultWroteLine */
+    {"机器上已经有这个版本,没有改动", "This version is already installed; nothing changed"},  /* ResultSameVersionDetail */
+    {"机器上已经有更新的版本(%s),没有改动", "A newer version (%s) is already installed; nothing changed"},  /* ResultNewerVersionDetail */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

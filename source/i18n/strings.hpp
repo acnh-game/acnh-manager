@@ -198,6 +198,10 @@ enum class StringId {
     InstallNoFiles,
     InstallNotAPackage,
     InstallNoContent,
+    InstallAgentUnsupported,
+    ResultWroteLine,
+    ResultSameVersionDetail,
+    ResultNewerVersionDetail,
 };
 
 const char *Text(StringId id, Language language);
