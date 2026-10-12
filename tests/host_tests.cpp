@@ -4,28 +4,168 @@
        make -C tests
    The numbers in the cases below come from real hardware (docs/architecture.md section 5). */
 
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <tuple>
 #include <regex>
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "env/cheat_file.hpp"
 #include "env/config_ini.hpp"
 #include "i18n/strings.hpp"
 #include "install/gate.hpp"
+#include "install/container.hpp"
+#include "install/install_task.hpp"
+#include "install/nca.hpp"
+#include "install/options.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
+#include "util/qr_code.hpp"
 #include "manifest/manifest.hpp"
 #include "util/sha256.hpp"
 #include "ui/action.hpp"
 #include "ui/header_tabs.hpp"
 #include "ui/home_state.hpp"
+#include "ui/list_view.hpp"
 #include "ui/settings.hpp"
 #include "util/text_wrap.hpp"
 #include "util/time.hpp"
 
 namespace {
+
+/* -------------------------------------------------------------------------------------------
+   Container fixtures.
+
+   A real package is gigabytes, so the tests build the structures by hand.  The layouts are the
+   ones the reference implementation reads and the ones a real NSP/XCI uses:
+     PFS0: u32 magic, u32 file count, u32 string table size, u32 padding
+           count * { u64 data offset, u64 size, u32 name offset, u32 padding }, strings, data
+     HFS0: same shape with u32 hashed size instead of padding; entries' offsets are relative to
+           the data area that follows the header, exactly like the format defines.
+   Every payload is filled with a byte that encodes its index, so a wrong data offset in the
+   parser shows up as a wrong byte rather than as a passing size check. */
+constexpr std::uint32_t kPfs0Magic = 0x30534650;
+constexpr std::uint32_t kHfs0Magic = 0x30534648;
+
+void PutU32(std::vector<std::uint8_t> &bytes, std::size_t at, std::uint32_t value) {
+    for (int i = 0; i < 4; ++i) {
+        bytes[at + i] = static_cast<std::uint8_t>((value >> (8 * i)) & 0xFF);
+    }
+}
+
+void PutU64(std::vector<std::uint8_t> &bytes, std::size_t at, std::uint64_t value) {
+    for (int i = 0; i < 8; ++i) {
+        bytes[at + i] = static_cast<std::uint8_t>((value >> (8 * i)) & 0xFF);
+    }
+}
+
+/* Writes an HFS0 image at `offset`; returns the offset of its data area (or 0 when `offset` is
+   past the end of the buffer).  Payload bytes are 0x10 + index so they can be told apart. */
+std::size_t WriteHfs0(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint32_t magic,
+                      const std::vector<std::pair<std::string, std::uint32_t>> &files) {
+    std::string strings;
+    std::vector<std::uint32_t> name_offsets;
+    for (const auto &file : files) {
+        name_offsets.push_back(static_cast<std::uint32_t>(strings.size()));
+        strings += file.first;
+        strings.push_back('\0');
+    }
+    const std::size_t table_size = 0x18 * files.size();
+    const std::size_t data_offset = offset + 0x10 + table_size + strings.size();
+
+    PutU32(bytes, offset, magic);
+    PutU32(bytes, offset + 4, static_cast<std::uint32_t>(files.size()));
+    PutU32(bytes, offset + 8, static_cast<std::uint32_t>(strings.size()));
+    std::uint64_t relative = 0;
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        PutU64(bytes, offset + 0x10 + i * 0x18, relative);
+        PutU64(bytes, offset + 0x18 + i * 0x18, files[i].second);
+        PutU32(bytes, offset + 0x20 + i * 0x18, name_offsets[i]);
+        relative += files[i].second;
+    }
+    std::memcpy(bytes.data() + offset + 0x10 + table_size, strings.data(), strings.size());
+    return data_offset;
+}
+
+std::vector<std::uint8_t> MakePfs0(
+    const std::vector<std::pair<std::string, std::uint32_t>> &files) {
+    std::size_t strings_size = 0;
+    std::size_t payload_size = 0;
+    for (const auto &file : files) {
+        strings_size += file.first.size() + 1;
+        payload_size += file.second;
+    }
+    const std::size_t data_offset = 0x10 + 0x18 * files.size() + strings_size;
+    std::vector<std::uint8_t> bytes(data_offset + payload_size, 0);
+    WriteHfs0(bytes, 0, kPfs0Magic, files);
+    /* Payload bytes: 0x10 + index, so a wrong offset is visible. */
+    std::size_t at = data_offset;
+    std::uint8_t tag = 0x10;
+    for (const auto &file : files) {
+        for (std::uint32_t i = 0; i < file.second; ++i) {
+            bytes[at + i] = tag;
+        }
+        at += file.second;
+        ++tag;
+    }
+    return bytes;
+}
+
+/* A card dump: "HEAD" at 0x100, root HFS0 at 0xF000 with a "secure" partition that is itself an
+   HFS0 holding the .nca files. */
+std::vector<std::uint8_t> MakeXci(
+    const std::vector<std::pair<std::string, std::uint32_t>> &secure_files) {
+    std::size_t secure_payload = 0;
+    std::size_t secure_strings = 0;
+    for (const auto &file : secure_files) {
+        secure_payload += file.second;
+        secure_strings += file.first.size() + 1;
+    }
+    const std::size_t secure_size = 0x10 + 0x18 * secure_files.size() + secure_strings +
+                                    secure_payload;
+    /* Root partition: header + two entries + the strings "secure\0" and "logo\0". */
+    const std::size_t root_size = 0x10 + 0x18 * 2 + 7 + 5;
+    std::vector<std::uint8_t> bytes(0xF000 + root_size + secure_size, 0);
+
+    PutU32(bytes, 0x100, 0x48454144); /* "HEAD" */
+    const std::size_t root_data =
+        WriteHfs0(bytes, 0xF000, kHfs0Magic,
+                  {{"secure", static_cast<std::uint32_t>(secure_size)},
+                   {"logo", 0x10}});
+    const std::size_t secure_data =
+        WriteHfs0(bytes, root_data, kHfs0Magic, secure_files);
+    std::size_t at = secure_data;
+    std::uint8_t tag = 0x20;
+    for (const auto &file : secure_files) {
+        for (std::uint32_t i = 0; i < file.second; ++i) {
+            bytes[at + i] = tag;
+        }
+        at += file.second;
+        ++tag;
+    }
+    return bytes;
+}
+
+class MemoryReader final : public acnh_manager::install::ContainerReader {
+public:
+    explicit MemoryReader(std::vector<std::uint8_t> bytes) : m_bytes(std::move(bytes)) {}
+
+    bool Read(std::uint64_t offset, std::size_t size, std::uint8_t *out) override {
+        if (offset > m_bytes.size() || size > m_bytes.size() - offset) {
+            return false;
+        }
+        std::memcpy(out, m_bytes.data() + offset, size);
+        return true;
+    }
+
+private:
+    std::vector<std::uint8_t> m_bytes;
+};
 
 int g_failures = 0;
 int g_checks = 0;
@@ -573,6 +713,551 @@ override_key=!L
                                   Format(StringId::OverrideHbmenuNote, "R"));
 }
 
+std::uint8_t ByteAt(acnh_manager::install::ContainerReader &reader, std::uint64_t offset) {
+    std::uint8_t byte = 0xFF;
+    reader.Read(offset, 1, &byte);
+    return byte;
+}
+
+/* The container layer is the first thing that touches bytes from the user, so it is checked
+   with both real layouts and every rejection the design promises (sections 7 and 9). */
+void TestContainer() {
+    using acnh_manager::install::ContainerInfo;
+    using acnh_manager::install::ContainerKind;
+    using acnh_manager::install::IsModPackageExtension;
+    using acnh_manager::install::IsSupportedExtension;
+    using acnh_manager::install::OpenContainer;
+
+    /* A 3.0.3-style package: two NCAs plus the ticket and certificate, one name in upper case
+       to prove the parser lowercases (content ids are case-insensitive in the system). */
+    const std::vector<std::pair<std::string, std::uint32_t>> files = {
+        {"E10617820DB06889E1638499478DA0DE.nca", 0x400},
+        {"01006f8002326800000000000000000b.tik", 0x40},
+        {"01006f8002326800000000000000000b.cert", 0x20},
+        {"e10617820db06889e1638499478da0de.cnmt.nca", 0x80},
+    };
+    std::size_t strings = 0;
+    for (const auto &file : files) {
+        strings += file.first.size() + 1;
+    }
+    const std::uint64_t data_offset = 0x10 + 0x18 * files.size() + strings;
+
+    auto image = MakePfs0(files);
+    const std::uint64_t image_size = image.size();
+    MemoryReader reader(std::move(image));
+
+    ContainerInfo info;
+    std::string error;
+    CHECK(OpenContainer(reader, "game.nsp", image_size, &info, &error));
+    CHECK(error.empty());
+    CHECK(info.kind == ContainerKind::Nsp);
+    CHECK(!info.compressed);
+    CHECK(info.container_size == image_size);
+    CHECK(info.contents.size() == 2);
+    CHECK(info.extra.size() == 2);
+    CHECK(info.contents[0].name == "e10617820db06889e1638499478da0de.nca");
+    CHECK(info.contents[0].offset == data_offset);
+    CHECK(info.contents[0].size == 0x400);
+    CHECK(info.contents[1].name == "e10617820db06889e1638499478da0de.cnmt.nca");
+    CHECK(info.contents[1].offset == data_offset + 0x400 + 0x40 + 0x20); /* after the .tik/.cert */
+    CHECK(info.extra[0].name == "01006f8002326800000000000000000b.tik");
+    /* The bytes at those offsets are the ones the builder wrote for those entries: an off-by-one
+       in the data offset would show here rather than in a size comparison. */
+    CHECK(ByteAt(reader, info.contents[0].offset) == 0x10);
+    CHECK(ByteAt(reader, info.contents[1].offset) == 0x13);
+
+    /* The same bytes with an .nsz name: same container, compressed payloads. */
+    ContainerInfo nsz;
+    CHECK(OpenContainer(reader, "game.nsz", image_size, &nsz, &error));
+    CHECK(nsz.kind == ContainerKind::Nsz);
+    CHECK(nsz.compressed);
+    CHECK(nsz.contents.size() == 2);
+
+    /* A card dump: "HEAD" header, root HFS0, secure partition. */
+    auto xci = MakeXci({{"aaa.nca", 0x200}, {"bbb.nca", 0x100}});
+    const std::uint64_t xci_size = xci.size();
+    MemoryReader xci_reader(std::move(xci));
+    ContainerInfo card;
+    CHECK(OpenContainer(xci_reader, "card.xci", xci_size, &card, &error));
+    CHECK(card.kind == ContainerKind::Xci);
+    CHECK(!card.compressed);
+    CHECK(card.contents.size() == 2);
+    CHECK(card.extra.empty());
+    CHECK(ByteAt(xci_reader, card.contents[0].offset) == 0x20);
+    CHECK(ByteAt(xci_reader, card.contents[1].offset) == 0x21);
+
+    ContainerInfo xcz;
+    CHECK(OpenContainer(xci_reader, "card.xcz", xci_size, &xcz, &error));
+    CHECK(xcz.kind == ContainerKind::Xcz);
+    CHECK(xcz.compressed);
+
+    /* Rejections.  Each one has to fail with an explanation, never with a half-filled result. */
+    auto mod_in_disguise = MakePfs0({{"romfs/Model/Item.bin", 0x20}});
+    MemoryReader mod_reader(std::move(mod_in_disguise));
+    ContainerInfo mod;
+    CHECK(!OpenContainer(mod_reader, "mod.nsp", 0, &mod, &error));
+    CHECK(!error.empty());
+    CHECK(mod.kind == ContainerKind::Unknown);
+
+    auto nsp_again = MakePfs0(files);
+    MemoryReader msp_reader(std::move(nsp_again));
+    CHECK(!OpenContainer(msp_reader, "mod.msp", image_size, &info, &error));
+    CHECK(error.find("mod package") != std::string::npos);
+
+    MemoryReader garbage(std::vector<std::uint8_t>(0x200, 0xAB));
+    CHECK(!OpenContainer(garbage, "thing.nsp", 0x200, &info, &error));
+    CHECK(error.find("unknown container") != std::string::npos);
+
+    /* The header says the data starts at `data_offset`, so a truncated transfer is caught before
+       anything is installed. */
+    MemoryReader truncated(std::vector<std::uint8_t>(data_offset, 0));
+    CHECK(!OpenContainer(truncated, "game.nsp", data_offset, &info, &error));
+    CHECK(!error.empty());
+
+    /* An unknown extension is still parsed by magic (a wrong suffix is the user's typo, not a
+       reason to refuse a valid package). */
+    auto renamed = MakePfs0(files);
+    MemoryReader renamed_reader(std::move(renamed));
+    CHECK(OpenContainer(renamed_reader, "game.bin", image_size, &info, &error));
+    CHECK(info.kind == ContainerKind::Nsp);
+
+    CHECK(IsSupportedExtension("a.nsp") && IsSupportedExtension("A.NSZ"));
+    CHECK(IsSupportedExtension("a.xci") && IsSupportedExtension("a.xcz"));
+    CHECK(!IsSupportedExtension("a.msp") && !IsSupportedExtension("a.zip") &&
+          !IsSupportedExtension("nsp"));
+    CHECK(IsModPackageExtension("a.MSP") && !IsModPackageExtension("a.nsp"));
+}
+
+/* The defaults here are the reference implementation's, and the design document promises them
+   item by item; a future options screen must not be able to reach a do-nothing combination. */
+/* The task is the piece that survives a crash, so the cases below cover the byte accounting,
+   the request order and the state-file round trip -- including the fields a hand-edited or
+   half-written file could get wrong. */
+/* CNMT and NCA header fixtures.  Both structs are byte layouts, so the tests build them field by
+   field: the offsets are the ones nxdumptool, libnx and the reference implementation agree on,
+   and a mistake here would surface as "the confirm page shows the wrong game". */
+void PutU16(std::vector<std::uint8_t> &bytes, std::size_t at, std::uint16_t value) {
+    bytes[at] = static_cast<std::uint8_t>(value & 0xFF);
+    bytes[at + 1] = static_cast<std::uint8_t>(value >> 8);
+}
+
+std::vector<std::uint8_t> MakeCnmt(std::uint8_t type, std::uint16_t extended_size,
+                                   const std::string &title_id_hex,
+                                   const std::vector<std::tuple<std::string, std::uint32_t,
+                                                                std::uint8_t, std::uint64_t>>
+                                       &contents) {
+    const std::size_t header = 0x20 + extended_size;
+    const std::size_t total = header + 0x38 * contents.size() + 0x10; /* one content meta info */
+    std::vector<std::uint8_t> bytes(total, 0);
+
+    /* Real files store title ids little-endian while every readable form is big-endian, so the
+       fixture reverses them here -- the same thing the parser undoes. */
+    for (int i = 0; i < 8; ++i) {
+        bytes[7 - i] = static_cast<std::uint8_t>(
+            std::stoul(title_id_hex.substr(i * 2, 2), nullptr, 16));
+    }
+    PutU32(bytes, 8, 0x2228224); /* 3.0.3 */
+    bytes[0x0C] = type;
+    PutU16(bytes, 0x0E, extended_size);
+    PutU16(bytes, 0x10, static_cast<std::uint16_t>(contents.size()));
+    PutU16(bytes, 0x12, 1);
+    if (type == 0x81 /* patch */ && extended_size >= 8) {
+        for (int i = 0; i < 8; ++i) {
+            bytes[0x20 + 7 - i] = static_cast<std::uint8_t>(
+                std::stoul(std::string("01006F8002326800").substr(i * 2, 2), nullptr, 16));
+        }
+    }
+    if (extended_size >= 12) {
+        PutU32(bytes, 0x20 + 8, 0x100000); /* required system version */
+    }
+    for (std::size_t i = 0; i < contents.size(); ++i) {
+        const std::string &id = std::get<0>(contents[i]);
+        const std::uint8_t *entry = bytes.data() + header + i * 0x38;
+        auto *mutable_entry = const_cast<std::uint8_t *>(entry);
+        for (int b = 0; b < 16; ++b) {
+            mutable_entry[0x20 + b] = static_cast<std::uint8_t>(std::stoul(id.substr(b * 2, 2), nullptr, 16));
+        }
+        PutU32(bytes, header + i * 0x38 + 0x20 + 0x10, std::get<1>(contents[i]));
+        bytes[header + i * 0x38 + 0x20 + 0x14] = static_cast<std::uint8_t>(std::get<3>(contents[i]) >> 32);
+        bytes[header + i * 0x38 + 0x20 + 0x16] = std::get<2>(contents[i]);
+    }
+    return bytes;
+}
+
+/* The QR encoder is vendored code with one job: turn the install page's address into a matrix
+   the existing painter can draw.  The checks below are the ones that would catch a wrong or
+   missing quiet-zone / finder-pattern / growth behaviour -- decoding the matrix would need a
+   decoder we do not ship. */
+void TestQrCode() {
+    using acnh_manager::util::EncodeQr;
+
+    const auto code = EncodeQr("http://192.168.8.160:1234");
+    CHECK(!code.Empty());
+    CHECK(code.size >= 21);
+    CHECK((code.size - 21) % 4 == 0); /* QR versions grow four modules at a time */
+    CHECK(static_cast<int>(code.bits.size()) == code.ByteCount());
+
+    /* Top-left finder pattern: a 7x7 ring with a 3x3 core, white frame one module in. */
+    CHECK(code.At(0, 0) && code.At(0, 6) && code.At(6, 0) && code.At(6, 6));
+    CHECK(!code.At(1, 1) && !code.At(1, 5) && !code.At(5, 1) && !code.At(5, 5));
+    CHECK(code.At(2, 2) && code.At(4, 4) && code.At(3, 3));
+    /* The other two finder patterns sit in the opposite corners, not mirrored onto each other. */
+    CHECK(code.At(0, code.size - 1) && code.At(code.size - 1, 0));
+    /* Out-of-range modules read white instead of running off the buffer. */
+    CHECK(!code.At(-1, 0) && !code.At(0, code.size) && !code.At(code.size, code.size));
+
+    /* A longer payload needs a bigger version: the encoder is actually looking at the text. */
+    const auto longer = EncodeQr(
+        "http://192.168.8.160:1234/this-is-a-deliberately-longer-address/with-a-path");
+    CHECK(!longer.Empty());
+    CHECK(longer.size >= code.size);
+
+    /* Over-long input fails cleanly (a matrix of size 0), never a half-filled one. */
+    const auto too_long = EncodeQr(std::string(5000, 'x'), 3 /* H */);
+    CHECK(too_long.Empty());
+    CHECK(EncodeQr("").Empty());
+    CHECK(EncodeQr("x", 9).Empty()); /* bad ECC level */
+}
+
+void TestNcaAndCnmt() {
+    using acnh_manager::install::CnmtInfo;
+    using acnh_manager::install::ContentType;
+    using acnh_manager::install::MetaType;
+    using acnh_manager::install::MetaTypeLabel;
+    using acnh_manager::install::NcaHeaderInfo;
+    using acnh_manager::install::ParseCnmt;
+    using acnh_manager::install::ParseNcaHeader;
+    using acnh_manager::install::SetDistributionToSystem;
+
+    /* A 3.0.3 update: meta + program + control, like a real update package. */
+    const auto cnmt = MakeCnmt(0x81, 0x10, "01006f8002326800",
+                               /* 0 = Meta, 1 = Program, 3 = Control (NcmContentType, checked
+                                  against libnx's enum -- the earlier fixtures used my own wrong
+                                  ordering and hid the parser's mistake). */
+                               {{"6f2fa0d0ab1c1f2a3d67c9e0b1a2c3d4", 0x1000, 0x00, 0x1000},
+                                {"e10617820db06889e1638499478da0de", 0x40000000, 0x01, 0x40000000},
+                                {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 0x200, 0x03, 0x200}});
+    CnmtInfo info;
+    std::string error;
+    CHECK(ParseCnmt(cnmt.data(), cnmt.size(), &info, &error));
+    CHECK(error.empty());
+    CHECK(info.title_id == "01006f8002326800");
+    CHECK(info.version == 0x2228224);
+    CHECK(info.type == MetaType::Patch);
+    CHECK(MetaTypeLabel(info.type) == std::string("update"));
+    CHECK(info.application_id == "01006f8002326800");
+    CHECK(info.required_system_version == 0x100000);
+    CHECK(info.contents.size() == 3);
+    CHECK(info.contents[0].type == ContentType::Meta);
+    CHECK(info.contents[1].type == ContentType::Program);
+    CHECK(info.contents[1].size == 0x40000000);
+    CHECK(info.contents[1].content_id == "e10617820db06889e1638499478da0de");
+
+    /* A base game: no application id, and the type label is what the confirm page shows. */
+    const auto base = MakeCnmt(0x80, 0x10, "01006f8002326000",
+                               {{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 0x100, 0x01, 0x100}});
+    CHECK(ParseCnmt(base.data(), base.size(), &info, &error));
+    CHECK(info.type == MetaType::Application);
+    CHECK(MetaTypeLabel(info.type) == std::string("base"));
+    CHECK(info.application_id.empty());
+
+    /* Broken payloads are refused instead of half-parsed. */
+    std::vector<std::uint8_t> truncated(cnmt.begin(), cnmt.begin() + 0x18);
+    CHECK(!ParseCnmt(truncated.data(), truncated.size(), &info, &error));
+    CHECK(!error.empty());
+    std::vector<std::uint8_t> lying = cnmt;
+    PutU16(lying, 0x0E, 0x4000); /* an extended header longer than the payload */
+    CHECK(!ParseCnmt(lying.data(), lying.size(), &info, &error));
+    std::vector<std::uint8_t> empty_contents = cnmt;
+    PutU16(empty_contents, 0x10, 0);
+    CHECK(!ParseCnmt(empty_contents.data(), empty_contents.size(), &info, &error));
+
+    /* NCA header: magic, distribution bit, content type, key generation, size, program id. */
+    std::vector<std::uint8_t> nca(0xC00, 0);
+    PutU32(nca, 0x200, 0x3341434E); /* "NCA3" */
+    nca[0x204] = 1;                 /* gamecard: what an XCI's own content carries */
+    nca[0x205] = 0x00;              /* program */
+    nca[0x206] = 0x02;              /* old key generation 3.0.0 */
+    nca[0x220] = 0x11;              /* key generation 17.0.0 */
+    PutU64(nca, 0x208, 0x1000);
+    for (int i = 0; i < 8; ++i) {
+        nca[0x210 + 7 - i] = static_cast<std::uint8_t>(
+            std::stoul(std::string("01006F8002326000").substr(i * 2, 2), nullptr, 16));
+    }
+    NcaHeaderInfo header;
+    CHECK(ParseNcaHeader(nca.data(), nca.size(), &header, &error));
+    CHECK(header.is_gamecard());
+    CHECK(header.content_type == ContentType::Program);
+    CHECK(header.key_generation == 0x11); /* the higher of the two wins */
+    CHECK(header.size == 0x1000);
+    CHECK(header.program_id == "01006f8002326000");
+
+    /* The distribution rewrite is what makes a card dump launchable from SD/NAND. */
+    SetDistributionToSystem(nca.data());
+    CHECK(ParseNcaHeader(nca.data(), nca.size(), &header, &error));
+    CHECK(!header.is_gamecard());
+    CHECK(nca[0x204] == 0);
+
+    /* Wrong magic and short buffers fail rather than report garbage. */
+    std::vector<std::uint8_t> not_nca(nca);
+    PutU32(not_nca, 0x200, 0x3241434E); /* NCA2 */
+    CHECK(!ParseNcaHeader(not_nca.data(), not_nca.size(), &header, &error));
+    CHECK(!ParseNcaHeader(nca.data(), 0x500, &header, &error));
+}
+
+void TestInstallTask() {
+    using acnh_manager::install::Advance;
+    using acnh_manager::install::ContentKind;
+    using acnh_manager::install::DoneBytes;
+    using acnh_manager::install::DoneContents;
+    using acnh_manager::install::DumpTask;
+    using acnh_manager::install::InstallTask;
+    using acnh_manager::install::MatchesSourceFile;
+    using acnh_manager::install::NextRange;
+    using acnh_manager::install::ParseTask;
+    using acnh_manager::install::RangeRequest;
+    using acnh_manager::install::TaskContent;
+    using acnh_manager::install::TaskSource;
+    using acnh_manager::install::TaskStage;
+    using acnh_manager::install::TotalBytes;
+    using acnh_manager::install::TransferComplete;
+
+    /* A 3.0.3-style update: the meta NCA first (it carries the CNMT), then the big program NCA,
+       then a small one that is already installed and therefore skipped.  The numbers are the
+       shape of the real package: one multi-GB content and two tiny ones. */
+    InstallTask task;
+    task.task_id = "abcdef0123456789";
+    task.source = TaskSource::HttpUpload;
+    task.name = "[UPD][v3.0.3][01006F8002326800][v2228224].nsp";
+    task.container_size = 4'700'000'000ULL;
+    task.stage = TaskStage::Fetching;
+    task.contents = {
+        {"00000000000000000000000000000000.cnmt.nca", 0x1000, 0x800, 0, "0000", "", ContentKind::Meta,
+         false},
+        {"e10617820db06889e1638499478da0de.nca", 0x2000, 4'600'000'000ULL, 0,
+         "e10617820db06889e1638499478da0de", "", ContentKind::Program, false},
+        {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.nca", 0x5000, 0x400, 0, "aaaa", "", ContentKind::Legal,
+         true},
+    };
+
+    /* Progress is in bytes and skips the skipped content; the counter still counts it. */
+    CHECK(TotalBytes(task) == 0x800 + 4'600'000'000ULL);
+    CHECK(DoneBytes(task) == 0);
+    CHECK(DoneContents(task) == 1);
+    CHECK(!TransferComplete(task));
+
+    /* The first request starts at the first content that needs bytes, is capped at the block
+       size, and never crosses into the next content. */
+    RangeRequest range;
+    CHECK(NextRange(task, 4 * 1024 * 1024, &range));
+    CHECK(range.index == 0);
+    CHECK(range.offset == 0x1000);
+    CHECK(range.size == 0x800);
+    Advance(task, range, 0x800);
+    CHECK(DoneBytes(task) == 0x800);
+
+    CHECK(NextRange(task, 4 * 1024 * 1024, &range));
+    CHECK(range.index == 1);
+    CHECK(range.offset == 0x2000);
+    CHECK(range.size == 4 * 1024 * 1024); /* capped, not the whole 4.6 GB */
+    Advance(task, range, 4 * 1024 * 1024);
+    CHECK(DoneBytes(task) == 0x800 + 4 * 1024 * 1024);
+
+    /* A short read (the source stopped early) advances by what actually arrived. */
+    CHECK(NextRange(task, 4 * 1024 * 1024, &range));
+    Advance(task, range, 1000);
+    CHECK(DoneBytes(task) == 0x800 + 4 * 1024 * 1024 + 1000);
+
+    /* Run it to the end: the last request is clamped to what is missing, and the skipped content
+       is never asked for. */
+    int guard = 0;
+    while (NextRange(task, 4 * 1024 * 1024, &range) && guard++ < 2000) {
+        CHECK(range.index != 2);
+        Advance(task, range, range.size);
+    }
+    CHECK(TransferComplete(task));
+    CHECK(DoneBytes(task) == TotalBytes(task));
+    CHECK(DoneContents(task) == 3);
+    CHECK(!NextRange(task, 4 * 1024 * 1024, &range));
+
+    /* Resume: the same file continues, a different file does not. */
+    CHECK(MatchesSourceFile(task, task.name, task.container_size));
+    CHECK(!MatchesSourceFile(task, "other.nsp", task.container_size));
+    CHECK(!MatchesSourceFile(task, task.name, task.container_size + 1));
+    CHECK(MatchesSourceFile(task, task.name, 0)); /* a source that cannot report a size */
+
+    /* The placeholder id is what a resume writes into: it has to survive the state file. */
+    task.contents[0].placeholder_id = "0123456789abcdef0123456789abcdef";
+    InstallTask with_placeholder;
+    std::string placeholder_error;
+    CHECK(ParseTask(DumpTask(task), &with_placeholder, &placeholder_error));
+    CHECK(with_placeholder.contents[0].placeholder_id == task.contents[0].placeholder_id);
+    CHECK(with_placeholder.contents[1].placeholder_id.empty());
+
+    /* State file round trip. */
+    InstallTask resumed;
+    std::string error;
+    CHECK(ParseTask(DumpTask(task), &resumed, &error));
+    CHECK(error.empty());
+    CHECK(resumed.task_id == task.task_id);
+    CHECK(resumed.source == TaskSource::HttpUpload);
+    CHECK(resumed.name == task.name);
+    CHECK(resumed.container_size == task.container_size);
+    CHECK(resumed.stage == TaskStage::Fetching);
+    CHECK(resumed.contents.size() == 3);
+    CHECK(resumed.contents[1].content_id == "e10617820db06889e1638499478da0de");
+    CHECK(resumed.contents[1].kind == ContentKind::Program);
+    CHECK(resumed.contents[1].written == task.contents[1].written);
+    CHECK(resumed.contents[2].skipped);
+    CHECK(DoneBytes(resumed) == DoneBytes(task));
+
+    /* The download source keeps its URL: resuming an interrupted download needs nothing from the
+       player (the design promises that explicitly). */
+    InstallTask download = task;
+    download.source = TaskSource::HttpDownload;
+    download.url = "https://example.com/update.nsp";
+    InstallTask reloaded;
+    CHECK(ParseTask(DumpTask(download), &reloaded, &error));
+    CHECK(reloaded.source == TaskSource::HttpDownload);
+    CHECK(reloaded.url == "https://example.com/update.nsp");
+
+    /* Broken files are refused, never half-read. */
+    InstallTask junk;
+    CHECK(!ParseTask("not json", &junk, &error));
+    CHECK(!error.empty());
+    CHECK(!ParseTask("{\"schema\":99,\"contents\":[]}", &junk, &error));
+    CHECK(!ParseTask("{\"schema\":1}", &junk, &error)); /* no contents */
+    CHECK(!ParseTask(
+        "{\"schema\":1,\"contents\":[{\"name\":\"a.nca\",\"offset\":1,\"size\":10,\"written\":11}]}",
+        &junk, &error));
+    CHECK(DumpTask(junk).find("contents") != std::string::npos); /* untouched on failure */
+}
+
+void TestInstallOptions() {
+    using acnh_manager::install::InstallOptions;
+    using acnh_manager::install::TargetStorage;
+
+    const InstallOptions options;
+    CHECK(options.target == TargetStorage::SdCard);
+    CHECK(options.skip_if_already_installed);
+    CHECK(!options.allow_downgrade);
+    CHECK(options.skip_nca_hash_verify);
+    CHECK(options.skip_rsa_header_fixed_key_verify);
+    CHECK(options.skip_rsa_npdm_fixed_key_verify);
+    CHECK(!options.ignore_distribution_bit);
+    CHECK(options.convert_to_common_ticket);
+    CHECK(!options.convert_to_standard_crypto);
+    CHECK(!options.lower_master_key);
+    CHECK(options.lower_system_version);
+    CHECK(!options.skip_base && !options.skip_patch && !options.skip_addon &&
+          !options.skip_data_patch && !options.skip_ticket);
+    CHECK(!options.ticket_only);
+    CHECK(!options.SkipsEverything());
+
+    /* Only the common-ticket conversion is on by default, so the default path may need keys --
+       which is why the ticket check has to report a missing prod.keys instead of skipping it. */
+    CHECK(options.MayNeedKeys());
+    InstallOptions no_keys;
+    no_keys.convert_to_common_ticket = false;
+    CHECK(!no_keys.MayNeedKeys());
+
+    std::string error;
+    CHECK(options.Validate(&error));
+
+    InstallOptions nothing = options;
+    nothing.skip_base = nothing.skip_patch = nothing.skip_addon = nothing.skip_data_patch = true;
+    CHECK(!nothing.Validate(&error));
+    CHECK(!error.empty());
+
+    InstallOptions ticket_only = options;
+    ticket_only.ticket_only = true;
+    CHECK(!ticket_only.Validate(&error)); /* ticket-only still installs no content */
+    ticket_only.skip_base = true;
+    ticket_only.skip_patch = true;
+    ticket_only.skip_addon = true;
+    ticket_only.skip_data_patch = true;
+    CHECK(ticket_only.Validate(&error));
+    ticket_only.skip_ticket = true;
+    CHECK(!ticket_only.Validate(&error));
+}
+
+/* The installer's file picker is the app's first scrolling list; the cases below are the ones
+   that would otherwise be discovered by scrolling on a console. */
+void TestListView() {
+    using acnh_manager::ui::ListItem;
+    using acnh_manager::ui::ListView;
+
+    ListView list;
+    list.SetBox(800, ListView::kRowHeight * 3); /* exactly three rows fit */
+    list.SetItems({{"..", "directory", true},
+                   {"atmosphere", "directory", true},
+                   {"readme.txt", "ignored", false},
+                   {"[UPD] a.nsp", "package", true},
+                   {"broken.nsp", "ignored", false},
+                   {"[UPD] b.nsp", "package", true},
+                   {"c.xci", "package", true}});
+
+    /* The focus never lands on a row the player cannot pick, in either direction. */
+    CHECK(list.Focus() == 0);
+    list.MoveFocus(1);
+    CHECK(list.Focus() == 1);
+    list.MoveFocus(1);
+    CHECK(list.Focus() == 3); /* skipped readme.txt */
+    list.MoveFocus(-1);
+    CHECK(list.Focus() == 1);
+    list.SetFocus(2); /* a dimmed row cannot take the focus */
+    CHECK(list.Focus() == 1);
+
+    /* Scrolling keeps the focus visible and never leaves a blank row at the top. */
+    /* Four steps down from item 0: 1, 3, 5, 6 -- the dimmed rows are stepped over, so the focus
+       lands on the last item rather than the one before it. */
+    list.SetFocus(0);
+    list.MoveFocus(4);
+    CHECK(list.Focus() == 6);
+    CHECK(list.FirstVisible() <= list.Focus());
+    CHECK(list.FirstVisible() + 3 > list.Focus());
+    const auto window = list.Window();
+    CHECK(window.count == 3);
+    CHECK(window.first == 4);
+    CHECK(list.FirstVisible() == 4);
+
+    /* The ends stop rather than wrap. */
+    list.MoveFocus(100);
+    CHECK(list.Focus() == 6);
+    list.MoveFocus(-100);
+    CHECK(list.Focus() == 0);
+    CHECK(list.FirstVisible() == 0);
+
+    /* A tap maps to the row it landed on, and outside the box to nothing. */
+    list.SetFocus(0);
+    CHECK(list.RowAt(0) == 0);
+    CHECK(list.RowAt(ListView::kRowHeight - 1) == 0);
+    CHECK(list.RowAt(ListView::kRowHeight) == 1);
+    CHECK(list.RowAt(3 * ListView::kRowHeight) == -1);
+    CHECK(list.RowAt(-1) == -1);
+    CHECK(list.RowAt(2 * ListView::kRowHeight) == 2); /* a dimmed row is still a row */
+
+    /* A list of nothing but dimmed rows has no focus at all. */
+    ListView none;
+    none.SetBox(800, 200);
+    none.SetItems({{"a.txt", "ignored", false}, {"b.txt", "ignored", false}});
+    CHECK(none.Focus() == -1);
+    none.MoveFocus(1);
+    CHECK(none.Focus() == -1);
+
+    /* An empty list is not a crash, and a short list does not scroll. */
+    ListView empty;
+    empty.SetBox(800, 200);
+    empty.SetItems({});
+    CHECK(empty.Focus() == -1);
+    CHECK(empty.Window().count == 0);
+    ListView one;
+    one.SetBox(800, ListView::kRowHeight * 5);
+    one.SetItems({{"only.nsp", "package", true}});
+    CHECK(one.Window().first == 0);
+    CHECK(one.Window().count == 5);
+}
+
 void TestStrings() {
     using acnh_manager::i18n::Language;
     using acnh_manager::i18n::StringId;
@@ -581,8 +1266,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::HomeLegacyCheat) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::HomeLegacyCheat); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::InstallNoContent) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::InstallNoContent); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -922,6 +1607,11 @@ void TestSettings() {
 }  // namespace
 
 int main() {
+    TestContainer();
+    TestQrCode();
+    TestNcaAndCnmt();
+    TestInstallTask();
+    TestInstallOptions();
     TestJsonBasics();
     TestJsonRejects();
     TestJsonDumpRoundTrip();
@@ -933,6 +1623,7 @@ int main() {
     TestUpdateAdoption();
     TestPlan();
     TestOverrideConfig();
+    TestListView();
     TestStrings();
     TestSha256();
     TestTimeFormat();

@@ -13,7 +13,10 @@ Checks:
   4. with --nro: the NRO really contains the embedded manifest and the three payloads, and
      its build stamp matches the *current* source tree -- that last part is what catches
      "source changed but the NRO was not rebuilt", which a payload-only check cannot see.
-  5. the manifest the update check serves is signed by the key this app trusts: a manifest
+  5. the vendored third-party sources (picohttpparser, qrcodegen) are still the exact upstream
+     bytes `source/third_party/README.md` pins -- they run on input from the local network, so
+     a quiet local edit is exactly the thing that must not reach a release;
+  6. the manifest the update check serves is signed by the key this app trusts: a manifest
      committed without (re-)signing would be rejected by every shipped App, which is exactly
      the kind of silent release breakage this tool exists to catch.  Uses openssl when it is
      on PATH; without it the check is reported as skipped, never as passed.
@@ -102,7 +105,7 @@ def check_manifest_signature(report: Report) -> None:
     """The manifest served to the app must carry a signature this app's key accepts: a manifest
     committed without (re-)signing is rejected by every shipped App, so "the release is live but
     nobody can see it" would otherwise only show up on a console."""
-    print("\n[5] served manifest signature")
+    print("\n[6] served manifest signature")
     manifest = REPO_ROOT / "agent-manifest.json"
     signature = manifest.with_name(manifest.name + ".sig")  # the name the app asks for
     pubkey = REPO_ROOT / "data" / "agent_pubkey.bin"
@@ -237,7 +240,34 @@ def main(argv: list[str] | None = None) -> int:
         if any("-dirty" in stamp for stamp in stamps):
             print("  note the NRO stamp says -dirty: the repo was dirty at build time (not a release)")
 
+    check_third_party(report)
     check_manifest_signature(report)
+
+
+THIRD_PARTY_PINS = (
+    (
+        "picohttpparser/picohttpparser.h",
+        "1fc9074dd12418b2b91e55ef3a8279bccf8d3577b790dea6f2f908ab2a157f1c",
+    ),
+    (
+        "picohttpparser/picohttpparser.c",
+        "6480689711996bc9a219e26df27ac32ebbb7dce2f24a63a316d041b08f646199",
+    ),
+    ("qrcodegen/qrcodegen.h", "e82df4bff37d18b5863b9e7486fe6bda1b6cda8c3b9ecebfec473907265cb589"),
+    ("qrcodegen/qrcodegen.c", "6a2b9cc65176f2345dde260c74b6d352627e8a0a6385d086ae0e9c5d0913c70c"),
+)
+
+
+def check_third_party(report: Report) -> None:
+    """The vendored libraries may only be replaced by a deliberate re-pin (source/third_party/
+    README.md explains the update procedure); this check is what makes that stick."""
+    print("\n[5] vendored third-party sources")
+    root = REPO_ROOT / "source" / "third_party"
+    for relative, expected in THIRD_PARTY_PINS:
+        path = root / relative
+        if not report.check(path.is_file(), f"{relative} exists"):
+            continue
+        report.check(sha256_of(path) == expected, f"{relative} is the pinned upstream revision")
 
     print()
     if report.failures:

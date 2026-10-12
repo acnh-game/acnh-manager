@@ -23,7 +23,12 @@
 #include "ui/font.hpp"
 #include "ui/header_tabs.hpp"
 #include "ui/home_state.hpp"
+#include "ui/list_view.hpp"
 #include "ui/settings.hpp"
+#include <memory>
+
+#include "install/game_install.hpp"
+#include "install/source_local_file.hpp"
 #include "ui/touch.hpp"
 
 namespace acnh_manager {
@@ -53,7 +58,7 @@ private:
        Result reports what happened. */
     /* Progress is shown while the engine works: the install runs on this thread, so this page
        is drawn once before the first byte moves and again after every file. */
-    enum class Page { Home, Details, Install, Uninstall, Progress, Guide, Result };
+    enum class Page { Home, Details, Install, Uninstall, Progress, Guide, Result, GameInstall };
 
     void Collect();
     void RefreshPlan();
@@ -117,6 +122,15 @@ private:
        goes back to where it was opened from. */
     void ToggleGuide();
     void RenderGuide(Surface surface);
+    void RenderGameInstall(Surface surface);
+    void RenderStorageBars(Surface surface);
+    /* Open the game installer, remembering where we came from (it is modal: B returns there). */
+    void OpenGameInstall();
+    bool TitleIsOurs(const std::string &title_id) const;
+    /* "The agent can be installed once this is in" is only true when the version being installed
+       (or already on the console) is the one this build's agent supports: the gate wants an exact
+       version match, so 2.0.0 does not qualify just because the title is ours. */
+    bool AgentSupportedFor(const std::string &title_id, std::uint32_t version) const;
     /* Confirmation pages share one implementation: action, outcome, two buttons. */
     void BuildConfirmActions(int width, int height, bool uninstall);
     void RenderConfirm(Surface surface, bool uninstall);
@@ -128,6 +142,11 @@ private:
     void BuildHomeActions(int width, int height);
     void ActivateAction(int id);
     void HandleKeys(u32 down);
+    /* The left stick drives the same focus the d-pad does, with a repeat that starts slow enough
+       to land on one row and then accelerates: a picker you cannot scroll with the stick feels
+       broken, and one that jumps five rows per nudge is worse. */
+    void HandleStick(const PadState &pad);
+    u64 m_stick_next_tick{0};
     void HandleTouch();
 
     /* One "label + value" row inside a card.  The value wraps at value_width and the row
@@ -164,6 +183,33 @@ private:
     Page m_page{Page::Home};
     /* Where + sends the player back to when the guide page is closed again. */
     Page m_guide_return{Page::Home};
+    /* Where the modal installer returns to when B is pressed (it is not a page stack: the
+       installer can only be opened from a page, never from itself). */
+    Page m_game_install_return{Page::Home};
+    /* The installer has its own little screens: today "pick a source" and "pick a file"; the
+       confirm / progress / result screens join them next. */
+    enum class InstallScreen { Choose, Files, Confirm, Progress, Result };
+    InstallScreen m_install_screen{InstallScreen::Choose};
+    ui::ListView m_file_list;
+    std::string m_file_dir{"/"};
+    /* Reads the current directory into the list: directories first, then the files this app can
+       install; everything else is listed dimmed so the player sees why it is not offered. */
+    void RefreshFileList();
+    void RenderInstallFiles(Surface surface);
+    void LeaveDirectory();
+    void PickFocusedFile();
+    /* Opens the picked package and decides what to show next: the confirm screen, or the result
+       screen when the package turns out to be pointless (already installed / newer installed). */
+    void OpenPickedPackage();
+    void RunGameInstall();
+    void RenderInstallConfirm(Surface surface);
+    void RenderInstallProgress(Surface surface);
+    void RenderInstallResult(Surface surface);
+    std::string m_picked_file;
+    std::unique_ptr<install::LocalFileSource> m_file_source;
+    std::unique_ptr<install::GameInstall> m_game_install;
+    install::InstallStatus m_install_status;
+    std::string m_install_error;
     /* The mini-app's code, read once from the embedded asset (empty when the build has none). */
     ui::QrMatrix m_guide_qr{};
     i18n::Language m_language{i18n::Language::ZhHans};

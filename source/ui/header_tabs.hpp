@@ -22,9 +22,11 @@ constexpr int kHeaderTabSpacing = 26;   /* between the two tab groups */
 constexpr int kHeaderTabPadX = 8;       /* touch slop around the drawn group */
 constexpr int kHeaderTabPadY = 8;
 constexpr int kHeaderTabTop = 32;       /* top of the badge */
-/* The guide entry, then the two page tabs; the group is laid out from the right edge, so the
-   status/details pair keeps its place no matter how wide the labels are. */
-constexpr int kHeaderTabCount = 3;
+/* Four entries, laid out from the right edge: the game installer ("+"), the guide ("-"), the
+   details page and the status page.  The two page tabs keep their place no matter how wide the
+   other labels are, and the installer page is the one page that hides them all (it is modal and
+   shows the storage bars in their place -- see app.cpp). */
+constexpr int kHeaderTabCount = 4;
 
 struct HeaderTabLayout {
     int badge_x[kHeaderTabCount];  /* left edge of the Ⓐ / Ⓛ / Ⓡ circle */

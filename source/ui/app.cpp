@@ -6,6 +6,10 @@
 #include <string>
 
 #include "manifest/manifest.hpp"
+#include "install/content_install.hpp"
+#include "install/container.hpp"
+#include "install/game_install.hpp"
+#include "install/source_local_file.hpp"
 #include "install/network_source.hpp"
 #include "log.hpp"
 #include "net/update_policy.hpp"
@@ -103,7 +107,13 @@ constexpr int kActionTabStatus = 10;  /* L: the status page (also a touch target
 constexpr int kActionTabDetails = 11; /* R: the details page (also a touch target) */
 constexpr int kActionFooterBack = 12; /* the footer's "Ⓑ exit / back" hint */
 constexpr int kActionLanguage = 13;   /* the details page's language row */
-constexpr int kActionGuide = 14;      /* the header's "+" entry: the chat-code explainer */
+constexpr int kActionGuide = 14;      /* the header's "-" entry: the chat-code explainer */
+constexpr int kActionGameInstall = 15; /* the header's "+" entry: the game installer (modal page) */
+constexpr int kActionInstallLocal = 16;    /* the installer's "this console" card (Y) */
+constexpr int kActionInstallDownload = 17; /* the installer's "download" card (X) */
+constexpr int kActionInstallUpload = 18;   /* the installer's "upload" card (A) */
+constexpr int kActionInstallPickRow = 19; /* a row of the installer's file list */
+constexpr int kActionInstallStart = 20;   /* "start" on the confirm screen (A) */
 
 /* Player settings (language today).  Separate from state.json because uninstall deletes that. */
 constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
@@ -805,6 +815,34 @@ void App::RunUninstall() {
     m_page = Page::Result;
 }
 
+/* Stick half of the input model: the same rows the d-pad walks, with a repeat so a long list can
+   be scrolled without hammering the stick.  Dead zone first (a worn stick must not drift the
+   focus), then an immediate first step, then a faster repeat while it stays pushed. */
+void App::HandleStick(const PadState &pad) {
+    constexpr int kDeadZone = 14000;   /* out of 32767 */
+    constexpr u64 kFirstDelayMs = 320; /* before the first repeat */
+    constexpr u64 kRepeatMs = 110;
+    const HidAnalogStickState stick = padGetStickPos(&pad, 0);
+    const bool up = stick.y > kDeadZone;
+    const bool down = stick.y < -kDeadZone;
+    if (!up && !down) {
+        m_stick_next_tick = 0; /* centred: the next push steps immediately */
+        return;
+    }
+    const u64 now = static_cast<u64>(armTicksToNs(armGetSystemTick()) / 1000000ULL);
+    if (m_stick_next_tick != 0 && now < m_stick_next_tick) {
+        return;
+    }
+    if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Files) {
+        m_file_list.MoveFocus(up ? -1 : +1);
+    } else if (m_page == Page::Home) {
+        m_focus = MoveFocus(m_actions, m_focus, 0, up ? -1 : +1);
+    } else {
+        return; /* the page has no vertical focus to move */
+    }
+    m_stick_next_tick = now + (m_stick_next_tick == 0 ? kFirstDelayMs : kRepeatMs);
+}
+
 /* Keyboard half of the input model.  Home has three actions with dedicated keys (A for the
    primary one, X and Y for the two secondary ones) plus focus movement for the d-pad, the
    details page uses focus and A, and B always means "back" (or exit on Home). */
@@ -829,14 +867,26 @@ void App::HandleKeys(u32 down) {
             m_should_exit = true; /* B on the home screen leaves the app, as before */
             return;
         }
-        /* Leaving the guide goes back to whatever it was opened from; everywhere else B is
-           "back to the status page". */
-        m_page = m_page == Page::Guide ? m_guide_return : Page::Home;
+        /* Leaving the guide or the installer goes back to whatever it was opened from;
+           everywhere else B is "back to the status page". */
+        if (m_page == Page::Guide) {
+            m_page = m_guide_return;
+        } else if (m_page == Page::GameInstall) {
+            m_page = m_game_install_return;
+        } else {
+            m_page = Page::Home;
+        }
         m_focus = FirstEnabled(m_actions);
         return;
     }
     if ((down & HidNpadButton_Plus) != 0) {
-        /* + is the chat-code explainer, from any page: the first press opens it, the next one
+        /* + is the game installer, from any page: it is modal, so B is the only way back and the
+           page hides the header entries while it is up. */
+        OpenGameInstall();
+        return;
+    }
+    if ((down & HidNpadButton_Minus) != 0) {
+        /* - is the chat-code explainer, from any page: the first press opens it, the next one
            (or B) goes back.  Exiting stays on B, which is where the footer points. */
         ToggleGuide();
         return;
@@ -877,6 +927,48 @@ void App::HandleKeys(u32 down) {
             } else if ((down & HidNpadButton_Y) != 0) {
                 m_allow_dev_manifest = !m_allow_dev_manifest;
                 Collect();
+            }
+            break;
+        case Page::GameInstall:
+            /* Two sub-screens, two key maps: the picker moves with up/down and picks with A, the
+               source screen uses Y/X/A for the three sources.  B is "one level back" in both, and
+               leaves the modal page from the source screen. */
+            if (m_install_screen == InstallScreen::Progress) {
+                break; /* the engine owns the thread: no key does anything here */
+            }
+            if (m_install_screen == InstallScreen::Confirm) {
+                if ((down & HidNpadButton_A) != 0) {
+                    RunGameInstall();
+                } else if ((down & HidNpadButton_B) != 0) {
+                    m_install_screen = InstallScreen::Choose;
+                    m_focus = FirstEnabled(m_actions);
+                }
+                break;
+            }
+            if (m_install_screen == InstallScreen::Files) {
+                if ((down & HidNpadButton_B) != 0) {
+                    m_install_screen = InstallScreen::Choose;
+                    m_focus = FirstEnabled(m_actions);
+                } else if ((down & HidNpadButton_Y) != 0) {
+                    LeaveDirectory();
+                } else if ((down & HidNpadButton_A) != 0) {
+                    PickFocusedFile();
+                } else if ((down & HidNpadButton_Up) != 0) {
+                    m_file_list.MoveFocus(-1);
+                } else if ((down & HidNpadButton_Down) != 0) {
+                    m_file_list.MoveFocus(+1);
+                }
+                break;
+            }
+            if ((down & HidNpadButton_Y) != 0) {
+                ActivateAction(kActionInstallLocal);
+            } else if ((down & HidNpadButton_X) != 0) {
+                ActivateAction(kActionInstallDownload);
+            } else if ((down & HidNpadButton_A) != 0) {
+                ActivateAction(kActionInstallUpload);
+            } else if ((down & HidNpadButton_B) != 0) {
+                m_page = m_game_install_return;
+                m_focus = FirstEnabled(m_actions);
             }
             break;
         case Page::Install:
@@ -937,9 +1029,11 @@ void App::ActivateAction(int id) {
             }
             break;
         /* The progress page takes no input at all (the engine owns the thread) and the guide
-           page is read-only: both fall through to the shared handling below. */
+           page is read-only: both fall through to the shared handling below.  The installer's own
+           actions (its cards and its list rows) are page-specific and handled there too. */
         case Page::Progress:
         case Page::Guide:
+        case Page::GameInstall:
             break;
         case Page::Uninstall:
             if (id == kActionPrimary) {
@@ -979,7 +1073,10 @@ void App::ActivateAction(int id) {
                     Collect(); /* recheck / refresh */
                     break;
                 case HomeKind::Unsupported:
-                    break; /* nothing to do; the headline already says why */
+                    /* The one useful thing to do here: offer the installer, because a package the
+                       player brings is how this state stops being true. */
+                    OpenGameInstall();
+                    break;
                 case HomeKind::NeedsInstall:
                 case HomeKind::UpdateAvailable:
                 case HomeKind::Repair:
@@ -991,6 +1088,18 @@ void App::ActivateAction(int id) {
             break;
         case kActionCheckUpdate: StartUpdateCheck(); break;
         case kActionGuide: ToggleGuide(); break;
+        case kActionGameInstall: OpenGameInstall(); break;
+        /* The three source screens land here next milestone; the entries are drawn and pressable
+           already so the page's layout and key map can be tested on hardware. */
+        case kActionInstallLocal:
+            m_install_screen = InstallScreen::Files;
+            m_file_dir = "/";
+            RefreshFileList();
+            break;
+        case kActionInstallPickRow: PickFocusedFile(); break;
+        case kActionInstallStart: RunGameInstall(); break;
+        case kActionInstallDownload: Trace("install: source = download"); break;
+        case kActionInstallUpload: Trace("install: source = upload"); break;
         case kActionUninstall:
             if (m_page == Page::Home && m_have_state) {
                 m_page = Page::Uninstall;
@@ -1032,11 +1141,15 @@ void App::Run() {
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&pad);
     m_touch.Init(m_log);
+    /* The game installer writes its diagnostics through this sink (one line each); it has nothing
+       to do with the agent install path, so it is set here, once, rather than in RunInstall. */
+    install::SetGameInstallLog(m_log);
     m_focus = FirstEnabled(m_actions);
     while (appletMainLoop() && !m_should_exit) {
         PollUpdateCheck();
         padUpdate(&pad);
         HandleKeys(padGetButtonsDown(&pad));
+        HandleStick(pad);
         HandleTouch();
         Render();
     }
@@ -1099,6 +1212,7 @@ void App::Render() {
     }
     switch (m_page) {
         case Page::Home: RenderHome(surface); break;
+        case Page::GameInstall: RenderGameInstall(surface); break;
         case Page::Details: RenderDetails(surface); break;
         case Page::Install: RenderInstall(surface); break;
         case Page::Uninstall: RenderUninstall(surface); break;
@@ -1161,6 +1275,13 @@ void App::RenderHeader(Surface surface) {
     if (m_page == Page::Progress) {
         return;
     }
+    /* The installer page is the app's one modal page: the four entries are hidden (not greyed
+       out) and the room they took shows the two storage bars, so the player sees why the page
+       cannot be left with L/R and how much room the install has. */
+    if (m_page == Page::GameInstall) {
+        RenderStorageBars(surface);
+        return;
+    }
     struct Tab {
         const char *key;
         i18n::StringId label;
@@ -1170,7 +1291,8 @@ void App::RenderHeader(Surface surface) {
        identify the current page by which entry carries the underline. */
     const Tab tabs[kHeaderTabCount] = {{"L", i18n::StringId::TabStatus, kActionTabStatus},
                                        {"R", i18n::StringId::TabDetails, kActionTabDetails},
-                                       {"+", i18n::StringId::TabGuide, kActionGuide}};
+                                       {"+", i18n::StringId::TabInstall, kActionGameInstall},
+                                       {"-", i18n::StringId::TabGuide, kActionGuide}};
     int label_width[kHeaderTabCount] = {};
     for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(tabs[i].label), kFontHeading);
@@ -1182,6 +1304,7 @@ void App::RenderHeader(Surface surface) {
         bool active = false;
         switch (tabs[i].action) {
             case kActionGuide: active = m_page == Page::Guide; break;
+            case kActionGameInstall: active = m_page == Page::GameInstall; break;
             case kActionTabStatus:
                 active = m_page != Page::Details && m_page != Page::Guide;
                 break;
@@ -1214,13 +1337,14 @@ void App::RenderHeader(Surface surface) {
 void App::AddChromeActions(int surface_width, int surface_height) {
     /* The progress page has no chrome on purpose: its keys are dead while the engine works, and
        drawing tabs or a "B back" hint would promise controls that do nothing. */
-    if (m_page == Page::Progress) {
+    if (m_page == Page::Progress || m_page == Page::GameInstall) {
         return;
     }
     const i18n::StringId header_labels[kHeaderTabCount] = {
-        i18n::StringId::TabStatus, i18n::StringId::TabDetails, i18n::StringId::TabGuide};
+        i18n::StringId::TabStatus, i18n::StringId::TabDetails, i18n::StringId::TabInstall,
+        i18n::StringId::TabGuide};
     const int header_actions[kHeaderTabCount] = {kActionTabStatus, kActionTabDetails,
-                                                 kActionGuide};
+                                                 kActionGameInstall, kActionGuide};
     int label_width[kHeaderTabCount] = {};
     for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(header_labels[i]), kFontHeading);
@@ -1479,8 +1603,9 @@ void App::BuildHomeActions(int width, int height) {
                            m_home_kind != HomeKind::GameMissing;
     /* A greyed-out primary button means "nothing to do": already up to date, or this build
        cannot be handled at all. */
-    const bool primary_enabled =
-        m_home_kind != HomeKind::UpToDate && m_home_kind != HomeKind::Unsupported;
+    /* Unsupported keeps an enabled primary button: it opens the game installer instead of doing
+       nothing, which is the whole point of 1.1.0 for a console stuck on 1.0.0. */
+    const bool primary_enabled = m_home_kind != HomeKind::UpToDate;
     /* One shift for both rows, and it lives here because the touch targets are built from the
        same rectangles: moving the buttons in the renderer alone would leave the finger hitting
        the old place. */
@@ -1710,7 +1835,10 @@ void App::RenderHome(Surface surface) {
             sub_id = i18n::StringId::SubUpToDate;
             break;
         case HomeKind::Unsupported:
-            sub_id = i18n::StringId::StateUnsupportedSub;
+            /* The old subtitle ("the reason is in Details") is gone everywhere: this state now
+               has something to do, and the button says what it is. */
+            label_id = i18n::StringId::HomeInstallUpdate;
+            sub_id = i18n::StringId::HomeInstallUpdateSub;
             break;
     }
     const std::string primary_label =
@@ -2185,6 +2313,651 @@ void App::ToggleGuide() {
         Trace("guide: opened from page %d", static_cast<int>(m_guide_return));
     }
     m_focus = FirstEnabled(m_actions);
+}
+
+
+/* The game installer: the app's one modal page.  Entering it remembers the page we came from
+   (B returns there) and, while it is up, the header hides the four entries and shows the storage
+   bars instead -- the page is exclusive, so offering a way out that is not B would be a lie. */
+
+/* True when `title_id` belongs to a title this build supports.  The manifest lists the *base*
+   id while a package's CNMT carries the patch id (base + 0x800) or a DLC id (base + 0x1000), so
+   comparing the strings would say "not ours" for our own game's update.  The family is the high
+   48 bits -- the same rule the running-game check uses. */
+
+/* True when this build's agent supports `version` of `title_id`: same title family, and the
+   version the manifest lists -- the gate compares versions exactly, so a 2.0.0 update of our own
+   game is still not something the agent can attach to. */
+bool App::AgentSupportedFor(const std::string &title_id, std::uint32_t version) const {
+    const unsigned long long wanted = std::strtoull(title_id.c_str(), nullptr, 16);
+    if (wanted == 0) {
+        return false;
+    }
+    for (const auto &game : ActiveManifest().games) {
+        const unsigned long long known = std::strtoull(game.title_id.c_str(), nullptr, 16);
+        if (known != 0 && (known >> 16) == (wanted >> 16) && game.version == version) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool App::TitleIsOurs(const std::string &title_id) const {
+    const unsigned long long wanted = std::strtoull(title_id.c_str(), nullptr, 16);
+    if (wanted == 0) {
+        return false;
+    }
+    for (const auto &game : ActiveManifest().games) {
+        const unsigned long long known = std::strtoull(game.title_id.c_str(), nullptr, 16);
+        if (known != 0 && (known >> 16) == (wanted >> 16)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void App::OpenGameInstall() {
+    if (m_page == Page::GameInstall) {
+        return;
+    }
+    m_game_install_return = m_page;
+    m_page = Page::GameInstall;
+    m_install_screen = InstallScreen::Choose; /* always start at "pick a source" */
+    m_file_dir = "/";
+    m_focus = FirstEnabled(m_actions);
+    Trace("install: opened from page %d", static_cast<int>(m_game_install_return));
+}
+
+/* The SD card as a flat list of what the player can pick: ".." to go up, then directories, then
+   the files this app knows how to install.  Anything else is shown dimmed rather than hidden --
+   a file that is simply absent reads as "the app cannot see my card". */
+void App::RefreshFileList() {
+    m_file_list.SetItems({});
+    if (m_sd == nullptr) {
+        return;
+    }
+    std::vector<ui::ListItem> items;
+    if (m_file_dir != "/") {
+        items.push_back({"..", Tr(i18n::StringId::InstallUpOneLevel), true});
+    }
+    const util::FsPath dir(m_file_dir);
+    FsDir directory{};
+    if (R_FAILED(fsFsOpenDirectory(m_sd, dir.c_str(),
+                                   FsDirOpenMode_ReadDirs | FsDirOpenMode_ReadFiles, &directory))) {
+        Trace("install: cannot open %s", m_file_dir.c_str());
+        m_file_list.SetItems(std::move(items));
+        return;
+    }
+    FsDirectoryEntry entries[64]{};
+    s64 total = 0;
+    if (R_SUCCEEDED(fsDirRead(&directory, &total, 64, entries))) {
+        for (s64 i = 0; i < total && i < 64; ++i) {
+            const std::string name = entries[i].name;
+            if (entries[i].type == FsDirEntryType_Dir) {
+                items.push_back({name + "/", Tr(i18n::StringId::InstallDirectory), true});
+            } else if (entries[i].type == FsDirEntryType_File) {
+                const bool supported = install::IsSupportedExtension(name);
+                items.push_back({name, supported ? std::string(Tr(i18n::StringId::InstallPackage))
+                                                 : std::string(Tr(i18n::StringId::InstallIgnored)),
+                                 supported});
+            }
+        }
+    }
+    fsDirClose(&directory);
+    /* The card's own order is whatever the file system feels like; sort so "..", directories and
+       then files read the same way twice, which is what makes a picker predictable. */
+    std::stable_sort(items.begin() + (m_file_dir == "/" ? 0 : 1), items.end(),
+                     [](const ui::ListItem &lhs, const ui::ListItem &rhs) {
+                         const bool lhs_dir = !lhs.name.empty() && lhs.name.back() == '/';
+                         const bool rhs_dir = !rhs.name.empty() && rhs.name.back() == '/';
+                         if (lhs_dir != rhs_dir) {
+                             return lhs_dir;
+                         }
+                         return lhs.name < rhs.name;
+                     });
+    m_file_list.SetItems(std::move(items));
+    Trace("install: %s -> %zu entries", m_file_dir.c_str(), m_file_list.Items().size());
+}
+
+/* Two bars where the tabs were: the SD card and the console's own memory, in content-storage
+   terms (the same call the space check uses, so the screen and the check cannot disagree).
+   A storage that cannot be read shows the placeholder, never a made-up zero. */
+void App::RenderStorageBars(Surface surface) {
+    struct Bar {
+        i18n::StringId label;
+        install::TargetStorage target;
+    };
+    const Bar bars[2] = {{i18n::StringId::StorageSdCard, install::TargetStorage::SdCard},
+                         {i18n::StringId::StorageSystem, install::TargetStorage::Nand}};
+    constexpr int kBarWidth = 150;
+    constexpr int kBarHeight = 8;
+    int x_right = surface.width - kMargin;
+    for (int i = 1; i >= 0; --i) {
+        std::uint64_t free_bytes = 0;
+        std::uint64_t total_bytes = 0;
+        std::string error;
+        const bool ok = install::ContentInstaller::Space(bars[i].target, &free_bytes, &total_bytes,
+                                                         &error);
+        /* "free / total" in GB with one decimal, the shape the design fixes; a storage that
+           cannot be read says so instead of showing 0.0 (design section 8). */
+        char caption[64];
+        if (ok) {
+            std::snprintf(caption, sizeof(caption), "%.1f / %.1f GB",
+                          static_cast<double>(free_bytes) / (1024.0 * 1024.0 * 1024.0),
+                          static_cast<double>(total_bytes) / (1024.0 * 1024.0 * 1024.0));
+        } else {
+            std::snprintf(caption, sizeof(caption), "%s", Tr(i18n::StringId::StorageUnavailable));
+        }
+        char line[96];
+        std::snprintf(line, sizeof(line), "%s  %s", Tr(bars[i].label), caption);
+        const int width = m_font.Measure(line, kFontSmall);
+        const int x = x_right - width;
+        m_font.Draw(surface, x, 22, kFontSmall, kOnHeader, line);
+        /* The bar is as wide as the text above it, so the two read as one block; it used to be a
+           fixed 150 px, which left the bar visibly shorter than its own caption. */
+        const int bar = width > kBarWidth ? width : kBarWidth;
+        FillRoundedRect(surface, x, 52, bar, kBarHeight, kBarHeight / 2, kHeaderBadge);
+        if (ok && total_bytes > 0) {
+            const double used = 1.0 - static_cast<double>(free_bytes) / static_cast<double>(total_bytes);
+            const int filled = static_cast<int>(bar * used);
+            if (filled > 0) {
+                FillRoundedRect(surface, x, 52, filled, kBarHeight, kBarHeight / 2, kOnHeader);
+            }
+        }
+        x_right -= bar + 30;
+    }
+}
+
+
+/* The file picker: one card, the directory as rows, the focus as a highlighted row.  Every row's
+   hit area comes from the same kRowHeight the list uses, so a tap and the focus can never
+   disagree about which row is which. */
+/* Going up one level, and picking the focused row: both are "what does the list currently say",
+   so they live next to the list instead of in the key handler. */
+void App::LeaveDirectory() {
+    if (m_file_dir == "/" || m_file_dir.empty()) {
+        return;
+    }
+    std::string parent = m_file_dir;
+    while (parent.size() > 1 && parent.back() == '/') {
+        parent.pop_back();
+    }
+    const std::size_t slash = parent.find_last_of('/');
+    parent = slash == std::string::npos ? "/" : parent.substr(0, slash + 1);
+    if (parent.empty()) {
+        parent = "/";
+    }
+    m_file_dir = parent;
+    RefreshFileList();
+}
+
+/* A directory opens, an installable file becomes the picked package.  The install itself starts
+   from the confirm screen, which is the next screen to be written -- until then the pick is
+   recorded and logged so the key map can be tested on hardware. */
+void App::PickFocusedFile() {
+    const int index = m_file_list.Focus();
+    const auto &items = m_file_list.Items();
+    if (index < 0 || index >= static_cast<int>(items.size())) {
+        return;
+    }
+    const std::string name = items[static_cast<std::size_t>(index)].name;
+    if (name == "..") {
+        LeaveDirectory();
+        return;
+    }
+    if (!name.empty() && name.back() == '/') {
+        m_file_dir += name.substr(0, name.size() - 1) + "/";
+        RefreshFileList();
+        return;
+    }
+    m_picked_file = m_file_dir + name;
+    Trace("install: picked %s", m_picked_file.c_str());
+    OpenPickedPackage();
+}
+
+/* Opens the picked file and parses it, then shows what it is.  Nothing is written yet: the
+   confirm screen is the player's chance to say "no, that was the wrong file". */
+void App::OpenPickedPackage() {
+    m_install_error.clear();
+    m_install_status = install::InstallStatus{};
+    m_file_source.reset();
+    m_game_install.reset();
+    if (m_sd == nullptr || m_picked_file.empty()) {
+        m_install_error = "no file picked";
+        return;
+    }
+    install::InstallOptions options; /* the reference implementation's defaults (design section 5) */
+    m_file_source = std::make_unique<install::LocalFileSource>();
+    std::uint64_t size = 0;
+    std::string error;
+    if (!m_file_source->Open(m_sd, m_picked_file, &size, &error)) {
+        /* A file that cannot even be opened is a result, not a silent no-op: the player has to
+           be told, and log.txt has to say which file and why. */
+        m_install_error = error;
+        m_file_source.reset();
+        Trace("install: cannot open %s: %s", m_picked_file.c_str(), error.c_str());
+        m_install_screen = InstallScreen::Result;
+        return;
+    }
+    m_game_install = std::make_unique<install::GameInstall>(*m_file_source, m_picked_file, size,
+                                                           options.target, options);
+    if (!m_game_install->Prepare(&error)) {
+        m_install_error = error;
+        std::string cleanup_error;
+        m_game_install->CleanupAfterFailure(&cleanup_error);
+        m_game_install.reset();
+        m_file_source.reset();
+        /* The raw text is the installer's diagnostic (English, technical) and belongs in
+           log.txt; the screen gets a line the player can act on.  A running game is not a dead
+           end -- closing it and picking the same file again is one step -- so that case goes
+           back to the picker instead of to a result page that only offers "back". */
+        Trace("install: %s is not installable: %s", m_picked_file.c_str(), error.c_str());
+        if (error == "game-running") {
+            m_install_screen = InstallScreen::Files;
+            return;
+        }
+        m_install_error = error.find("no installable content") != std::string::npos
+                              ? "no-content"
+                              : "not-a-package";
+        m_install_screen = InstallScreen::Result;
+        return;
+    }
+    m_install_status = m_game_install->Status();
+    Trace("install: %s -> %s (%s)", m_picked_file.c_str(),
+          m_install_status.stage == install::InstallStage::Skipped ? "skip" : "confirm",
+          m_install_status.detail.c_str());
+    m_install_screen = m_install_status.stage == install::InstallStage::Skipped
+                           ? InstallScreen::Result
+                           : InstallScreen::Confirm;
+}
+
+
+/* Runs the whole transfer on this thread.  The engine's steps are bounded (4 MB each), so the
+   screen can be redrawn while it works; redrawing every step would spend more time in the
+   compositor than in the copy, so a frame every 64 MB is what the player actually needs. */
+void App::RunGameInstall() {
+    if (m_game_install == nullptr) {
+        return;
+    }
+    m_install_screen = InstallScreen::Progress;
+    m_install_error.clear();
+    Render();
+    std::string error;
+    if (!m_game_install->Begin(&error)) {
+        m_install_error = error;
+        m_game_install->Abandon(&error);
+        m_install_screen = InstallScreen::Result;
+        Render();
+        return;
+    }
+    int steps = 0;
+    while (m_game_install->Step(&error)) {
+        m_install_status = m_game_install->Status();
+        if ((++steps % 16) == 0) {
+            Render();
+        }
+    }
+    m_install_status = m_game_install->Status();
+    if (m_install_status.stage == install::InstallStage::Failed) {
+        m_install_error = m_install_status.error;
+        m_game_install->Abandon(&error);
+        m_install_screen = InstallScreen::Result;
+        Render();
+        return;
+    }
+    /* Everything is in: from here the install cannot be cancelled, and the screen says so. */
+    m_install_screen = InstallScreen::Progress;
+    Render();
+    if (!m_game_install->Finish(&error)) {
+        m_install_error = error;
+        m_game_install->Abandon(&error);
+    }
+    m_install_status = m_game_install->Status();
+    m_install_screen = InstallScreen::Result;
+    Trace("install: finished stage=%d%s%s", static_cast<int>(m_install_status.stage),
+          m_install_error.empty() ? "" : " error=", m_install_error.c_str());
+    m_game_install.reset();
+    m_file_source.reset();
+    Collect(); /* the home screen's verdict may have changed: the gate watches the game version */
+    Render();
+}
+
+/* The progress screen: how far along by *bytes*, because one content in a real update is several
+   GB and the others are kilobytes -- "3 of 5 contents" would sit at 20% until the very end. */
+void App::RenderInstallProgress(Surface surface) {
+    m_actions.clear();
+    const int card_x = 200;
+    const int card_top = kHeaderHeight + 74;
+    const int card_width = surface.width - card_x * 2;
+    const int card_height = 330;
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    const bool finalizing = m_install_status.stage == install::InstallStage::Finalizing;
+    const char *stage = Tr(finalizing ? i18n::StringId::ProgressFinalize
+                                      : i18n::StringId::ProgressReceive);
+    const int stage_width = m_font.Measure(stage, kFontHeading);
+    m_font.Draw(surface, card_x + card_width / 2 - stage_width / 2, card_top + 28, kFontHeading,
+                kText, stage);
+
+    char counter[64];
+    std::snprintf(counter, sizeof(counter), Tr(i18n::StringId::ProgressContents),
+                  m_install_status.done_contents, m_install_status.total_contents);
+    const int counter_width = m_font.Measure(counter, kFontSmall);
+    m_font.Draw(surface, card_x + card_width / 2 - counter_width / 2, card_top + 70, kFontSmall,
+                kSubtle, counter);
+
+    const int name_width = m_font.Measure(m_install_status.current_name.c_str(), kFontBody);
+    m_font.Draw(surface, card_x + card_width / 2 - name_width / 2, card_top + 104, kFontBody,
+                kText, m_install_status.current_name.c_str());
+
+    const int bar_x = card_x + 60;
+    const int bar_y = card_top + 182;
+    const int bar_width = card_width - 200;
+    constexpr int kBarHeight = 16;
+    FillRoundedRect(surface, bar_x, bar_y, bar_width, kBarHeight, kBarHeight / 2, kCardDisabled);
+    std::uint64_t total = m_install_status.total_bytes;
+    std::uint64_t done = m_install_status.done_bytes;
+    if (total > 0) {
+        const double ratio = static_cast<double>(done) / static_cast<double>(total);
+        const int filled = static_cast<int>(bar_width * (ratio > 1.0 ? 1.0 : ratio));
+        if (filled > 0) {
+            FillRoundedRect(surface, bar_x, bar_y, filled, kBarHeight, kBarHeight / 2, kHeader);
+        }
+    }
+    char percent[16];
+    std::snprintf(percent, sizeof(percent), "%d%%",
+                  total > 0 ? static_cast<int>(done * 100 / total) : 0);
+    m_font.DrawBold(surface, bar_x + bar_width + 18, bar_y - 10, kFontHeading, kText, percent);
+
+    char detail[96];
+    std::snprintf(detail, sizeof(detail), "%.2f / %.2f GB",
+                  static_cast<double>(done) / (1024.0 * 1024.0 * 1024.0),
+                  static_cast<double>(total) / (1024.0 * 1024.0 * 1024.0));
+    const int detail_width = m_font.Measure(detail, kFontSmall);
+    m_font.Draw(surface, card_x + card_width / 2 - detail_width / 2, card_top + 222, kFontSmall,
+                kSubtle, detail);
+    if (finalizing) {
+        const char *note = Tr(i18n::StringId::ProgressFinalize);
+        const int note_width = m_font.Measure(note, kFontSmall);
+        m_font.Draw(surface, card_x + card_width / 2 - note_width / 2, card_top + 256, kFontSmall,
+                    kWarn, note);
+    }
+}
+
+/* The result screen: four titles, and three rows that say what it was, what happened and what
+   the player can do now.  Nothing here points at another page -- the design keeps the whole
+   answer on this screen (section 8). */
+void App::RenderInstallResult(Surface surface) {
+    m_actions.clear();
+    if (m_game_install == nullptr) {
+        /* The package was dropped after the run (or never parsed): the screen still says what
+           happened, in the player's language. */
+        const int x = kMargin;
+        m_font.Draw(surface, x, kHeaderHeight + 60, kFontTitle, kBad,
+                    Tr(i18n::StringId::ResultFailed));
+        i18n::StringId reason = i18n::StringId::InstallNotAPackage;
+        if (m_install_error == "no-content") {
+            reason = i18n::StringId::InstallNoContent;
+        } else if (m_install_error == "game-running") {
+            reason = i18n::StringId::InstallGameRunning;
+        }
+        m_font.Draw(surface, x, kHeaderHeight + 140, kFontBody, kSubtle, Tr(reason));
+        return;
+    }
+    const install::InstallStatus &status = m_install_status;
+    const int card_x = 180;
+    const int card_top = kHeaderHeight + 40;
+    const int card_width = surface.width - card_x * 2;
+    const int card_height = 340;
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    i18n::StringId title = i18n::StringId::ResultInstalled;
+    Color colour = kGood;
+    switch (status.stage) {
+        case install::InstallStage::Skipped:
+            /* Decided by the numbers, not by the path that got us here: "the console has a newer
+               version than this package" and "this exact version is already installed" are
+               different sentences, and both are skips. */
+            title = status.installed_version > status.package_version
+                        ? i18n::StringId::ResultSkippedNewer
+                        : i18n::StringId::ResultSkippedInstalled;
+            break;
+        case install::InstallStage::Failed:
+            title = i18n::StringId::ResultFailed;
+            colour = kBad;
+            break;
+        default: break;
+    }
+    m_font.DrawBold(surface, card_x + 36, card_top + 32, kFontTitle, colour, Tr(title));
+
+    const auto row = [&](i18n::StringId label, const std::string &text, int index) {
+        const int y = card_top + 120 + index * 56;
+        m_font.Draw(surface, card_x + 36, y, kFontBody, kSubtle, Tr(label));
+        m_font.Draw(surface, card_x + 280, y, kFontBody, kText, text.c_str());
+    };
+    /* The package's own name when we read it, its title id otherwise. */
+    const std::string what = m_install_status.game_name.empty()
+                                 ? m_game_install->Package().cnmt.title_id
+                                 : m_install_status.game_name;
+    row(i18n::StringId::ResultWhat, what, 0);
+    if (status.stage == install::InstallStage::Failed) {
+        row(i18n::StringId::ResultWhy, m_install_error, 1);
+    } else if (status.stage == install::InstallStage::Skipped) {
+        row(i18n::StringId::ResultWhy,
+            status.installed_version > status.package_version
+                ? Tr(i18n::StringId::ResultSkippedNewer)
+                : Tr(i18n::StringId::ResultSkippedInstalled),
+            1);
+    } else {
+        char written[64];
+        std::snprintf(written, sizeof(written), "%d / %.1f GB", status.total_contents,
+                      static_cast<double>(status.total_bytes) / (1024.0 * 1024.0 * 1024.0));
+        row(i18n::StringId::ResultWritten, written, 1);
+    }
+    /* Same rule as the confirm screen: the agent line is only true for a title this build
+       knows about. */
+    /* What matters after the fact is the version now on the console: for a skip that is the
+       installed one, otherwise the one we just wrote. */
+    const std::uint32_t effective = status.stage == install::InstallStage::Skipped
+                                        ? status.installed_version
+                                        : status.package_version;
+    row(i18n::StringId::ResultNow,
+        AgentSupportedFor(m_game_install->Package().cnmt.title_id, effective)
+            ? Tr(i18n::StringId::ResultAgentReady)
+            : "",
+        2);
+    if (status.modified) {
+        m_font.Draw(surface, card_x + 36, card_top + card_height - 40, kFontSmall, kWarn,
+                    Tr(i18n::StringId::ResultMoreInDetails));
+    }
+}
+
+/* The confirm screen: what this file is, before anything is written.  Rows follow the design
+   (version / type / size / target); the title line shows the title id until the NACP reader
+   lands, which is a separate, bounded piece of work. */
+void App::RenderInstallConfirm(Surface surface) {
+    m_actions.clear();
+    const int card_x = 180;
+    const int card_top = kHeaderHeight + 40;
+    const int card_width = surface.width - card_x * 2;
+    const int card_height = 400;
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    const install::PackageInfo &package = m_game_install->Package();
+    m_font.Draw(surface, card_x + 36, card_top + 28, kFontSmall, kSubtle,
+                Tr(i18n::StringId::ConfirmStart));
+    /* The package's own NACP supplies the name and the version string the player knows; the title
+       id is only a fallback for a package whose control content could not be read. */
+    const std::string title = m_install_status.game_name.empty() ? package.cnmt.title_id
+                                                                : m_install_status.game_name;
+    m_font.Draw(surface, card_x + 36, card_top + 56, kFontTitle, kText, title.c_str());
+
+    const int row_x = card_x + 36;
+    const int value_x = card_x + 296;
+    int y = card_top + 136;
+    const auto row = [&](i18n::StringId label, const std::string &text) {
+        m_font.Draw(surface, row_x, y, kFontBody, kSubtle, Tr(label));
+        m_font.Draw(surface, value_x, y, kFontBody, kText, text.c_str());
+        y += 46;
+    };
+    /* The version row shows the game's own display version ("2.0.0").  It used to be built out of
+       the raw title version, which produced "22.0.0" -- a string that reads as an *system* version
+       and is simply wrong.  When the NACP could not be read, the row is left out rather than
+       filled with a made-up number. */
+    if (!m_install_status.game_version.empty()) {
+        row(i18n::StringId::ConfirmVersion, m_install_status.game_version);
+    }
+    switch (package.cnmt.type) {
+        case install::MetaType::Application:
+            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeBase));
+            break;
+        case install::MetaType::Patch:
+            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeUpdate));
+            break;
+        case install::MetaType::AddOnContent:
+            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeDlc));
+            break;
+        default:
+            row(i18n::StringId::ConfirmType, install::MetaTypeLabel(package.cnmt.type));
+            break;
+    }
+    {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%.1f GB",
+                      static_cast<double>(install::TotalBytes(m_game_install->Task())) /
+                          (1024.0 * 1024.0 * 1024.0));
+        row(i18n::StringId::ConfirmSize, buffer);
+    }
+    row(i18n::StringId::ConfirmTarget,
+        Tr(i18n::StringId::StorageSdCard)); /* 1.1.0 installs to the card unless the space check
+                                               asks about the console's own memory */
+    /* "The agent can be installed afterwards" is only true for a title this build knows about:
+       installing some other game with this tool leaves that game alone and our agent has nothing
+       to attach to. */
+    if (AgentSupportedFor(package.cnmt.title_id, package.cnmt.version)) {
+        m_font.Draw(surface, row_x, y + 10, kFontSmall, kGood,
+                    Tr(i18n::StringId::ConfirmAgentNote));
+    }
+    m_actions.push_back({kActionInstallStart,
+                         Rect{card_x, card_top, card_width, card_height}, true});
+}
+
+void App::RenderInstallFiles(Surface surface) {
+    m_actions.clear();
+    const int card_x = kMargin;
+    const int card_top = kHeaderHeight + 24;
+    const int card_width = surface.width - kMargin * 2;
+    const int card_height = surface.height - card_top - kFooterHeight - 24;
+    /* The list leaves room for a one-line reason at the bottom: the close-the-game hint lives
+       there, and a clamped row would draw it half off the card. */
+    m_file_list.SetBox(card_width, card_height - 60 - 34);
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    m_font.Draw(surface, card_x + 24, card_top + 14, kFontHeading, kText,
+                Tr(i18n::StringId::InstallPickFile));
+    m_font.Draw(surface, card_x + 24 + m_font.Measure(Tr(i18n::StringId::InstallPickFile),
+                                                      kFontHeading) + 18,
+                card_top + 24, kFontSmall, kSubtle, m_file_dir.c_str());
+
+    if (!m_install_error.empty()) {
+        m_font.Draw(surface, card_x + 24, card_top + card_height - 46, kFontSmall, kBad,
+                    m_install_error == "game-running" ? Tr(i18n::StringId::InstallGameRunning)
+                                                     : m_install_error.c_str());
+    }
+    const ui::ListWindow window = m_file_list.Window();
+    const int list_top = card_top + 60;
+    const std::vector<ui::ListItem> &items = m_file_list.Items();
+    if (items.empty()) {
+        m_font.Draw(surface, card_x + 24, list_top + 8, kFontBody, kSubtle,
+                    Tr(i18n::StringId::InstallNoFiles));
+        return;
+    }
+    for (int row = 0; row < window.count; ++row) {
+        const int index = window.first + row;
+        if (index >= static_cast<int>(items.size())) {
+            break;
+        }
+        const ui::ListItem &item = items[static_cast<std::size_t>(index)];
+        const int y = list_top + row * ui::ListView::kRowHeight;
+        const Rect hit{card_x + 16, y - 6, card_width - 32, ui::ListView::kRowHeight - 8};
+        if (index == m_file_list.Focus()) {
+            /* The focus mark sits on the *bottom* edge of the row: reading a list, the eye runs
+               downward, and a line under the current row reads as "here", while the same line
+               above it reads as "the row before this one". */
+            FillRoundedRect(surface, hit.x, hit.y, hit.w, hit.h, 12, kCardDisabled);
+            FillRoundedRect(surface, hit.x, hit.y + hit.h - 3, hit.w, 3, 0, kHeader);
+        }
+        const Color ink = item.selectable ? kText : kSubtle;
+        m_font.Draw(surface, card_x + 34, y, kFontBody, ink, item.name.c_str());
+        const int note_width = m_font.Measure(item.note.c_str(), kFontSmall);
+        m_font.Draw(surface, card_x + card_width - 34 - note_width, y + 4, kFontSmall, ink,
+                    item.note.c_str());
+        /* Only selectable rows are actions: a dimmed row must not be tappable either. */
+        if (item.selectable) {
+            m_actions.push_back({kActionInstallPickRow, hit, true});
+        }
+    }
+}
+
+
+/* The installer's first screen: pick a source.  Everything else on this page follows from that
+   choice, so the screen shows nothing but the three entries and what formats are accepted. */
+void App::RenderGameInstall(Surface surface) {
+    if (m_install_screen == InstallScreen::Files) {
+        RenderInstallFiles(surface);
+        return;
+    }
+    switch (m_install_screen) {
+        case InstallScreen::Confirm: RenderInstallConfirm(surface); return;
+        case InstallScreen::Progress: RenderInstallProgress(surface); return;
+        case InstallScreen::Result: RenderInstallResult(surface); return;
+        case InstallScreen::Files:
+        case InstallScreen::Choose: break;
+    }
+    m_actions.clear();
+    const int width = surface.width - kMargin * 2;
+    m_font.Draw(surface, kMargin, kHeaderHeight + 24, kFontSmall, kSubtle,
+                Tr(i18n::StringId::InstallFormats));
+
+    struct Entry {
+        const char *key;
+        i18n::StringId label;
+        i18n::StringId sub;
+        int action;
+    };
+    const Entry entries[3] = {{"Y", i18n::StringId::InstallPickFile, i18n::StringId::InstallPickFileSub,
+                               kActionInstallLocal},
+                              {"X", i18n::StringId::InstallDownload, i18n::StringId::InstallDownloadSub,
+                               kActionInstallDownload},
+                              {"A", i18n::StringId::InstallUpload, i18n::StringId::InstallUploadSub,
+                               kActionInstallUpload}};
+    constexpr int kCardGap = 24;
+    constexpr int kCardHeight = 210;
+    const int card_top = kHeaderHeight + 70;
+    const int card_width = (width - kCardGap * 2) / 3;
+    for (int i = 0; i < 3; ++i) {
+        const int x = kMargin + i * (card_width + kCardGap);
+        const Rect rect{x, card_top, card_width, kCardHeight};
+        FillRoundedRect(surface, rect.x, rect.y, rect.w, rect.h, 18, kBorder);
+        FillRoundedRect(surface, rect.x + 3, rect.y + 3, rect.w - 6, rect.h - 6, 15,
+                        m_focus == entries[i].action ? kCardDisabled : kCard);
+        DrawKeyBadge(surface, m_font, rect.x + 46, rect.y + rect.h / 2, 22, entries[i].key, kHeader,
+                     kOnHeader);
+        const char *label = Tr(entries[i].label);
+        const int label_width = m_font.Measure(label, kFontHeading + 8);
+        m_font.Draw(surface, rect.x + rect.w / 2 - label_width / 2, rect.y + rect.h / 2 - 40,
+                    kFontHeading + 8, kText, label);
+        const char *sub = Tr(entries[i].sub);
+        const int sub_width = m_font.Measure(sub, kFontSmall);
+        m_font.Draw(surface, rect.x + rect.w / 2 - sub_width / 2, rect.y + rect.h / 2 + 8,
+                    kFontSmall, kSubtle, sub);
+        m_actions.push_back({entries[i].action, rect, true});
+    }
+    m_focus = m_actions.empty() ? -1 : 0;
 }
 
 void App::RenderProgress(Surface surface) {

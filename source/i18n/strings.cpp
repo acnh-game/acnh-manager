@@ -145,6 +145,57 @@ constexpr Entry kStrings[] = {
     {"重启游戏即可使用聊天码", "Restart the game to use chat codes"},  /* ResultReadyNote */
     {"管理器与存储卡失去联系:退出本程序后重新打开,再试一次", "Lost contact with the card: close the manager, open it again, then retry"},  /* ResultRelinkHint */
     {"检测到可能冲突的旧金手指代码", "Found an old cheat code that may conflict"},  /* HomeLegacyCheat */
+    {"游戏安装/更新", "Game Install / Update"},  /* TabInstall */
+    {"本机文件", "This console"},  /* InstallPickFile */
+    {"从 SD 卡选一个文件安装", "Install a file from the SD card"},  /* InstallPickFileSub */
+    {"下载安装", "Download and install"},  /* InstallDownload */
+    {"填写网址,下载安装", "Paste an address, download and install"},  /* InstallDownloadSub */
+    {"上传安装", "Upload and install"},  /* InstallUpload */
+    {"通过手机/电脑浏览器上传安装", "Upload from a phone or computer browser"},  /* InstallUploadSub */
+    {"支持 nsp / nsz / xci / xcz", "nsp / nsz / xci / xcz"},  /* InstallFormats */
+    {"正在等待连接……", "Waiting for a connection..."},  /* InstallWaiting */
+    {"用手机或电脑的浏览器打开下面的地址", "Open this address in a phone or computer browser"},  /* InstallOpenAddress */
+    {"在网页里粘贴下载网址,或直接选一个安装包文件", "Paste a download address there, or pick a package file"},  /* InstallAddressHint */
+    {"在主机上输入网址", "Type the address on the console"},  /* InstallTypeUrl */
+    {"先在系统设置里连上网络(手机热点或同一个 Wi-Fi)", "Connect to a network first (phone hotspot or the same Wi-Fi)"},  /* InstallNoNetwork */
+    {"请先完全退出游戏(主页上把游戏关掉)再试一次", "Close the game completely first (HOME screen, then X), then try again"},  /* InstallGameRunning */
+    {"这个地址不支持断点续传,请换一个地址或用手机上传", "This address cannot be resumed; use another address or upload the file"},  /* InstallRangeUnsupported */
+    {"重试", "Try again"},  /* InstallRetry */
+    {"未完成的安装(已接收 %s)", "Unfinished install (%s received)"},  /* InstallPending */
+    {"版本", "Version"},  /* ConfirmVersion */
+    {"类型", "Type"},  /* ConfirmType */
+    {"大小", "Size"},  /* ConfirmSize */
+    {"目标存储", "Install to"},  /* ConfirmTarget */
+    {"装好后即可安装 agent", "The agent can be installed afterwards"},  /* ConfirmAgentNote */
+    {"本体", "Base game"},  /* TypeBase */
+    {"更新", "Update"},  /* TypeUpdate */
+    {"追加内容", "Add-on"},  /* TypeDlc */
+    {"正在接收", "Receiving"},  /* ProgressReceive */
+    {"正在写入", "Writing"},  /* ProgressWrite */
+    {"正在收尾", "Finishing up"},  /* ProgressFinalize */
+    {"第 %d / %d 个内容", "Content %d of %d"},  /* ProgressContents */
+    {"安装完成", "Installed"},  /* ResultInstalled */
+    {"已安装,跳过", "Already installed - skipped"},  /* ResultSkippedInstalled */
+    {"已有更高版本,已跳过", "A newer version is installed - skipped"},  /* ResultSkippedNewer */
+    {"安装失败", "Install failed"},  /* ResultFailed */
+    {"这是什么", "What this was"},  /* ResultWhat */
+    {"已写入", "Written"},  /* ResultWritten */
+    {"结果", "Result"},  /* ResultWhy */
+    {"现在", "Now"},  /* ResultNow */
+    {"可以安装 agent 了(首页按 A)", "The agent can be installed now (press A on the home screen)"},  /* ResultAgentReady */
+    {"完整记录在 log.txt 里", "The full record is in log.txt"},  /* ResultMoreInDetails */
+    {"--.--", "--.--"},  /* StorageUnavailable */
+    {"microSD", "microSD"},  /* StorageSdCard */
+    {"系统", "System"},  /* StorageSystem */
+    {"安装游戏更新", "Install the game update"},  /* HomeInstallUpdate */
+    {"升级完即可安装 agent", "The agent can be installed once it is updated"},  /* HomeInstallUpdateSub */
+    {"上一级", "Up one level"},  /* InstallUpOneLevel */
+    {"目录", "Directory"},  /* InstallDirectory */
+    {"安装包", "Package"},  /* InstallPackage */
+    {"忽略", "Ignored"},  /* InstallIgnored */
+    {"这个目录里没有可安装的文件", "No installable file in this directory"},  /* InstallNoFiles */
+    {"这个文件不是可安装的安装包(nsp / nsz / xci / xcz)", "This file is not an install package (nsp / nsz / xci / xcz)"},  /* InstallNotAPackage */
+    {"这个包里没有可安装的内容", "This package has no installable content"},  /* InstallNoContent */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

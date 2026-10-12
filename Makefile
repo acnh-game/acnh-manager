@@ -15,11 +15,12 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	acnh-manager
 BUILD		:=	build
-SOURCES		:=	source source/manifest source/install source/env source/ui source/i18n source/util source/net source/payload
+SOURCES		:=	source source/manifest source/install source/env source/ui source/i18n source/util source/net source/payload \
+			source/third_party/picohttpparser source/third_party/qrcodegen
 # The files in data/ are turned into .rodata symbols by bin2s (embedded release manifest
 # and payload; see tools/import-agent-release.py).
 DATA		:=	data
-INCLUDES	:=	source
+INCLUDES	:=	source source/third_party/picohttpparser source/third_party/qrcodegen
 
 APP_TITLE	:=	ACNH-Manager
 APP_AUTHOR	:=	acnh-game
