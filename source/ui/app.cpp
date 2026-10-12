@@ -2754,6 +2754,127 @@ void App::RenderGameInstall(Surface surface) {
 /* The result screen: four titles, and three rows that say what it was, what happened and what
    the player can do now.  Nothing here points at another page -- the design keeps the whole
    answer on this screen (section 8). */
+
+/* The file picker: one card, the directory as rows, the focus as a highlighted row with the mark
+   on its *lower* edge.  Every row's hit area comes from the same kRowHeight the list uses. */
+void App::RenderInstallFiles(Surface surface) {
+    m_actions.clear();
+    const int card_x = kMargin;
+    const int card_top = kHeaderHeight + 24;
+    const int card_width = surface.width - kMargin * 2;
+    const int card_height = surface.height - card_top - kFooterHeight - 24;
+    /* The list leaves room for a one-line reason at the bottom: the close-the-game hint lives
+       there, and a clamped row would draw it half off the card. */
+    m_file_list.SetBox(card_width, card_height - 60 - 34);
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    m_font.Draw(surface, card_x + 24, card_top + 14, kFontHeading, kText,
+                Tr(i18n::StringId::InstallPickFile));
+    m_font.Draw(surface, card_x + 24 + m_font.Measure(Tr(i18n::StringId::InstallPickFile),
+                                                      kFontHeading) + 18,
+                card_top + 24, kFontSmall, kSubtle, m_file_dir.c_str());
+
+    if (!m_install_error.empty()) {
+        m_font.Draw(surface, card_x + 24, card_top + card_height - 46, kFontSmall, kBad,
+                    m_install_error == "game-running" ? Tr(i18n::StringId::InstallGameRunning)
+                                                     : m_install_error.c_str());
+    }
+    const ui::ListWindow window = m_file_list.Window();
+    const int list_top = card_top + 60;
+    const std::vector<ui::ListItem> &items = m_file_list.Items();
+    if (items.empty()) {
+        m_font.Draw(surface, card_x + 24, list_top + 8, kFontBody, kSubtle,
+                    Tr(i18n::StringId::InstallNoFiles));
+        return;
+    }
+    for (int row = 0; row < window.count; ++row) {
+        const int index = window.first + row;
+        if (index >= static_cast<int>(items.size())) {
+            break;
+        }
+        const ui::ListItem &item = items[static_cast<std::size_t>(index)];
+        const int y = list_top + row * ui::ListView::kRowHeight;
+        const Rect hit{card_x + 16, y - 6, card_width - 32, ui::ListView::kRowHeight - 8};
+        if (index == m_file_list.Focus()) {
+            FillRoundedRect(surface, hit.x, hit.y, hit.w, hit.h, 12, kCardDisabled);
+            FillRoundedRect(surface, hit.x, hit.y + hit.h - 3, hit.w, 3, 0, kHeader);
+        }
+        const Color ink = item.selectable ? kText : kSubtle;
+        m_font.Draw(surface, card_x + 34, y, kFontBody, ink, item.name.c_str());
+        const int note_width = m_font.Measure(item.note.c_str(), kFontSmall);
+        m_font.Draw(surface, card_x + card_width - 34 - note_width, y + 4, kFontSmall, ink,
+                    item.note.c_str());
+        if (item.selectable) {
+            m_actions.push_back({kActionInstallPickRow, hit, true});
+        }
+    }
+}
+
+/* The confirm screen: what this file is, before anything is written. */
+void App::RenderInstallConfirm(Surface surface) {
+    m_actions.clear();
+    const int card_x = 180;
+    const int card_top = kHeaderHeight + 40;
+    const int card_width = surface.width - card_x * 2;
+    const int card_height = 400;
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    const install::PackageInfo &package = m_game_install->Package();
+    m_font.Draw(surface, card_x + 36, card_top + 28, kFontSmall, kSubtle,
+                Tr(i18n::StringId::ConfirmStart));
+    const std::string title = m_install_status.game_name.empty() ? package.cnmt.title_id
+                                                                : m_install_status.game_name;
+    m_font.Draw(surface, card_x + 36, card_top + 56, kFontTitle, kText, title.c_str());
+
+    const int row_x = card_x + 36;
+    const int value_x = card_x + 296;
+    int y = card_top + 136;
+    const auto row = [&](i18n::StringId label, const std::string &text) {
+        m_font.Draw(surface, row_x, y, kFontBody, kSubtle, Tr(label));
+        m_font.Draw(surface, value_x, y, kFontBody, kText, text.c_str());
+        y += 46;
+    };
+    if (!m_install_status.game_version.empty()) {
+        row(i18n::StringId::ConfirmVersion, m_install_status.game_version);
+    }
+    switch (package.cnmt.type) {
+        case install::MetaType::Application:
+            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeBase));
+            break;
+        case install::MetaType::Patch:
+            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeUpdate));
+            break;
+        case install::MetaType::AddOnContent:
+            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeDlc));
+            break;
+        default:
+            row(i18n::StringId::ConfirmType, install::MetaTypeLabel(package.cnmt.type));
+            break;
+    }
+    {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%.1f GB",
+                      static_cast<double>(install::TotalBytes(m_game_install->Task())) /
+                          (1024.0 * 1024.0 * 1024.0));
+        row(i18n::StringId::ConfirmSize, buffer);
+    }
+    row(i18n::StringId::ConfirmTarget, Tr(i18n::StringId::StorageSdCard));
+
+    if (TitleIsOurs(package.cnmt.title_id)) {
+        /* Three cases, not two: our game with a supported version is the only one where the agent
+           can be installed afterwards.  Our game with a version the agent does not handle has to
+           say so; a package that is not ours says nothing at all. */
+        const bool supported = AgentSupportedFor(package.cnmt.title_id, package.cnmt.version);
+        m_font.Draw(surface, row_x, y + 10, kFontSmall, supported ? kGood : kWarn,
+                    supported ? Tr(i18n::StringId::ConfirmAgentNote)
+                              : Tr(i18n::StringId::InstallAgentUnsupported));
+    }
+    m_actions.push_back({kActionInstallStart,
+                         Rect{card_x, card_top, card_width, card_height}, true});
+}
+
 void App::RenderInstallResult(Surface surface) {
     m_actions.clear();
     if (m_game_install == nullptr) {
