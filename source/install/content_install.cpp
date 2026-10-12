@@ -272,16 +272,27 @@ bool ContentInstaller::InstalledState(const std::string &title_id_hex, std::uint
     const NcmStorageId storages[2] = {NcmStorageId_SdCard, NcmStorageId_BuiltInUser};
     for (const NcmStorageId storage : storages) {
         NcmContentMetaDatabase db{};
-        if (R_FAILED(ncmOpenContentMetaDatabase(&db, storage))) {
+        const Result open_rc = ncmOpenContentMetaDatabase(&db, storage);
+        m_finish_trace.push_back("query open storage=" + std::to_string(static_cast<int>(storage)) +
+                                 " rc=0x" + ToHex(&open_rc, sizeof(open_rc)));
+        if (R_FAILED(open_rc)) {
             continue;
         }
         s32 total = 0;
         s32 written = 0;
         /* Two calls: the first asks how many records there are, the second reads them. */
-        if (R_SUCCEEDED(ncmContentMetaDatabaseList(&db, &total, &written, nullptr, 0,
-                                                   NcmContentMetaType_Unknown, app_id, 0, UINT64_MAX,
-                                                   NcmContentInstallType_Full)) &&
-            total > 0) {
+        const Result list_rc = ncmContentMetaDatabaseList(
+            &db, &total, &written, nullptr, 0, NcmContentMetaType_Unknown, app_id, 0, UINT64_MAX,
+            NcmContentInstallType_Full);
+        {
+            char note[128];
+            std::snprintf(note, sizeof(note),
+                          "query list app=%016llx rc=0x%x total=%d written=%d",
+                          static_cast<unsigned long long>(app_id), static_cast<unsigned>(list_rc),
+                          static_cast<int>(total), static_cast<int>(written));
+            m_finish_trace.push_back(note);
+        }
+        if (R_SUCCEEDED(list_rc) && total > 0) {
             std::vector<NcmContentMetaKey> keys(static_cast<std::size_t>(total));
             if (R_SUCCEEDED(ncmContentMetaDatabaseList(
                     &db, &total, &written, keys.data(), static_cast<s32>(keys.size()),
