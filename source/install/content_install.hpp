@@ -106,6 +106,15 @@ public:
     bool InstalledVersionPerStorage(const std::string &title_id_hex, std::uint32_t *sd,
                                     std::uint32_t *nand, std::string *error);
 
+    /* What the console knows about this package's application: the highest version installed on
+       any storage, and whether *this exact* version and kind is already there.  The reference
+       implementation answers both by listing the meta database for the application id (converting
+       a patch's id to its base game first); asking "latest key for id" does not find a patch
+       record, which made an installed update look like it was not installed. */
+    bool InstalledState(const std::string &title_id_hex, std::uint32_t version, std::uint8_t meta_type,
+                        bool *same_version_installed, std::uint32_t *highest_version,
+                        std::string *error);
+
     /* True when the content is already on the console: what `skip_if_already_installed` and the
        space calculation both ask. */
     bool Has(const std::string &content_id, bool *out, std::string *error);

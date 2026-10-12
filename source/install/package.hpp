@@ -45,7 +45,7 @@ enum class SkipDecision {
     NewerInstalled,   /* the console's version is higher and downgrades are off */
 };
 SkipDecision DecideSkip(const InstallOptions &options, std::uint32_t package_version,
-                        std::uint32_t installed_version);
+                        std::uint32_t installed_version, bool same_version_installed);
 
 /* The label the result page shows for a package (base / update / dlc), from the CNMT type. */
 const char *MetaTypeLabel(MetaType type);

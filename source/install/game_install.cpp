@@ -322,15 +322,20 @@ bool GameInstall::Prepare(std::string *error) {
        range-edit earlier, which let the app install whatever it was given -- the wording on the
        result page was the visible symptom. */
     std::uint32_t installed_version = 0;
+    bool same_version_installed = false;
     {
         std::string version_error;
-        if (!m_installer.InstalledVersion(m_package.cnmt.title_id, &installed_version,
-                                          &version_error)) {
+        if (!m_installer.InstalledState(m_package.cnmt.title_id, m_package.cnmt.version,
+                                        static_cast<std::uint8_t>(m_package.cnmt.type),
+                                        &same_version_installed, &installed_version,
+                                        &version_error)) {
             *error = version_error;
             m_status.stage = InstallStage::Failed;
             m_status.error = *error;
             return false;
         }
+        Note("install: console state: same-version-installed=%d highest=0x%x",
+             same_version_installed ? 1 : 0, installed_version);
     }
     m_status.package_version = m_package.cnmt.version;
     m_status.installed_version = installed_version;
@@ -348,7 +353,8 @@ bool GameInstall::Prepare(std::string *error) {
         std::snprintf(installed_note, sizeof(installed_note), " installed=0x%x", installed_version);
         m_status.detail += installed_note;
     }
-    const SkipDecision decision = DecideSkip(m_options, m_package.cnmt.version, installed_version);
+    const SkipDecision decision = DecideSkip(m_options, m_package.cnmt.version, installed_version,
+                                             same_version_installed);
     if (decision != SkipDecision::Install) {
         m_status.stage = InstallStage::Skipped;
         m_status.skip_message =

@@ -115,7 +115,13 @@ bool FillTaskContents(const PackageInfo &package, InstallTask *task, std::string
 }
 
 SkipDecision DecideSkip(const InstallOptions &options, std::uint32_t package_version,
-                        std::uint32_t installed_version) {
+                        std::uint32_t installed_version, bool same_version_installed) {
+    /* "This exact version and kind is already installed" comes from the record list, not from a
+       version comparison: an update that was installed but whose record lives under a different
+       id must not be mistaken for "nothing there". */
+    if (options.skip_if_already_installed && same_version_installed) {
+        return SkipDecision::AlreadyInstalled;
+    }
     if (options.skip_if_already_installed && installed_version == package_version &&
         installed_version != 0) {
         return SkipDecision::AlreadyInstalled;

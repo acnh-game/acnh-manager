@@ -2342,18 +2342,29 @@ bool App::AgentSupportedFor(const std::string &title_id, std::uint32_t version) 
     return false;
 }
 
-std::string App::AgentSupportedVersionFor(const std::string &title_id) const {
+std::string App::AgentSupportedVersionsFor(const std::string &title_id) const {
     const unsigned long long wanted = std::strtoull(title_id.c_str(), nullptr, 16);
     if (wanted == 0) {
         return "";
     }
+    std::string joined;
     for (const auto &game : ActiveManifest().games) {
         const unsigned long long known = std::strtoull(game.title_id.c_str(), nullptr, 16);
-        if (known != 0 && (known >> 16) == (wanted >> 16)) {
-            return game.display_version;
+        if (known == 0 || (known >> 16) != (wanted >> 16)) {
+            continue;
         }
+        if (game.display_version.empty()) {
+            continue;
+        }
+        if (joined.find(game.display_version) != std::string::npos) {
+            continue; /* the manifest may list the same game twice (profiles) */
+        }
+        if (!joined.empty()) {
+            joined += " / ";
+        }
+        joined += game.display_version;
     }
-    return "";
+    return joined;
 }
 
 bool App::TitleIsOurs(const std::string &title_id) const {
@@ -2889,7 +2900,7 @@ void App::RenderInstallConfirm(Surface surface) {
                leaves the player with nothing to do next. */
             char note[160];
             std::snprintf(note, sizeof(note), Tr(i18n::StringId::InstallAgentUnsupported),
-                          AgentSupportedVersionFor(package.cnmt.title_id).c_str());
+                          AgentSupportedVersionsFor(package.cnmt.title_id).c_str());
             m_font.Draw(surface, row_x, y + 10, kFontSmall, kWarn, note);
         }
     }

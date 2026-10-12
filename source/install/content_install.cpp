@@ -240,6 +240,68 @@ bool ContentInstaller::InstalledVersionPerStorage(const std::string &title_id_he
     return true;
 }
 
+namespace {
+
+/* A package's ids are the base application id plus a per-kind offset: patch = +0x800, add-on =
+   +0x1000 (plus the add-on index, which we do not need for this question).  The meta database is
+   queried by the *application* id, so the offset is removed here. */
+std::uint64_t ApplicationIdOf(std::uint64_t id) {
+    const std::uint64_t lower = id & 0xFFFFFFFFULL;
+    if (lower >= 0x800 && lower < 0x1000) {
+        return id - 0x800; /* patch */
+    }
+    if (lower >= 0x1000) {
+        return id - 0x1000; /* add-on content */
+    }
+    return id;
+}
+
+}  // namespace
+
+bool ContentInstaller::InstalledState(const std::string &title_id_hex, std::uint32_t version,
+                                      std::uint8_t meta_type, bool *same_version_installed,
+                                      std::uint32_t *highest_version, std::string *error) {
+    *same_version_installed = false;
+    *highest_version = 0;
+    const std::uint64_t id = std::strtoull(title_id_hex.c_str(), nullptr, 16);
+    if (id == 0) {
+        *error = "the title id is not 16 hex digits";
+        return false;
+    }
+    const std::uint64_t app_id = ApplicationIdOf(id);
+    const NcmStorageId storages[2] = {NcmStorageId_SdCard, NcmStorageId_BuiltInUser};
+    for (const NcmStorageId storage : storages) {
+        NcmContentMetaDatabase db{};
+        if (R_FAILED(ncmOpenContentMetaDatabase(&db, storage))) {
+            continue;
+        }
+        s32 total = 0;
+        s32 written = 0;
+        /* Two calls: the first asks how many records there are, the second reads them. */
+        if (R_SUCCEEDED(ncmContentMetaDatabaseList(&db, &total, &written, nullptr, 0,
+                                                   NcmContentMetaType_Unknown, app_id, 0, UINT64_MAX,
+                                                   NcmContentInstallType_Full)) &&
+            total > 0) {
+            std::vector<NcmContentMetaKey> keys(static_cast<std::size_t>(total));
+            if (R_SUCCEEDED(ncmContentMetaDatabaseList(
+                    &db, &total, &written, keys.data(), static_cast<s32>(keys.size()),
+                    NcmContentMetaType_Unknown, app_id, 0, UINT64_MAX, NcmContentInstallType_Full))) {
+                for (s32 i = 0; i < written; ++i) {
+                    const NcmContentMetaKey &key = keys[static_cast<std::size_t>(i)];
+                    if (key.version > *highest_version) {
+                        *highest_version = key.version;
+                    }
+                    if (key.id == id && key.version == version && key.type == meta_type) {
+                        *same_version_installed = true;
+                    }
+                }
+            }
+        }
+        ncmContentMetaDatabaseClose(&db);
+    }
+    return true;
+}
+
 bool ContentInstaller::InstalledVersion(const std::string &title_id_hex, std::uint32_t *out,
                                         std::string *error) {
     std::uint32_t sd = 0;
