@@ -336,6 +336,12 @@ bool GameInstall::Prepare(std::string *error) {
         }
         Note("install: console state: same-version-installed=%d highest=0x%x",
              same_version_installed ? 1 : 0, installed_version);
+        /* The query's own steps are in the trace; flush them here, because "which records does
+           the console have" is answered *before* the confirm page and never reaches Finish when
+           the pick is skipped. */
+        for (const auto &line : m_installer.FinishTrace()) {
+            Note("install: query %s", line.c_str());
+        }
     }
     m_status.package_version = m_package.cnmt.version;
     m_status.installed_version = installed_version;
