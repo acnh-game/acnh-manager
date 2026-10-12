@@ -131,6 +131,9 @@ private:
        (or already on the console) is the one this build's agent supports: the gate wants an exact
        version match, so 2.0.0 does not qualify just because the title is ours. */
     bool AgentSupportedFor(const std::string &title_id, std::uint32_t version) const;
+    /* The version this build's agent handles for `title_id`, for the copy that has to name it
+       ("... the agent only supports 3.0.3").  Empty when the title is not ours. */
+    std::string AgentSupportedVersionFor(const std::string &title_id) const;
     /* Confirmation pages share one implementation: action, outcome, two buttons. */
     void BuildConfirmActions(int width, int height, bool uninstall);
     void RenderConfirm(Surface surface, bool uninstall);

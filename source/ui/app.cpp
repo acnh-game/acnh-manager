@@ -2342,6 +2342,20 @@ bool App::AgentSupportedFor(const std::string &title_id, std::uint32_t version) 
     return false;
 }
 
+std::string App::AgentSupportedVersionFor(const std::string &title_id) const {
+    const unsigned long long wanted = std::strtoull(title_id.c_str(), nullptr, 16);
+    if (wanted == 0) {
+        return "";
+    }
+    for (const auto &game : ActiveManifest().games) {
+        const unsigned long long known = std::strtoull(game.title_id.c_str(), nullptr, 16);
+        if (known != 0 && (known >> 16) == (wanted >> 16)) {
+            return game.display_version;
+        }
+    }
+    return "";
+}
+
 bool App::TitleIsOurs(const std::string &title_id) const {
     const unsigned long long wanted = std::strtoull(title_id.c_str(), nullptr, 16);
     if (wanted == 0) {
@@ -2867,9 +2881,17 @@ void App::RenderInstallConfirm(Surface surface) {
            can be installed afterwards.  Our game with a version the agent does not handle has to
            say so; a package that is not ours says nothing at all. */
         const bool supported = AgentSupportedFor(package.cnmt.title_id, package.cnmt.version);
-        m_font.Draw(surface, row_x, y + 10, kFontSmall, supported ? kGood : kWarn,
-                    supported ? Tr(i18n::StringId::ConfirmAgentNote)
-                              : Tr(i18n::StringId::InstallAgentUnsupported));
+        if (supported) {
+            m_font.Draw(surface, row_x, y + 10, kFontSmall, kGood,
+                        Tr(i18n::StringId::ConfirmAgentNote));
+        } else {
+            /* Name the version the agent does handle: "the agent will not work with this" alone
+               leaves the player with nothing to do next. */
+            char note[160];
+            std::snprintf(note, sizeof(note), Tr(i18n::StringId::InstallAgentUnsupported),
+                          AgentSupportedVersionFor(package.cnmt.title_id).c_str());
+            m_font.Draw(surface, row_x, y + 10, kFontSmall, kWarn, note);
+        }
     }
     m_actions.push_back({kActionInstallStart,
                          Rect{card_x, card_top, card_width, card_height}, true});
