@@ -245,13 +245,18 @@ namespace {
 /* A package's ids are the base application id plus a per-kind offset: patch = +0x800, add-on =
    +0x1000 (plus the add-on index, which we do not need for this question).  The meta database is
    queried by the *application* id, so the offset is removed here. */
-std::uint64_t ApplicationIdOf(std::uint64_t id) {
-    const std::uint64_t lower = id & 0xFFFFFFFFULL;
-    if (lower >= 0x800 && lower < 0x1000) {
-        return id - 0x800; /* patch */
+std::uint64_t ApplicationIdOf(std::uint64_t id, std::uint8_t meta_type) {
+    /* The offset lives in one nibble (bits 12..15), so it is masked out, not subtracted by
+       comparing the whole low word: my first version compared the low 32 bits against 0x800 and
+       0x1000, which sent every patch id down the add-on path and produced the wrong application id
+       (01006f8002325800 instead of 01006f8002326000) -- a query that then answered "no records"
+       for a console that plainly had the base game installed.  The reference implementation's
+       GetAppId does exactly this. */
+    if (meta_type == 0x81) { /* Patch */
+        return id ^ 0x800ULL;
     }
-    if (lower >= 0x1000) {
-        return id - 0x1000; /* add-on content */
+    if (meta_type == 0x82) { /* AddOnContent */
+        return (id ^ 0x1000ULL) & ~0xFFFULL;
     }
     return id;
 }
@@ -268,7 +273,7 @@ bool ContentInstaller::InstalledState(const std::string &title_id_hex, std::uint
         *error = "the title id is not 16 hex digits";
         return false;
     }
-    const std::uint64_t app_id = ApplicationIdOf(id);
+    const std::uint64_t app_id = ApplicationIdOf(id, meta_type);
     const NcmStorageId storages[2] = {NcmStorageId_SdCard, NcmStorageId_BuiltInUser};
     for (const NcmStorageId storage : storages) {
         NcmContentMetaDatabase db{};
