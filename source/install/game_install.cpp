@@ -515,6 +515,7 @@ bool GameInstall::Finish(std::string *error) {
     for (const auto &content : m_task.contents) {
         inputs.content_ids.push_back(content.content_id);
     }
+    inputs.base_title_id = m_package.cnmt.application_id; /* set for patches */
     inputs.ticket = m_package.ticket;
     inputs.certificate = m_package.certificate;
     if (!m_installer.Finish(inputs, error)) {

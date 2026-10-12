@@ -18,6 +18,8 @@ constexpr std::uint32_t kEsListCommonTicket = 11;
 constexpr std::uint32_t kNsPushApplicationRecord = 16;
 constexpr std::uint32_t kNsListApplicationRecordContentMeta = 17;
 constexpr std::uint32_t kNsDeleteApplicationRecord = 27;
+/* Not in libnx: the same interface handles this by command id. */
+constexpr std::uint32_t kNsInvalidateApplicationControlCache = 404;
 
 std::string Describe(const char *what, Result rc) {
     char buffer[128];
@@ -168,6 +170,15 @@ bool NxServices::ListApplicationRecords(std::uint64_t title_id,
     }
     records.resize(written > 0 ? static_cast<std::size_t>(written) : 0);
     *out = std::move(records);
+    return true;
+}
+
+bool NxServices::InvalidateApplicationControlCache(std::uint64_t title_id, std::string *error) {
+    const Result rc = serviceDispatchIn(&m_ns_app, kNsInvalidateApplicationControlCache, title_id);
+    if (R_FAILED(rc)) {
+        *error = Describe("invalidating the application control cache", rc);
+        return false;
+    }
     return true;
 }
 

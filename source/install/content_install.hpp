@@ -121,6 +121,9 @@ public:
         std::uint8_t meta_type{0};          /* NcmContentMetaType */
         std::vector<std::uint8_t> meta_blob; /* the CNMT payload, byte for byte */
         std::vector<std::string> content_ids;
+        /* For a patch, the base title whose control data has to be refreshed.  Empty when the
+           package is not a patch. */
+        std::string base_title_id;
         std::vector<std::uint8_t> ticket;
         std::vector<std::uint8_t> certificate;
     };

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdlib>
 #include <cstring>
 
 #include "install/nca.hpp"
@@ -658,6 +659,20 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
           newer than what it was told to launch (HOS 6.0.0+). */
     if (!m_services.PushLaunchVersion(key.id, inputs.version, error)) {
         return false;
+    }
+    /* The system serves a cached NACP per title: without this the version and name it reports
+       stay at whatever they were before the install (measured: contents written, record pushed,
+       home screen still said 1.0.0).  A patch's control data belongs to the base title, so both
+       ids are refreshed; a failure here is reported, never swallowed. */
+    if (!m_services.InvalidateApplicationControlCache(key.id, error)) {
+        return false;
+    }
+    if (!inputs.base_title_id.empty()) {
+        const std::uint64_t base = std::strtoull(inputs.base_title_id.c_str(), nullptr, 16);
+        if (base != 0 && base != key.id &&
+            !m_services.InvalidateApplicationControlCache(base, error)) {
+            return false;
+        }
     }
     return true;
 }

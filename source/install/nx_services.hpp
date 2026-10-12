@@ -63,6 +63,11 @@ public:
     bool ListApplicationRecords(std::uint64_t title_id, std::vector<ContentStorageRecord> *out,
                                 std::string *error);
 
+    /* ns: drop the cached control data (name/version/icon) for a title.  The system caches the
+       NACP it serves, so without this the console keeps reporting the version it had before the
+       install -- measured: contents written and record pushed, home screen still said 1.0.0. */
+    bool InvalidateApplicationControlCache(std::uint64_t title_id, std::string *error);
+
     /* ns: forget a title entirely (used when a rollback deletes what we registered). */
     bool DeleteApplicationRecord(std::uint64_t title_id, std::string *error);
 
