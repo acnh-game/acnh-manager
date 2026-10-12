@@ -211,25 +211,43 @@ bool ContentInstaller::ApplicationRunning(const std::string &title_id_hex, bool 
     return true;
 }
 
-bool ContentInstaller::InstalledVersion(const std::string &title_id_hex, std::uint32_t *out,
-                                        std::string *error) {
-    *out = 0;
-    if (!EnsureOpen(error)) {
-        return false;
-    }
+bool ContentInstaller::InstalledVersionPerStorage(const std::string &title_id_hex,
+                                                  std::uint32_t *sd, std::uint32_t *nand,
+                                                  std::string *error) {
+    *sd = 0;
+    *nand = 0;
     const std::uint64_t id = std::strtoull(title_id_hex.c_str(), nullptr, 16);
     if (id == 0) {
         *error = "the title id is not 16 hex digits";
         return false;
     }
-    NcmContentMetaKey key{};
-    const Result rc = ncmContentMetaDatabaseGetLatestContentMetaKey(&m_meta, &key, id);
-    if (R_FAILED(rc)) {
-        /* "nothing installed for this title" is the normal answer for a fresh game, not an error:
-           the system reports it as a failed lookup. */
-        return true;
+    const struct {
+        NcmStorageId storage;
+        std::uint32_t *out;
+    } targets[2] = {{NcmStorageId_SdCard, sd}, {NcmStorageId_BuiltInUser, nand}};
+    for (const auto &target : targets) {
+        NcmContentMetaDatabase db{};
+        if (R_FAILED(ncmOpenContentMetaDatabase(&db, target.storage))) {
+            /* A storage that cannot be opened simply has nothing to report. */
+            continue;
+        }
+        NcmContentMetaKey key{};
+        if (R_SUCCEEDED(ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &key, id))) {
+            *target.out = key.version;
+        }
+        ncmContentMetaDatabaseClose(&db);
     }
-    *out = key.version;
+    return true;
+}
+
+bool ContentInstaller::InstalledVersion(const std::string &title_id_hex, std::uint32_t *out,
+                                        std::string *error) {
+    std::uint32_t sd = 0;
+    std::uint32_t nand = 0;
+    if (!InstalledVersionPerStorage(title_id_hex, &sd, &nand, error)) {
+        return false;
+    }
+    *out = sd > nand ? sd : nand;
     return true;
 }
 

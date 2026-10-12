@@ -99,6 +99,13 @@ public:
        rather than remembered by the app. */
     bool InstalledVersion(const std::string &title_id_hex, std::uint32_t *out, std::string *error);
 
+    /* The same question asked per storage: the base game can live on the console while an update
+       is written to the card (or the other way round), so "which version does this console have"
+       has to look at both -- and the numbers are worth logging separately, because "the record
+       went to the storage the system does not read" looks exactly like "the install did nothing". */
+    bool InstalledVersionPerStorage(const std::string &title_id_hex, std::uint32_t *sd,
+                                    std::uint32_t *nand, std::string *error);
+
     /* True when the content is already on the console: what `skip_if_already_installed` and the
        space calculation both ask. */
     bool Has(const std::string &content_id, bool *out, std::string *error);

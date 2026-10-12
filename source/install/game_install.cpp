@@ -335,6 +335,15 @@ bool GameInstall::Prepare(std::string *error) {
     m_status.package_version = m_package.cnmt.version;
     m_status.installed_version = installed_version;
     {
+        std::uint32_t sd = 0;
+        std::uint32_t nand = 0;
+        std::string per_storage_error;
+        if (m_installer.InstalledVersionPerStorage(m_package.cnmt.title_id, &sd, &nand,
+                                                   &per_storage_error)) {
+            Note("install: installed version per storage: sd=0x%x nand=0x%x", sd, nand);
+        }
+    }
+    {
         char installed_note[64];
         std::snprintf(installed_note, sizeof(installed_note), " installed=0x%x", installed_version);
         m_status.detail += installed_note;
