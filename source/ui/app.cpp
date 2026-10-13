@@ -128,6 +128,10 @@ constexpr int kActionInstallPickRow = 19; /* a row of the installer's file list 
 constexpr int kActionInstallStart = 20;   /* "start" on the confirm screen (A) */
 constexpr int kActionInstallBack = 21;    /* the installer's footer "Ⓑ 返回" hint (same as the key) */
 
+/* The four header entries and which of them wear a key badge (the layout needs the same mask
+   for the drawn pill and for the touch target -- see RenderHeader). */
+constexpr bool kHeaderTabHasBadge[acnh_manager::ui::kHeaderTabCount] = {true, false, true, true};
+
 /* Player settings (language today).  Separate from state.json because uninstall deletes that. */
 constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
 
@@ -879,14 +883,21 @@ void App::HandleKeys(u32 down) {
     if (m_page == Page::Progress) {
         return;
     }
-    /* The tabs carry their own key, so L / R go through the same action as a tap on them. */
-    if ((down & HidNpadButton_L) != 0) {
-        ActivateAction(kActionTabStatus);
-        return;
-    }
-    if ((down & HidNpadButton_R) != 0) {
-        ActivateAction(kActionTabDetails);
-        return;
+    /* L / R move through the pages the player reads, in the order the header draws them, wrapping
+       at both ends (see SwitchPeerPage).  They are dead while the installer is up: that page is a
+       mode whose header hides the tabs, and a key that silently left it moved the player out with
+       the package in hand -- its placeholders and the open card file abandoned, with nothing
+       owning them.  Everything here that carries a header entry is dead there for the same
+       reason, which is why + and - below are guarded too. */
+    if (m_page != Page::GameInstall) {
+        if ((down & HidNpadButton_L) != 0) {
+            SwitchPeerPage(-1);
+            return;
+        }
+        if ((down & HidNpadButton_R) != 0) {
+            SwitchPeerPage(+1);
+            return;
+        }
     }
     /* The installer page is the exception: it has its own stack of screens, and there B means "one
        step back" (see the Page::GameInstall case below, which is where that is decided).  Handling
@@ -907,17 +918,20 @@ void App::HandleKeys(u32 down) {
         m_focus = FirstEnabled(m_actions);
         return;
     }
-    if ((down & HidNpadButton_Plus) != 0) {
-        /* + is the game installer, from any page: it is modal, so B is the only way back and the
-           page hides the header entries while it is up. */
-        OpenGameInstall();
-        return;
-    }
-    if ((down & HidNpadButton_Minus) != 0) {
-        /* - is the chat-code explainer, from any page: the first press opens it, the next one
-           (or B) goes back.  Exiting stays on B, which is where the footer points. */
-        ToggleGuide();
-        return;
+    if (m_page != Page::GameInstall) {
+        if ((down & HidNpadButton_Plus) != 0) {
+            /* + is the game installer, from any page: it is modal, so B is the only way back and
+               the page hides the header entries while it is up. */
+            OpenGameInstall();
+            return;
+        }
+        if ((down & HidNpadButton_Minus) != 0) {
+            /* - is the chat-code explainer, from any page: the first press opens it, the next one
+               (or B) goes back.  It is also the ring's last stop, so it is a shortcut now rather
+               than the only way in.  Exiting stays on B, which is where the footer points. */
+            ToggleGuide();
+            return;
+        }
     }
     if (m_page == Page::Home) {
         const int step = 1;
@@ -1316,16 +1330,21 @@ void App::RenderHeader(Surface surface) {
         int action;
     };
     /* Order matters twice: it is what the player reads left to right, and the device tests
-       identify the current page by which entry carries the underline. */
+       identify the current page by which entry carries the underline.  The badges tell what the
+       keys do: Ⓛ and Ⓡ on the two ends of the ring (the shoulder keys that move through it), +
+       on the installer (a mode, entered deliberately), and none on the middle of the ring --
+       nothing goes *straight* there, so a badge would be a promise no key keeps.  - still opens
+       the guide, which is the ring's last stop; the header shows the ring's key rather than two
+       keys for one page. */
     const Tab tabs[kHeaderTabCount] = {{"L", i18n::StringId::TabStatus, kActionTabStatus},
-                                       {"R", i18n::StringId::TabDetails, kActionTabDetails},
+                                       {"", i18n::StringId::TabDetails, kActionTabDetails},
                                        {"+", i18n::StringId::TabInstall, kActionGameInstall},
-                                       {"-", i18n::StringId::TabGuide, kActionGuide}};
+                                       {"R", i18n::StringId::TabGuide, kActionGuide}};
     int label_width[kHeaderTabCount] = {};
     for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(tabs[i].label), kFontHeading);
     }
-    const HeaderTabLayout layout = LayoutHeaderTabs(surface.width, label_width);
+    const HeaderTabLayout layout = LayoutHeaderTabs(surface.width, label_width, kHeaderTabHasBadge);
     for (int i = 0; i < kHeaderTabCount; ++i) {
         /* Which entry reads as "where I am": the guide while it is open, otherwise status
            everywhere except the details page. */
@@ -1342,18 +1361,24 @@ void App::RenderHeader(Surface surface) {
         const char *label = Tr(tabs[i].label);
         m_font.Draw(surface, layout.label_x[i], 36, kFontHeading,
                     active ? kOnHeader : kHeaderSubtle, label);
-        FillRoundedRect(surface, layout.badge_x[i], kHeaderTabTop, kHeaderTabBadge,
-                        kHeaderTabBadge, kHeaderTabBadge / 2,
-                        active ? kOnHeader : kHeaderBadge);
-        /* Centre the letter on both axes: our Draw() treats y as the top of the line box, so
-           bias it by half the box to land the glyph in the middle of the circle. */
-        const int key_width = m_font.Measure(tabs[i].key, kFontSmall);
-        m_font.DrawBold(surface, layout.badge_x[i] + (kHeaderTabBadge - key_width) / 2,
-                        kHeaderTabTop + 10, kFontSmall, active ? kHeader : kOnHeader,
-                        tabs[i].key);
+        if (kHeaderTabHasBadge[i]) {
+            FillRoundedRect(surface, layout.badge_x[i], kHeaderTabTop, kHeaderTabBadge,
+                            kHeaderTabBadge, kHeaderTabBadge / 2,
+                            active ? kOnHeader : kHeaderBadge);
+            /* Centre the letter on both axes: our Draw() treats y as the top of the line box, so
+               bias it by half the box to land the glyph in the middle of the circle. */
+            const int key_width = m_font.Measure(tabs[i].key, kFontSmall);
+            m_font.DrawBold(surface, layout.badge_x[i] + (kHeaderTabBadge - key_width) / 2,
+                            kHeaderTabTop + 10, kFontSmall, active ? kHeader : kOnHeader,
+                            tabs[i].key);
+        }
         if (active) {
-            FillRect(surface, layout.badge_x[i] + kHeaderTabBadge + kHeaderTabBadgeGap,
-                     kHeaderHeight - 14, label_width[i], 4, kOnHeader);
+            /* Under the label, wherever the label sits: with no badge the two x's are the same,
+               so the same expression covers both. */
+            const int underline_x = layout.badge_x[i] + (kHeaderTabHasBadge[i]
+                                                            ? kHeaderTabBadge + kHeaderTabBadgeGap
+                                                            : 0);
+            FillRect(surface, underline_x, kHeaderHeight - 14, label_width[i], 4, kOnHeader);
         }
     }
 }
@@ -1377,7 +1402,9 @@ void App::AddChromeActions(int surface_width, int surface_height) {
     for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(header_labels[i]), kFontHeading);
     }
-    const HeaderTabLayout layout = LayoutHeaderTabs(surface_width, label_width);
+    /* The same mask the drawing uses: a tab that shows no badge still has to be tappable, and a
+       tab that shows one has to be tappable *there*. */
+    const HeaderTabLayout layout = LayoutHeaderTabs(surface_width, label_width, kHeaderTabHasBadge);
     for (int i = 0; i < kHeaderTabCount; ++i) {
         m_actions.push_back({header_actions[i], layout.hit[i], true});
     }
@@ -2385,6 +2412,29 @@ void App::ToggleGuide() {
         m_page = Page::Guide;
         Trace("guide: opened from page %d", static_cast<int>(m_guide_return));
     }
+    m_focus = FirstEnabled(m_actions);
+}
+
+/* L / R: one step through the pages the player reads, in the order the header draws them --
+   status, details, guide -- wrapping at both ends.  A page outside the ring (the installer, the
+   agent install flow) enters it at the first page, so the keys always move somewhere instead of
+   being dead.  Entering the guide through the ring records where we came from, exactly like the
+   - key does, so B on the guide returns to the page the player was reading. */
+void App::SwitchPeerPage(int direction) {
+    const Page peers[acnh_manager::ui::kPeerTabCount] = {Page::Home, Page::Details, Page::Guide};
+    int current = -1;
+    for (int i = 0; i < acnh_manager::ui::kPeerTabCount; ++i) {
+        if (m_page == peers[i]) {
+            current = i;
+            break;
+        }
+    }
+    const Page target = peers[acnh_manager::ui::CyclePeerTab(current, direction)];
+    if (target == Page::Guide) {
+        m_guide_return = current >= 0 ? peers[current] : m_page;
+        Trace("guide: opened from page %d", static_cast<int>(m_guide_return));
+    }
+    m_page = target;
     m_focus = FirstEnabled(m_actions);
 }
 

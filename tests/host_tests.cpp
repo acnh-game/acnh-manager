@@ -1528,6 +1528,44 @@ void TestHeaderTabs() {
     const auto wide_layout = LayoutHeaderTabs(1280, wide);
     CHECK(wide_layout.badge_x[0] < layout.badge_x[0]);
     CHECK(wide_layout.hit[kHeaderTabCount - 1].x + wide_layout.hit[kHeaderTabCount - 1].w <= 1280);
+
+    /* An entry with no badge of its own (the middle of the ring -- no key goes straight there):
+       its slot collapses instead of leaving a hole, its label keeps its place, and the entry is
+       still hit-testable where it is drawn. */
+    const bool no_badge[kHeaderTabCount] = {true, false, true, true};
+    const auto ring_layout = LayoutHeaderTabs(1280, label_width, no_badge);
+    CHECK(ring_layout.badge_x[1] == ring_layout.label_x[1]);
+    CHECK(ring_layout.label_x[1] == layout.label_x[1]);
+    CHECK(ring_layout.badge_x[0] > layout.badge_x[0]); /* the strip closes up to its right */
+    std::vector<acnh_manager::ui::Action> ring_tabs;
+    for (int i = 0; i < kHeaderTabCount; ++i) {
+        ring_tabs.push_back({i + 1, ring_layout.hit[i], true});
+    }
+    CHECK(HitTest(ring_tabs, ring_layout.label_x[1] + label_width[1] / 2, 56) == 2);
+    for (int i = 0; i + 1 < kHeaderTabCount; ++i) {
+        CHECK(ring_layout.hit[i].x + ring_layout.hit[i].w <= ring_layout.hit[i + 1].x);
+    }
+    CHECK(ring_layout.hit[0].x >= 0);
+    CHECK(ring_layout.hit[kHeaderTabCount - 1].x + ring_layout.hit[kHeaderTabCount - 1].w <= 1280);
+}
+
+/* L / R walk the pages the player reads, in the order the header draws them, wrapping at both
+   ends -- that is what lets a new page cost no new key.  A page outside the ring (the installer
+   is a mode, not a page in it) enters at the first one, so neither key ever does nothing. */
+void TestPeerRing() {
+    using acnh_manager::ui::CyclePeerTab;
+    using acnh_manager::ui::kPeerTabCount;
+
+    CHECK(kPeerTabCount == 3);
+    CHECK(CyclePeerTab(0, +1) == 1);
+    CHECK(CyclePeerTab(1, +1) == 2);
+    CHECK(CyclePeerTab(2, +1) == 0); /* forward wraps */
+    CHECK(CyclePeerTab(0, -1) == 2); /* backward wraps */
+    CHECK(CyclePeerTab(1, -1) == 0);
+    CHECK(CyclePeerTab(2, -1) == 1);
+    /* Outside the ring: L and R both land on a real page instead of nowhere. */
+    CHECK(CyclePeerTab(-1, +1) == 1);
+    CHECK(CyclePeerTab(-1, -1) == 2);
 }
 
 /* Home-screen state: the eight states and their priority.  Getting the order wrong would
@@ -1771,6 +1809,7 @@ int main() {
     TestTimeFormat();
     TestActions();
     TestHeaderTabs();
+    TestPeerRing();
     TestHomeState();
     TestSettings();
     TestTextWrap();

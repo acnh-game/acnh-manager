@@ -220,6 +220,9 @@ private:
        control, so both come through here and cannot drift apart.  From the source screen this
        leaves the page. */
     void InstallStepBack();
+    /* L / R: one step through the pages the player reads (status / details / guide), wrapping at
+       both ends.  See the definition for what happens on a page outside that ring. */
+    void SwitchPeerPage(int direction);
     /* Drops the package in hand without leaving the installer: the parsed container, the
        placeholders the CNMT/NACP read created, and the decoded cover.  What a package that was
        never installed owes the console, and nothing more -- a run that reached the register step
