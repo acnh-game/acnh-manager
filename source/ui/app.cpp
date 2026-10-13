@@ -2951,15 +2951,20 @@ void App::RenderInstallFiles(Surface surface) {
         }
         const ui::ListItem &item = items[static_cast<std::size_t>(index)];
         const int y = list_top + row * ui::ListView::kRowHeight;
+        /* The text is centred in the highlight rather than pinned to its top: the row is 66 px
+           (58 of them highlight) while a body line is only 29, so "text at the top" left 6 px of
+           room above the name and 23 px below it -- the name looked stuck to the upper edge with
+           a gap down to the mark.  The note on the right keeps the same offset from the name. */
+        const int text_y = y - 6 + (ui::ListView::kRowHeight - 8 - m_font.LineHeight(kFontBody)) / 2;
         const Rect hit{card_x + 16, y - 6, card_width - 32, ui::ListView::kRowHeight - 8};
         if (index == m_file_list.Focus()) {
             FillRoundedRect(surface, hit.x, hit.y, hit.w, hit.h, 12, kCardDisabled);
             FillRoundedRect(surface, hit.x, hit.y + hit.h - 3, hit.w, 3, 0, kHeader);
         }
         const Color ink = item.selectable ? kText : kSubtle;
-        m_font.Draw(surface, card_x + 34, y, kFontBody, ink, item.name.c_str());
+        m_font.Draw(surface, card_x + 34, text_y, kFontBody, ink, item.name.c_str());
         const int note_width = m_font.Measure(item.note.c_str(), kFontSmall);
-        m_font.Draw(surface, card_x + card_width - 34 - note_width, y + 4, kFontSmall, ink,
+        m_font.Draw(surface, card_x + card_width - 34 - note_width, text_y + 4, kFontSmall, ink,
                     item.note.c_str());
         if (item.selectable) {
             m_actions.push_back({kActionInstallPickRow, hit, true});
