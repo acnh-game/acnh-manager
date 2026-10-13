@@ -860,6 +860,24 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
         }
     }
     {
+        /* An update or add-on must never be filed as an application of its own: a build of this
+           app that pushed the record under the patch's id left the console with an application it
+           had nothing to draw for, which the home screen showed as an extra, empty tile.  That
+           entry is a row of its own, so it is cleared here -- and only here, *before* our own
+           record is pushed, because the same call also means "clear this application's record
+           list": running it afterwards clears the list we just wrote (measured: the game
+           disappeared from the home screen until an install wrote the record back).  It touches no
+           content either way. */
+        if (key.id != record_id) {
+            std::string cleanup_error;
+            if (m_services.DeleteApplicationRecord(key.id, &cleanup_error)) {
+                m_finish_trace.push_back("cleared the record list of " + inputs.title_id +
+                                         " (this package is not an application of its own)");
+            } else {
+                m_finish_trace.push_back("record-list cleanup for " + inputs.title_id +
+                                         " failed: " + cleanup_error);
+            }
+        }
         /* One record, under the application id: this package's own key and the storage it lives
            on.  The service adds it to that application's list -- the reference implementation
            pushes exactly one record for exactly this reason.  Re-pushing the list's other entries
@@ -880,20 +898,17 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
         if (!m_services.PushApplicationRecord(record_id, records, error)) {
             return false;
         }
-    }
-
-    /* An update or add-on must never be filed as an application of its own: a build of this app
-       that pushed the record under the patch's id left an extra, empty tile on the home screen
-       (the console knew an application with that id and had nothing to draw for it).  Clearing
-       that application's record list is what removes it, and it touches no content. */
-    if (key.id != record_id) {
-        std::string cleanup_error;
-        if (m_services.DeleteApplicationRecord(key.id, &cleanup_error)) {
-            m_finish_trace.push_back("cleared the record list of " + inputs.title_id +
-                                     " (this package is not an application of its own)");
+        /* Read the application's list back: "one record was accepted" and "the application has the
+           records it needs" are different statements, and the home screen shows the difference. */
+        std::vector<ContentStorageRecord> after;
+        std::string after_error;
+        if (m_services.ListApplicationRecords(record_id, &after, &after_error)) {
+            char note[96];
+            std::snprintf(note, sizeof(note), "record list app=%016llx entries=%zu",
+                          static_cast<unsigned long long>(record_id), after.size());
+            m_finish_trace.push_back(note);
         } else {
-            m_finish_trace.push_back("record-list cleanup for " + inputs.title_id + " failed: " +
-                                     cleanup_error);
+            m_finish_trace.push_back("record list unreadable after the push: " + after_error);
         }
     }
 

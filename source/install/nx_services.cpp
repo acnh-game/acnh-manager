@@ -220,7 +220,7 @@ bool NxServices::GetIcon(std::uint64_t application_id, std::vector<std::uint8_t>
         NsApplicationControlSource_Storage, application_id,
         reinterpret_cast<NsApplicationControlData *>(control), sizeof(control), &actual);
     if (R_FAILED(rc)) {
-        *error = "no control data for this title (0x" + ToHex(&rc, sizeof(rc)) + ")";
+        *error = "no control data for this title (0x" + ToHex(&rc, sizeof(std::uint32_t)) + ")";
         return false;
     }
     constexpr std::size_t kIconOffset = offsetof(NsApplicationControlData, icon);

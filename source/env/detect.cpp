@@ -265,9 +265,20 @@ void CollectNcm(EnvironmentReport *report, bool update_absent) {
 bool CollectControlData(EnvironmentReport *report, bool title_present) {
     alignas(0x1000) static u8 control[sizeof(NsApplicationControlData)];
     u64 actual = 0;
-    const Result rc = nsGetApplicationControlData(
-        NsApplicationControlSource_Storage, kAcnhTitleId,
-        reinterpret_cast<NsApplicationControlData *>(control), sizeof(control), &actual);
+    /* Read once, then once more after a short wait.  The console answers this from a cache it
+       rebuilds when it is told the title changed, and the rebuild is not finished by the time the
+       install returns: right after an install the same call failed with 0x8C10 and the home screen
+       had no version to show, while a fresh start moments later read it without trouble. */
+    Result rc = 1;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        rc = nsGetApplicationControlData(NsApplicationControlSource_Storage, kAcnhTitleId,
+                                        reinterpret_cast<NsApplicationControlData *>(control),
+                                        sizeof(control), &actual);
+        if (R_SUCCEEDED(rc)) {
+            break;
+        }
+        svcSleepThread(150'000'000ULL); /* 150 ms */
+    }
     if (R_FAILED(rc)) {
         /* Without a game on the console this call is expected to fail, and the home screen
            already says so; only report it when there is a game we failed to describe. */
@@ -380,6 +391,40 @@ EnvironmentReport Collect(FsFileSystem &sd) {
            the storage that holds it) and the control data below, which the console only has for
            a title that is really there. */
         const bool have_control_data = CollectControlData(&report, title_present);
+        /* Which applications the console knows, and what each one holds.  An install that files a
+           record under the wrong id leaves an extra entry here (the home menu draws it as an empty
+           tile), and a record list that lost its own entry leaves a game the home menu does not
+           draw at all; both are visible in this list and nowhere else. */
+        {
+            NsApplicationRecord apps[32]{};
+            s32 app_count = 0;
+            if (R_SUCCEEDED(nsListApplicationRecord(apps, 32, 0, &app_count))) {
+                for (s32 i = 0; i < app_count && i < 32; ++i) {
+                    char line[256];
+                    NsApplicationContentMetaStatus metas[8]{};
+                    s32 meta_count = 0;
+                    std::string detail;
+                    if (R_SUCCEEDED(nsListApplicationContentMetaStatus(apps[i].application_id, 0,
+                                                                      metas, 8, &meta_count))) {
+                        for (s32 m = 0; m < meta_count && m < 8; ++m) {
+                            char one[64];
+                            std::snprintf(one, sizeof(one), " %u:v=0x%x@%u",
+                                          static_cast<unsigned>(metas[m].meta_type),
+                                          metas[m].version,
+                                          static_cast<unsigned>(metas[m].storageID));
+                            detail += one;
+                        }
+                    }
+                    std::snprintf(line, sizeof(line), "ns app %016llx events=%u metas=%d%s",
+                                  static_cast<unsigned long long>(apps[i].application_id),
+                                  static_cast<unsigned>(apps[i].last_event),
+                                  static_cast<int>(meta_count), detail.c_str());
+                    report.notes.emplace_back(line);
+                }
+            } else {
+                report.notes.emplace_back("ns app list unavailable");
+            }
+        }
         bool running = false;
         if (R_SUCCEEDED(nsIsAnyApplicationRunning(&running))) {
             report.application_running = running;
