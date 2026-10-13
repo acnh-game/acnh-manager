@@ -26,6 +26,7 @@
 #include "install/package.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
+#include "util/size_text.hpp"
 #include "util/qr_code.hpp"
 #include "manifest/manifest.hpp"
 #include "util/sha256.hpp"
@@ -1569,6 +1570,23 @@ void TestPeerRing() {
     CHECK(CyclePeerTab(-1, -1) == 2);
 }
 
+/* The file picker's size text: the same binary units the confirm screen uses, so the two screens
+   cannot disagree about the same file, and the boundaries pick the unit a player would. */
+void TestFormatSize() {
+    using acnh_manager::util::FormatSize;
+
+    CHECK(FormatSize(0) == "0 B");
+    CHECK(FormatSize(512) == "512 B");
+    CHECK(FormatSize(1024) == "1 KB");
+    CHECK(FormatSize(1024 * 1024 - 1) == "1023 KB");
+    CHECK(FormatSize(1024 * 1024) == "1.0 MB");
+    /* The two packages on the card: the same numbers the confirm screen prints. */
+    CHECK(FormatSize(1512448) == "1.4 MB");
+    CHECK(FormatSize(4231129936ULL) == "3.9 GB");
+    CHECK(FormatSize(4650239771ULL) == "4.3 GB");
+    CHECK(FormatSize(1024ULL * 1024 * 1024) == "1.0 GB");
+}
+
 /* Home-screen state: the eight states and their priority.  Getting the order wrong would
    show "install" to someone whose game is not even installed, so it is pinned here. */
 void TestHomeState() {
@@ -1811,6 +1829,7 @@ int main() {
     TestActions();
     TestHeaderTabs();
     TestPeerRing();
+    TestFormatSize();
     TestHomeState();
     TestSettings();
     TestTextWrap();

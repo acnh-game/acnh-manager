@@ -16,6 +16,7 @@
 #include "net/update_policy.hpp"
 #include "version.hpp"
 #include "util/fs_path.hpp"
+#include "util/size_text.hpp"
 
 #ifndef ACNH_DEV_AIDS
 #define ACNH_DEV_AIDS 0
@@ -2549,9 +2550,14 @@ void App::RefreshFileList() {
                 items.push_back({name + "/", Tr(i18n::StringId::InstallDirectory), true});
             } else if (entries[i].type == FsDirEntryType_File) {
                 const bool supported = install::IsSupportedExtension(name);
-                items.push_back({name, supported ? std::string(Tr(i18n::StringId::InstallPackage))
-                                                 : std::string(Tr(i18n::StringId::InstallIgnored)),
-                                 supported});
+                /* The note says what this file *is* and how big it is: a picker whose only number
+                   is the file name cannot answer "is this the update I mean?" before the confirm
+                   page, and two packages of the same game differ mostly in that number. */
+                std::string note = supported ? std::string(Tr(i18n::StringId::InstallPackage))
+                                             : std::string(Tr(i18n::StringId::InstallIgnored));
+                note += " · ";
+                note += util::FormatSize(static_cast<std::uint64_t>(entries[i].file_size));
+                items.push_back({name, std::move(note), supported});
             }
         }
     }
@@ -3047,8 +3053,14 @@ void App::RenderInstallFiles(Surface surface) {
             FillRoundedRect(surface, hit.x, hit.y + hit.h - 3, hit.w, 3, 0, kHeader);
         }
         const Color ink = item.selectable ? kText : kSubtle;
-        m_font.Draw(surface, card_x + 34, text_y, kFontBody, ink, item.name.c_str());
         const int note_width = m_font.Measure(item.note.c_str(), kFontSmall);
+        /* Truncated to the room left of the note: a long package name painted over by the note
+           (which now carries a size as well) would hide exactly the number the row is there to
+           show.  The full name is in the log line when a file is picked. */
+        const int name_x = card_x + 34;
+        const int name_width = card_x + card_width - 34 - note_width - 24 - name_x;
+        m_font.Draw(surface, name_x, text_y, kFontBody, ink,
+                    m_font.Fit(item.name, kFontBody, name_width, 1).c_str());
         m_font.Draw(surface, card_x + card_width - 34 - note_width, text_y + 4, kFontSmall, ink,
                     item.note.c_str());
         if (item.selectable) {
