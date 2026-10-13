@@ -334,6 +334,11 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
   之后**各跑一遍 `probe::RunFsSessionProbe()`,并在安装/卸载过程中把引擎的每一次 `fs*` 调用
   (`install::SetFsTraceSink`)连同路径指针、所在映射区间、窗口末尾是否越界写进 `log.txt`。
   第 4.2 节的根因就是靠它定出来的;排查"安装失败 / 怀疑卡或会话有问题"时打开,平时删掉。
+- **大文件探针**:存在 `/switch/ACNH-Manager/dev-largefileprobe` 时,启动阶段跑一遍
+  `probe::RunLargeFileProbe()`:它对这台主机的 `fs` 问"能不能放 > 4 GiB 的普通文件",两半分开测
+  ——(A)`fsFileSetSize(4.5 GB)`、(B)不设大小、只靠顺序写长到 4.5 GB;然后把结果与"某个已存在的
+  路径能不能当目录打开"写进 `log.txt`。它会写一个 4.5 GB 的文件并在返回前删掉(实测:两块都被拒,
+  (B) 恰好停在 4 GiB);只在需要复核卡/文件系统上限时打开。
 
 ## 7. 界面层(M1)
 

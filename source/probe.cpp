@@ -495,6 +495,9 @@ void ProbeWritePath(Log &log, FsFileSystem &sd, const char *label, const char *p
 void RunWriteProbe(Log &log, FsFileSystem &sd) {
     const char *kExefs = "/atmosphere/contents/01006F8002326000/exefs";
     log.Line("=== write probe ===");
+
+
+
     ProbeWritePath(log, sd, "home-abs", "/switch/ACNH-Manager/probe-abs.tmp");
     ProbeWritePath(log, sd, "home-rel", "switch/ACNH-Manager/probe-rel.tmp");
     {
@@ -724,6 +727,213 @@ void RunTouchProbe(Log &log, FsFileSystem &sd) {
     }
     log.Line("touch probe: %d samples, last down=%s", samples, down ? "yes" : "no");
     log.Line("=== touch probe done ===");
+}
+
+/* Large-file probe.  Two separate halves on purpose: "tell the filesystem the size first" and
+   "grow it by writing" are different code paths inside the driver, and the observation that
+   started this (a 4,650,239,771-byte file written by DBI's FTP server, accepted and read by the
+   console, while two other upload tools failed on that same file) is exactly a difference
+   between them: both failing tools call `fsFileSetSize` with a size above 4 GiB -- one with the
+   whole file up front, the other as its pre-allocation rounds up past the 4 GiB mark. */
+namespace {
+
+/* 4 GiB = 4,294,967,296; a FAT32 directory entry cannot name a size above 4 GiB - 1. */
+constexpr u64 kLargeFileTarget = 4'500'000'000ULL;
+constexpr std::size_t kLargeFileChunk = 4 * 1024 * 1024;
+constexpr const char *kLargeFilePath = "/switch/ACNH-Manager/largefile-probe.bin";
+
+/* Step A: create the file and ask for the whole size before writing anything. */
+void LargeFileSetSize(Log &log, FsFileSystem &sd) {
+    FsFile file{};
+    Result rc = fsFsCreateFile(&sd, kLargeFilePath, 0, 0);
+    log.Line("lprobe[A] create rc=0x%08X", rc);
+    if (R_FAILED(rc)) {
+        return;
+    }
+    rc = fsFsOpenFile(&sd, kLargeFilePath, FsOpenMode_Write, &file);
+    log.Line("lprobe[A] open rc=0x%08X", rc);
+    if (R_FAILED(rc)) {
+        return;
+    }
+    const Result rc_size = fsFileSetSize(&file, static_cast<s64>(kLargeFileTarget));
+    log.Line("lprobe[A] fsFileSetSize(%llu) rc=0x%08X",
+             static_cast<unsigned long long>(kLargeFileTarget), rc_size);
+    if (R_SUCCEEDED(rc_size)) {
+        s64 reported = 0;
+        fsFileGetSize(&file, &reported);
+        log.Line("lprobe[A] size in the open handle = %lld", static_cast<long long>(reported));
+        fsFileFlush(&file);
+    }
+    fsFileClose(&file);
+    if (R_SUCCEEDED(rc_size)) {
+        s64 reopened = 0;
+        if (R_SUCCEEDED(fsFsOpenFile(&sd, kLargeFilePath, FsOpenMode_Read, &file))) {
+            fsFileGetSize(&file, &reopened);
+            fsFileClose(&file);
+        }
+        log.Line("lprobe[A] size after closing and reopening = %lld",
+                 static_cast<long long>(reopened));
+    }
+    log.Line("lprobe[A] delete rc=0x%08X", fsFsDeleteFile(&sd, kLargeFilePath));
+}
+
+/* Step B: the same file, grown a chunk at a time, with no size call at all. */
+void LargeFileAppend(Log &log, FsFileSystem &sd) {
+    const Result rc_create = fsFsCreateFile(&sd, kLargeFilePath, 0, 0);
+    log.Line("lprobe[B] create rc=0x%08X", rc_create);
+    if (R_FAILED(rc_create)) {
+        return;
+    }
+    FsFile file{};
+    Result rc = fsFsOpenFile(&sd, kLargeFilePath, FsOpenMode_Write | FsOpenMode_Append, &file);
+    log.Line("lprobe[B] open rc=0x%08X", rc);
+    if (R_FAILED(rc)) {
+        return;
+    }
+    std::vector<u8> buffer(kLargeFileChunk);
+    for (std::size_t i = 0; i < buffer.size(); ++i) {
+        buffer[i] = static_cast<u8>(i & 0xFF);
+    }
+    u64 written = 0;
+    Result rc_write = 0;
+    while (written < kLargeFileTarget) {
+        const std::size_t want = static_cast<std::size_t>(
+            (kLargeFileTarget - written) < kLargeFileChunk ? (kLargeFileTarget - written)
+                                                           : kLargeFileChunk);
+        rc_write = fsFileWrite(&file, static_cast<s64>(written), buffer.data(), want,
+                               FsWriteOption_None);
+        if (R_FAILED(rc_write)) {
+            log.Line("lprobe[B] write failed at offset %llu rc=0x%08X",
+                     static_cast<unsigned long long>(written), rc_write);
+            break;
+        }
+        written += want;
+        /* One line per GiB: enough to see where it stops without flooding log.txt. */
+        if (written % (1024ULL * 1024 * 1024) < kLargeFileChunk) {
+            log.Line("lprobe[B]   written %llu", static_cast<unsigned long long>(written));
+        }
+        log.Sync();
+    }
+    if (R_SUCCEEDED(rc_write)) {
+        log.Line("lprobe[B] wrote %llu bytes with no size call",
+                 static_cast<unsigned long long>(written));
+        log.Line("lprobe[B] flush rc=0x%08X", fsFileFlush(&file));
+    }
+    fsFileClose(&file);
+    if (R_SUCCEEDED(rc_write)) {
+        s64 reopened = 0;
+        if (R_SUCCEEDED(fsFsOpenFile(&sd, kLargeFilePath, FsOpenMode_Read, &file))) {
+            fsFileGetSize(&file, &reopened);
+            log.Line("lprobe[B] size after closing and reopening = %lld",
+                     static_cast<long long>(reopened));
+            u8 tail[4] = {0};
+            u64 read = 0;
+            const Result rc_tail =
+                fsFileRead(&file, static_cast<s64>(kLargeFileTarget - sizeof(tail)), tail,
+                           sizeof(tail), FsReadOption_None, &read);
+            log.Line("lprobe[B] read tail rc=0x%08X read=%llu value=%02X%02X%02X%02X", rc_tail,
+                     static_cast<unsigned long long>(read), tail[0], tail[1], tail[2], tail[3]);
+            fsFileClose(&file);
+        }
+    }
+    log.Line("lprobe[B] delete rc=0x%08X", fsFsDeleteFile(&sd, kLargeFilePath));
+}
+
+}  // namespace
+
+/* Step C: is the platform's own "file larger than 4 GiB" mechanism a concatenation file -- a
+   *directory* carrying an attribute, whose parts the filesystem presents as one file with the
+   summed size?  libnx spells it out (`FsCreateOption_BigFile`: "Creates a ConcatenationFile
+   (dir with archive bit) instead of file", and `fsFsSetConcatenationFileAttribute`), and a
+   directory that opens as a directory is exactly what a plain file cannot do -- so the same
+   trick also answers "is this particular upload one of those?" for the package in the root. */
+namespace {
+
+constexpr const char *kConcatDirPath = "/switch/ACNH-Manager/concat-probe.dir";
+constexpr const char *kConcatPartNames[2] = {"/switch/ACNH-Manager/concat-probe.dir/00",
+                                             "/switch/ACNH-Manager/concat-probe.dir/01"};
+constexpr const char *kBigPackagePath = "/[UPD][v3.0.3][01006F8002326800][v2228224].nsp";
+
+/* Same question, asked of an existing path: a real file refuses to open as a directory, a
+   concatenation file is one. */
+void ConcatenationLook(Log &log, FsFileSystem &sd, const char *path, const char *label) {
+    FsDir dir{};
+    const Result rc = fsFsOpenDirectory(&sd, path, FsDirOpenMode_ReadDirs | FsDirOpenMode_ReadFiles,
+                                        &dir);
+    log.Line("lprobe[C] %s: open-as-directory rc=0x%08X", label, rc);
+    if (R_FAILED(rc)) {
+        return;
+    }
+    FsDirectoryEntry entries[8]{};
+    s64 count = 0;
+    if (R_SUCCEEDED(fsDirRead(&dir, &count, 8, entries))) {
+        for (s64 i = 0; i < count && i < 8; ++i) {
+            log.Line("lprobe[C] %s:   part \"%s\" %s size=%llu", label, entries[i].name,
+                     entries[i].type == FsDirEntryType_Dir ? "dir" : "file",
+                     static_cast<unsigned long long>(entries[i].file_size));
+        }
+    }
+    fsDirClose(&dir);
+}
+
+/* And from the other side: build one, mark it, and see whether the size call that a plain file
+   refuses now goes through. */
+void ConcatenationMake(Log &log, FsFileSystem &sd) {
+    log.Line("lprobe[C] make: create dir rc=0x%08X", fsFsCreateDirectory(&sd, kConcatDirPath));
+    for (const char *part : kConcatPartNames) {
+        FsFile file{};
+        Result rc = fsFsCreateFile(&sd, part, 0, 0);
+        log.Line("lprobe[C] make: create part %s rc=0x%08X", part, rc);
+        if (R_FAILED(rc)) {
+            continue;
+        }
+        if (R_SUCCEEDED(fsFsOpenFile(&sd, part, FsOpenMode_Write, &file))) {
+            std::vector<u8> chunk(1024 * 1024, 0x5A);
+            for (int i = 0; i < 4; ++i) {
+                fsFileWrite(&file, static_cast<s64>(i) * chunk.size(), chunk.data(), chunk.size(),
+                            FsWriteOption_None);
+            }
+            fsFileFlush(&file);
+            fsFileClose(&file);
+            log.Line("lprobe[C] make: wrote 4 MiB into %s", part);
+        }
+    }
+    const Result rc_attr = fsFsSetConcatenationFileAttribute(&sd, kConcatDirPath);
+    log.Line("lprobe[C] make: fsFsSetConcatenationFileAttribute rc=0x%08X",
+             static_cast<unsigned>(rc_attr));
+    FsFile file{};
+    const Result rc_open = fsFsOpenFile(&sd, kConcatDirPath, FsOpenMode_Write, &file);
+    log.Line("lprobe[C] make: open the directory as a file rc=0x%08X", rc_open);
+    if (R_SUCCEEDED(rc_open)) {
+        s64 size = 0;
+        fsFileGetSize(&file, &size);
+        log.Line("lprobe[C] make: size as one file = %lld (two 4 MiB parts)",
+                 static_cast<long long>(size));
+        const Result rc_size = fsFileSetSize(&file, static_cast<s64>(kLargeFileTarget));
+        log.Line("lprobe[C] make: fsFileSetSize(%llu) rc=0x%08X",
+                 static_cast<unsigned long long>(kLargeFileTarget), static_cast<unsigned>(rc_size));
+        if (R_SUCCEEDED(rc_size)) {
+            s64 after = 0;
+            fsFileGetSize(&file, &after);
+            log.Line("lprobe[C] make: size after the size call = %lld",
+                     static_cast<long long>(after));
+        }
+        fsFileClose(&file);
+    }
+    log.Line("lprobe[C] make: delete rc=0x%08X", fsFsDeleteDirectoryRecursively(&sd, kConcatDirPath));
+}
+
+}  // namespace
+
+void RunLargeFileProbe(Log &log, FsFileSystem &sd) {
+    log.Line("=== large-file probe: %llu bytes (4 GiB = 4294967296) ===",
+             static_cast<unsigned long long>(kLargeFileTarget));
+    log.Sync();
+    LargeFileSetSize(log, sd);
+    LargeFileAppend(log, sd);
+    ConcatenationLook(log, sd, kBigPackagePath, "v3.0.3 package");
+    ConcatenationMake(log, sd);
+    log.Line("=== large-file probe done ===");
 }
 
 }  // namespace acnh_manager::probe

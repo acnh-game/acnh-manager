@@ -36,4 +36,18 @@ void RunTouchProbe(Log &log, FsFileSystem &sd);
    (`docs/device-acceptance.md`). */
 void RunFsSessionProbe(Log &log, FsFileSystem &sd, const char *where);
 
+/* Large-file probe (development switch `/switch/ACNH-Manager/dev-largefileprobe`): answer "how
+   does this card handle a file larger than 4 GiB?" from the console's own side, in two halves,
+   because the two ways of growing a file can differ:
+
+     A. create a file and *tell* the filesystem how big it will be (`fsFileSetSize`, 4.5 GB);
+     B. create a file and grow it by writing, never asking for a size up front.
+
+   Then it reads the size and the last bytes back and deletes the file.  The question comes from
+   watching a 4,650,239,771-byte package land in the card's root through DBI's FTP server while
+   this project's own upload tools (sys-agent's FTP, sphaira's file transfer) both failed on it
+   -- and both of those call `fsFileSetSize` with a size above 4 GiB.  It writes one file of
+   4.5 GB in the manager's own directory and removes it; nothing else on the card is touched. */
+void RunLargeFileProbe(Log &log, FsFileSystem &sd);
+
 }  // namespace acnh_manager::probe

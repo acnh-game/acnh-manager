@@ -46,6 +46,9 @@ constexpr const char *kLogHistoryPath = "/switch/ACNH-Manager/log-history.log";
 constexpr const char *kProbeFlagPath = "/switch/ACNH-Manager/dev-probe";
 constexpr const char *kWriteProbeFlagPath = "/switch/ACNH-Manager/dev-writeprobe";
 constexpr const char *kFsProbeFlagPath = "/switch/ACNH-Manager/dev-fsprobe";
+/* Development switch for the "how does this card handle a file larger than 4 GiB?" probe; it
+   writes one 4.5 GB file in the manager's own directory and deletes it again. */
+constexpr const char *kLargeFileProbeFlagPath = "/switch/ACNH-Manager/dev-largefileprobe";
 constexpr const char *kTouchProbeFlagPath = "/switch/ACNH-Manager/dev-touchprobe";
 constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
 constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
@@ -212,6 +215,10 @@ int main(int argc, char **argv) {
         if (FileExists(sd, kFsProbeFlagPath)) {
             log.Line("dev-fsprobe flag present: probing the fs session at startup");
             acnh_manager::probe::RunFsSessionProbe(log, sd, "startup");
+        }
+        if (FileExists(sd, kLargeFileProbeFlagPath)) {
+            log.Line("dev-largefileprobe flag present: measuring how this card handles >4 GiB");
+            acnh_manager::probe::RunLargeFileProbe(log, sd);
         }
         log.Line("=== done: press + to exit ===");
         log.Sync();
