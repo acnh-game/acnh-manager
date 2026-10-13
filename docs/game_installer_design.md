@@ -184,13 +184,39 @@ NSZ/XCZ 的分块解压格式照参考实现的 `yati/nx/ncz.*` 搬(同一个 GP
    (占位大小来自内容表,不需要先算哈希;默认不校验内容,见第 5 节)
 ⑨ **全部内容取齐后才逐个 `Register`**(含 meta 内容)—— 在写库之前的任何失败都不会留下"已注册但无条目"的半成品;再写元数据库条目(用 ③ 拿到的 CNMT,不重复读)
 ⑩ 导入票据(es::ImportTicket,机器上已有则跳过)→ **删除同 title 的旧版本**(见下)→ 写元数据库
-   → PushApplicationRecord(+ HOS ≥ 6 的 avmPushLaunchVersion)
+   → PushApplicationRecord(记录写在**本体 id** 下,记录里放本次的 meta 键;+ HOS ≥ 6 的 avmPushLaunchVersion)
 ⑪ 重新 Collect():首页反映新状态(版本变 supported → 可安装 agent;或"已安装"等既有状态)
 ```
 
 **⑨ 之后进入"收尾",收尾一旦开始就不再接受取消**:删旧版本与写元数据库是一组原子动作,中间被打断
 会留下"内容在、条目不在"或反过来的状态;因此从第一个 `Register` 起,取消入口关闭,屏幕上显示
 "正在收尾(不能取消)",直到出结果页。
+
+**元数据库条目(记录)必须按系统的形状写**:记录 = 8 字节 `ContentMetaHeader`(**不是** CNMT 文件
+开头那 8 字节的 title id)+ 扩展头 + 每个内容一条 24 字节 `NcmContentInfo`(CNMT 文件里每条内容前面
+那 32 字节 SHA-256 **不属于**记录)+ 内容元信息表;**包自己的 meta 内容(.cnmt.nca)排在第一条**
+(CNMT 的内容表里没有它,要补上),且内容的 `content_type` 用 `NcmContentType` 值(0 Meta / 1 Program /
+2 Data / 3 Control / 4 HtmlDocument / 5 LegalInformation / 6 DeltaFragment)。
+把 CNMT 文件的字节直接当记录写进去,系统会**收下但读不出来**:`ncmContentMetaDatabaseListContentInfo`
+返回一堆全 0 条目、`nsGetApplicationControlData` 报 `0x8C10`、首页把已安装的游戏画成空白格 —— 真机实测过
+整条链路(对照证据:系统自己写的基础本体记录长这样:8 字节头 + 16 字节扩展头 + 4 条 24 字节内容信息,
+第一条就是 meta 内容)。记录由 `BuildMetaRecordBlob()` 生成,主机侧有逐字节的用例钉住布局。
+
+**Update / DLC 的"应用记录"挂在什么 id 下**决定了首页能不能画出这个游戏:记录要写在**应用 id**
+(本体 id,= patch id ^ 0x800)下,记录里放本次的 meta 键;写在 patch id 下会让系统多出一个"什么都没有"
+的应用格(真机实测)。反过来说,如果**旧版本的本程序**已经留下过这样一格,安装时的补救是:在写本次记录
+**之前**清掉"本次 meta id"这一行的记录表(`ns` 的 `DeleteApplicationRecord`;**顺序不能反**,这个调用同时
+等于"清空该应用的记录表",写在 push 之后会把刚写好的记录抹掉 —— 真机实测:游戏会从首页消失,直到下次安装
+把记录写回去)。该调用不删内容。
+
+**"已装"还要求"机器真的能用"**:跳过判定除了"这台机器上有这个版本"还要问一句"系统读得出这条记录吗"
+——记录挂在正确的应用 id 下、且 `ncmContentMetaDatabaseListContentInfo` 能读出**带 Control 内容**的
+非空内容表(只有"读得出来",首页才有图标与版本号可显示)。两者有一条不满足就照常走收尾:内容都已在存储里,
+不搬字节,只把记录与记录表修好。这样"旧版本程序留下的坏状态"不必卸载就能自愈。
+`Finish()` 每次都会把这条读回结果写进日志,以后"首页为什么是空白格"不必靠猜。
+
+装完立刻重新 Collect() 时,`nsGetApplicationControlData` 可能还没重建好缓存而短暂失败(真机实测:
+安装返回后立刻读是 `0x8C10`,过一会儿再读正常),因此该调用带**3 次、每次间隔 150 ms** 的重试。
 
 **收尾必须删掉同 title 的旧版本**:参考实现在安装 Patch 时,会遍历**所有存储**,列出同 title、
 同类型(Patch)的元数据条目,把"除了本次安装的那一个之外"的旧条目连同其内容一起删掉 —— 否则装上
