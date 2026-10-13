@@ -23,6 +23,7 @@
 #include "ui/font.hpp"
 #include "ui/header_tabs.hpp"
 #include "ui/home_state.hpp"
+#include "ui/icon_image.hpp"
 #include "ui/list_view.hpp"
 #include "ui/settings.hpp"
 #include <memory>
@@ -208,14 +209,21 @@ private:
        screen when the package turns out to be pointless (already installed / newer installed). */
     void OpenPickedPackage();
     void RunGameInstall();
+    /* Leaves the installer page: the package in hand belongs to the screen that was showing it,
+       so it is dropped here and nowhere else (B is the only way out of the page). */
+    void LeaveGameInstall();
     void RenderInstallConfirm(Surface surface);
     void RenderInstallProgress(Surface surface);
     void RenderInstallResult(Surface surface);
+    /* The cover of the game the package belongs to, decoded once when the package is opened and
+       drawn on the card's right-hand side.  Returns the width the card's text may still use. */
+    int DrawPackageCover(Surface surface, int card_x, int card_top, int card_w, int card_h);
     std::string m_picked_file;
     std::unique_ptr<install::LocalFileSource> m_file_source;
     std::unique_ptr<install::GameInstall> m_game_install;
     install::InstallStatus m_install_status;
     std::string m_install_error;
+    ui::Bitmap m_cover{};
     /* The mini-app's code, read once from the embedded asset (empty when the build has none). */
     ui::QrMatrix m_guide_qr{};
     i18n::Language m_language{i18n::Language::ZhHans};

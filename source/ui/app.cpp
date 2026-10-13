@@ -11,6 +11,7 @@
 #include "install/game_install.hpp"
 #include "install/source_local_file.hpp"
 #include "install/network_source.hpp"
+#include "ui/icon_image.hpp"
 #include "log.hpp"
 #include "net/update_policy.hpp"
 #include "version.hpp"
@@ -872,7 +873,7 @@ void App::HandleKeys(u32 down) {
         if (m_page == Page::Guide) {
             m_page = m_guide_return;
         } else if (m_page == Page::GameInstall) {
-            m_page = m_game_install_return;
+            LeaveGameInstall();
         } else {
             m_page = Page::Home;
         }
@@ -967,7 +968,7 @@ void App::HandleKeys(u32 down) {
             } else if ((down & HidNpadButton_A) != 0) {
                 ActivateAction(kActionInstallUpload);
             } else if ((down & HidNpadButton_B) != 0) {
-                m_page = m_game_install_return;
+                LeaveGameInstall();
                 m_focus = FirstEnabled(m_actions);
             }
             break;
@@ -2577,6 +2578,7 @@ void App::OpenPickedPackage() {
     m_install_status = install::InstallStatus{};
     m_file_source.reset();
     m_game_install.reset();
+    m_cover = ui::Bitmap{};
     if (m_sd == nullptr || m_picked_file.empty()) {
         m_install_error = "no file picked";
         return;
@@ -2618,6 +2620,15 @@ void App::OpenPickedPackage() {
         return;
     }
     m_install_status = m_game_install->Status();
+    /* The cover is decoded once per opened package, not per frame: `ns` hands out a JPEG, and the
+       confirm page is redrawn on every key and touch event. */
+    if (!m_game_install->IconJpeg().empty()) {
+        const std::vector<std::uint8_t> &jpeg = m_game_install->IconJpeg();
+        if (!ui::DecodeJpeg(jpeg.data(), jpeg.size(), &m_cover)) {
+            m_cover = ui::Bitmap{};
+            Trace("install: the cover image could not be decoded (%zu bytes)", jpeg.size());
+        }
+    }
     Trace("install: %s -> %s (%s)", m_picked_file.c_str(),
           m_install_status.stage == install::InstallStage::Skipped ? "skip" : "confirm",
           m_install_status.detail.c_str());
@@ -2685,10 +2696,20 @@ void App::RunGameInstall() {
     m_install_screen = InstallScreen::Result;
     Trace("install: finished stage=%d%s%s", static_cast<int>(m_install_status.stage),
           m_install_error.empty() ? "" : " error=", m_install_error.c_str());
-    m_game_install.reset();
-    m_file_source.reset();
+    /* The package stays in hand for as long as the result page is up: that page names what was
+       installed and, when the run failed, quotes the reason the installer gave.  Dropping it here
+       is how a failed finish ended up labelled "this file is not an install package" on a package
+       that had just been parsed, confirmed and transferred.  LeaveGameInstall() releases it. */
     Collect(); /* the home screen's verdict may have changed: the gate watches the game version */
     Render();
+}
+
+void App::LeaveGameInstall() {
+    m_page = m_game_install_return;
+    m_game_install.reset();
+    m_file_source.reset();
+    m_cover = ui::Bitmap{};
+    m_install_error.clear();
 }
 
 /* The progress screen: how far along by *bytes*, because one content in a real update is several
@@ -2889,6 +2910,8 @@ void App::RenderInstallConfirm(Surface surface) {
     const int card_height = 400;
     FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
     FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+    /* The cover goes in first: everything the card says is laid out around the room it leaves. */
+    const int text_width = DrawPackageCover(surface, card_x, card_top, card_width, card_height);
 
     const install::PackageInfo &package = m_game_install->Package();
     m_font.Draw(surface, card_x + 36, card_top + 28, kFontSmall, kSubtle,
@@ -2924,8 +2947,11 @@ void App::RenderInstallConfirm(Surface surface) {
     }
     {
         char buffer[32];
+        /* The package's own size, not what is left to fetch: a package whose contents are all
+           already on the console has nothing to fetch, and printing "0.0 GB" next to a name and a
+           version reads as "this file is empty" (measured on the console). */
         std::snprintf(buffer, sizeof(buffer), "%.1f GB",
-                      static_cast<double>(install::TotalBytes(m_game_install->Task())) /
+                      static_cast<double>(install::PackageBytes(m_game_install->Task())) /
                           (1024.0 * 1024.0 * 1024.0));
         row(i18n::StringId::ConfirmSize, buffer);
     }
@@ -2945,28 +2971,58 @@ void App::RenderInstallConfirm(Surface surface) {
             char note[160];
             std::snprintf(note, sizeof(note), Tr(i18n::StringId::InstallAgentUnsupported),
                           AgentSupportedVersionsFor(package.cnmt.title_id).c_str());
-            m_font.Draw(surface, row_x, y + 10, kFontSmall, kWarn, note);
+            m_font.Draw(surface, row_x, y + 10, kFontSmall, kWarn, note, text_width);
         }
     }
     m_actions.push_back({kActionInstallStart,
                          Rect{card_x, card_top, card_width, card_height}, true});
 }
 
+int App::DrawPackageCover(Surface surface, int card_x, int card_top, int card_w, int card_h) {
+    const int full_width = card_w - 72;
+    if (m_cover.Empty()) {
+        return full_width;
+    }
+    constexpr int kCover = 200;
+    const int x = card_x + card_w - 30 - kCover;
+    const int y = card_top + (card_h - kCover) / 2;
+    /* A hairline frame, so a bright cover does not bleed into the card around it. */
+    FillRoundedRect(surface, x - 4, y - 4, kCover + 8, kCover + 8, 14, kBorder);
+    BlitRgbaScaled(surface, x, y, kCover, kCover, m_cover.rgba.data(), m_cover.width,
+                   m_cover.height);
+    /* Room left for text, measured from the card's own text inset (36). */
+    const int available = x - 24 - (card_x + 36);
+    return available > 0 ? available : full_width;
+}
+
 void App::RenderInstallResult(Surface surface) {
     m_actions.clear();
     if (m_game_install == nullptr) {
-        /* The package was dropped after the run (or never parsed): the screen still says what
-           happened, in the player's language. */
+        /* The package never got as far as being described: it did not parse, or a game was
+           running.  The two cases the player can act on have wording of their own; anything else
+           is quoted the way the installer said it, because a canned "this file is not an install
+           package" on a package that failed for some other reason sends the player to look at a
+           file that is fine. */
         const int x = kMargin;
+        const int wrap = surface.width - kMargin * 2;
         m_font.Draw(surface, x, kHeaderHeight + 60, kFontTitle, kBad,
                     Tr(i18n::StringId::ResultFailed));
+        bool canned = true;
         i18n::StringId reason = i18n::StringId::InstallNotAPackage;
         if (m_install_error == "no-content") {
             reason = i18n::StringId::InstallNoContent;
         } else if (m_install_error == "game-running") {
             reason = i18n::StringId::InstallGameRunning;
+        } else if (!m_install_error.empty() && m_install_error != "not-a-package" &&
+                   m_install_error != "no file picked") {
+            canned = false;
         }
-        m_font.Draw(surface, x, kHeaderHeight + 140, kFontBody, kSubtle, Tr(reason));
+        if (canned) {
+            m_font.Draw(surface, x, kHeaderHeight + 140, kFontBody, kSubtle, Tr(reason));
+        } else {
+            m_font.Draw(surface, x, kHeaderHeight + 140, kFontBody, kWarn, m_install_error.c_str(),
+                        wrap);
+        }
         return;
     }
     const install::InstallStatus &status = m_install_status;

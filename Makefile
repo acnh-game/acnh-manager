@@ -56,8 +56,9 @@ ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
 # The static FreeType brings harfbuzz auto-hinting, PNG and bzip2 along; all four link libs
-# have to be listed explicitly.
-LIBS	:= -lfreetype -lharfbuzz -lpng -lbz2 -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lnx
+# have to be listed explicitly.  libjpeg decodes the game cover `ns` hands out (source/ui/
+# icon_image.cpp); it is the portlibs build, not a vendored copy.
+LIBS	:= -lfreetype -lharfbuzz -lpng -lbz2 -ljpeg -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lnx
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 

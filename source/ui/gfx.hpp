@@ -13,6 +13,8 @@
 
 #include <switch.h>
 
+#include <cstdint>
+
 namespace acnh_manager::ui {
 
 struct Color {
@@ -67,5 +69,13 @@ void FillRect(Surface surface, int x, int y, int w, int h, Color color);
 void FillRoundedRect(Surface surface, int x, int y, int w, int h, int radius, Color color);
 void StrokeRect(Surface surface, int x, int y, int w, int h, int thickness, Color color);
 void BlendPixel(Surface surface, int x, int y, Color color);
+
+/* An RGBA image (as ui::DecodeJpeg produces) scaled into (x, y, w, h).  Downscaling averages the
+   source box of each destination pixel instead of dropping pixels: a 256x256 cover drawn at 200
+   loses every fifth line with nearest-neighbour, which shows as a shimmering picture, while the
+   average costs a few hundred microseconds more.  Upscaling repeats the nearest source pixel.
+   The image is blended onto what is already there, so a card drawn underneath shows through. */
+void BlitRgbaScaled(Surface surface, int x, int y, int w, int h, const std::uint8_t *rgba, int src_w,
+                    int src_h);
 
 }  // namespace acnh_manager::ui

@@ -137,4 +137,57 @@ void Fill(Surface surface, Color color) {
     FillRect(surface, 0, 0, surface.width, surface.height, color);
 }
 
+void BlitRgbaScaled(Surface surface, int x, int y, int w, int h, const std::uint8_t *rgba, int src_w,
+                    int src_h) {
+    if (rgba == nullptr || src_w <= 0 || src_h <= 0 || w <= 0 || h <= 0) {
+        return;
+    }
+    const Bounds bounds = DrawBounds(surface);
+    for (int row = 0; row < h; ++row) {
+        const int ty = y + row;
+        if (ty < bounds.y0 || ty >= bounds.y1) {
+            continue;
+        }
+        /* Source rows covered by this destination row (at least one). */
+        const int sy0 = static_cast<int>(static_cast<long long>(row) * src_h / h);
+        int sy1 = static_cast<int>(static_cast<long long>(row + 1) * src_h / h);
+        if (sy1 <= sy0) {
+            sy1 = sy0 + 1;
+        }
+        for (int col = 0; col < w; ++col) {
+            const int tx = x + col;
+            if (tx < bounds.x0 || tx >= bounds.x1) {
+                continue;
+            }
+            const int sx0 = static_cast<int>(static_cast<long long>(col) * src_w / w);
+            int sx1 = static_cast<int>(static_cast<long long>(col + 1) * src_w / w);
+            if (sx1 <= sx0) {
+                sx1 = sx0 + 1;
+            }
+            unsigned sum_r = 0;
+            unsigned sum_g = 0;
+            unsigned sum_b = 0;
+            unsigned sum_a = 0;
+            unsigned count = 0;
+            for (int sy = sy0; sy < sy1; ++sy) {
+                const std::uint8_t *line = rgba + static_cast<std::size_t>(sy) * src_w * 4;
+                for (int sx = sx0; sx < sx1; ++sx) {
+                    const std::uint8_t *pixel = line + static_cast<std::size_t>(sx) * 4;
+                    sum_r += pixel[0];
+                    sum_g += pixel[1];
+                    sum_b += pixel[2];
+                    sum_a += pixel[3];
+                    ++count;
+                }
+            }
+            if (count == 0) {
+                continue;
+            }
+            const Color colour{static_cast<u8>(sum_r / count), static_cast<u8>(sum_g / count),
+                               static_cast<u8>(sum_b / count), static_cast<u8>(sum_a / count)};
+            BlendPixel(surface, tx, ty, colour);
+        }
+    }
+}
+
 }  // namespace acnh_manager::ui
