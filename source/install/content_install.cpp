@@ -364,11 +364,26 @@ bool ContentInstaller::Begin(InstallTask *task, std::vector<Placeholder> *out, s
             return false;
         }
         /* The placeholder is what the bytes land in; it is created once and then written to
-           across resumes, which is why the id goes into the task file. */
+           across resumes, which is why the id goes into the task file.  The id has to be
+           *generated*: an all-zero uuid is accepted once and refused afterwards ("creating a
+           placeholder failed"), which is exactly how a leftover zero-uuid placeholder from an
+           earlier run blocked every later attempt. */
+        bool already_registered = false;
+        const Result has_rc = ncmContentStorageHas(&m_storage, &already_registered, &id);
+        m_finish_trace.push_back("begin content " + content.content_id + " registered=" +
+                                 (already_registered ? "1" : "0") + " has_rc=0x" +
+                                 ToHex(&has_rc, sizeof(has_rc)));
         NcmPlaceHolderId placeholder{};
-        const Result rc = ncmContentStorageCreatePlaceHolder(&m_storage, &id, &placeholder,
-                                                            static_cast<s64>(content.size));
+        Result rc = ncmContentStorageGeneratePlaceHolderId(&m_storage, &placeholder);
         if (R_FAILED(rc)) {
+            *error = Describe("generating a placeholder id", rc);
+            return false;
+        }
+        rc = ncmContentStorageCreatePlaceHolder(&m_storage, &id, &placeholder,
+                                                static_cast<s64>(content.size));
+        if (R_FAILED(rc)) {
+            m_finish_trace.push_back("begin create failed content=" + content.content_id +
+                                     " rc=0x" + ToHex(&rc, sizeof(rc)));
             *error = Describe("creating a placeholder", rc);
             return false;
         }
