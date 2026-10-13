@@ -2633,7 +2633,16 @@ void App::RunGameInstall() {
     /* Everything is in: from here the install cannot be cancelled, and the screen says so. */
     m_install_screen = InstallScreen::Progress;
     Render();
-    if (!m_game_install->Finish(&error)) {
+    /* The outcome and the stage are logged *before* anything else touches the install: the run
+       that reported success while the console kept the old version left no trace at all, which
+       meant guessing instead of reading. */
+    const bool finished = m_game_install->Finish(&error);
+    {
+        const auto &status = m_game_install->Status();
+        Trace("install: finish returned %d stage=%d%s%s", finished ? 1 : 0,
+              static_cast<int>(status.stage), error.empty() ? "" : " error=", error.c_str());
+    }
+    if (!finished) {
         m_install_error = error;
         m_game_install->Abandon(&error);
     }
@@ -2938,20 +2947,27 @@ void App::RenderInstallResult(Surface surface) {
     FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
     FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
 
-    i18n::StringId title = i18n::StringId::ResultInstalled;
-    Color colour = kGood;
+    /* Only `Done` is "installed".  Any other stage reaching this screen means the run stopped
+       somewhere -- and calling that "installed" is how a failed finish looked like a success while
+       the console still had the old version. */
+    i18n::StringId title = i18n::StringId::ResultFailed;
+    Color colour = kBad;
     switch (status.stage) {
+        case install::InstallStage::Done:
+            title = i18n::StringId::ResultInstalled;
+            colour = kGood;
+            break;
         case install::InstallStage::Skipped:
             /* Decided by the numbers, not by the path that got us here. */
             title = status.installed_version > status.package_version
                         ? i18n::StringId::ResultSkippedNewer
                         : i18n::StringId::ResultSkippedInstalled;
+            colour = kGood;
             break;
-        case install::InstallStage::Failed:
+        default:
             title = i18n::StringId::ResultFailed;
             colour = kBad;
             break;
-        default: break;
     }
     m_font.DrawBold(surface, card_x + 40, card_top + 34, kFontTitle, colour, Tr(title));
 
@@ -2993,24 +3009,28 @@ void App::RenderInstallResult(Surface surface) {
             }
             break;
         }
-        case install::InstallStage::Failed:
-            std::snprintf(happened, sizeof(happened), "%s", m_install_error.c_str());
-            break;
-        default: {
+        default:
+            if (status.stage != install::InstallStage::Done) {
+                std::snprintf(happened, sizeof(happened), "%s",
+                              m_install_error.empty() ? "the install did not finish" : m_install_error.c_str());
+                break;
+            }
+            [[fallthrough]];
+        case install::InstallStage::Done:
+        {
             char size[32];
             std::snprintf(size, sizeof(size), "%.1f GB",
                           static_cast<double>(status.total_bytes) / (1024.0 * 1024.0 * 1024.0));
             std::snprintf(happened, sizeof(happened), Tr(i18n::StringId::ResultWroteLine),
-                          Tr(status.package_version ? i18n::StringId::StorageSdCard
-                                                    : i18n::StringId::StorageSdCard),
-                          status.total_contents, size);
+                          Tr(i18n::StringId::StorageSdCard), status.total_contents, size);
             break;
         }
     }
     m_font.Draw(surface, card_x + 40, card_top + 176, kFontBody, kSubtle, happened);
 
     /* What now: only about the agent, and only when it is true. */
-    if (status.stage != install::InstallStage::Failed) {
+    if (status.stage == install::InstallStage::Done ||
+        status.stage == install::InstallStage::Skipped) {
         const std::uint32_t effective = status.stage == install::InstallStage::Skipped
                                             ? status.installed_version
                                             : status.package_version;
