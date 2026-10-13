@@ -125,6 +125,14 @@ std::uint64_t DoneBytes(const InstallTask &task) {
     return done;
 }
 
+std::uint64_t PackageBytes(const InstallTask &task) {
+    std::uint64_t total = 0;
+    for (const auto &content : task.contents) {
+        total += content.size;
+    }
+    return total;
+}
+
 int DoneContents(const InstallTask &task) {
     int done = 0;
     for (const auto &content : task.contents) {

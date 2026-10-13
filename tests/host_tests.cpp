@@ -23,6 +23,7 @@
 #include "install/install_task.hpp"
 #include "install/nca.hpp"
 #include "install/options.hpp"
+#include "install/package.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
 #include "util/qr_code.hpp"
@@ -1014,6 +1015,7 @@ void TestInstallTask() {
     using acnh_manager::install::InstallTask;
     using acnh_manager::install::MatchesSourceFile;
     using acnh_manager::install::NextRange;
+    using acnh_manager::install::PackageBytes;
     using acnh_manager::install::ParseTask;
     using acnh_manager::install::RangeRequest;
     using acnh_manager::install::TaskContent;
@@ -1042,6 +1044,10 @@ void TestInstallTask() {
 
     /* Progress is in bytes and skips the skipped content; the counter still counts it. */
     CHECK(TotalBytes(task) == 0x800 + 4'600'000'000ULL);
+    /* The package's own size ignores the skip: the confirm screen has to be able to say how big
+       the file the player picked is, even when every content in it is already on the console
+       (that is the case the screen printed as "0.0 GB"). */
+    CHECK(PackageBytes(task) == 0x800 + 4'600'000'000ULL + 0x400);
     CHECK(DoneBytes(task) == 0);
     CHECK(DoneContents(task) == 1);
     CHECK(!TransferComplete(task));
@@ -1606,11 +1612,30 @@ void TestSettings() {
 
 }  // namespace
 
+/* The id arithmetic every console query depends on: a package's meta id spells its *own* title
+   (the update's, the add-on's), while the game's own data -- its name, version, cover -- is filed
+   under the base application id.  Getting this wrong is invisible in the type system and shows up
+   as "the console says that title is not installed". */
+void TestApplicationIdOf() {
+    using acnh_manager::install::ApplicationIdOf;
+    using acnh_manager::install::MetaType;
+
+    constexpr std::uint64_t kBase = 0x01006F8002326000ULL;
+    CHECK(ApplicationIdOf(kBase, MetaType::Application) == kBase);
+    CHECK(ApplicationIdOf(0x01006F8002326800ULL, MetaType::Patch) == kBase);
+    CHECK(ApplicationIdOf(0x01006F8002327000ULL, MetaType::AddOnContent) == kBase);
+    /* The add-on branch spells the reference implementation's arithmetic exactly -- an exclusive
+       or and then a mask, not a subtraction -- and an id whose own nibble already carries the
+       0x1000 bit is where the two spellings part ways. */
+    CHECK(ApplicationIdOf(0x01006F800232A800ULL, MetaType::AddOnContent) == 0x01006F800232B000ULL);
+}
+
 int main() {
     TestContainer();
     TestQrCode();
     TestNcaAndCnmt();
     TestInstallTask();
+    TestApplicationIdOf();
     TestInstallOptions();
     TestJsonBasics();
     TestJsonRejects();

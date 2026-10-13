@@ -294,6 +294,26 @@ bool GameInstall::Prepare(std::string *error) {
         m_status.detail += " " + nacp_note;
     }
 
+    /* The cover comes from the console's own control data for the *game* the package belongs to,
+       not from the package's own control content: the icon is the game's, and asking `ns` is the
+       same call the home screen makes.  A game that is not installed has no cover to show, and
+       that is not a failure -- the confirm screen simply draws no picture. */
+    {
+        const std::uint64_t app_id =
+            ApplicationIdOf(std::strtoull(m_package.cnmt.title_id.c_str(), nullptr, 16),
+                            m_package.cnmt.type);
+        std::string icon_error;
+        if (m_installer.Services().GetIcon(app_id, &m_icon, &icon_error)) {
+            char note[48];
+            std::snprintf(note, sizeof(note), " icon=%zuB", m_icon.size());
+            m_status.detail += note;
+        } else {
+            m_status.detail += " icon=none";
+            Note("install: no cover for %016llx: %s", static_cast<unsigned long long>(app_id),
+                 icon_error.c_str());
+        }
+    }
+
     /* The content list comes from the CNMT we just read: this is what turns "33 entries" into
        "the program, the control and the tickets", skips the delta fragments (the package does not
        ship them) and refuses a package that lists a content it does not carry.  This call was

@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "install/content_install.hpp" /* ToHex: the same hex spelling the trace lines use */
+
 namespace acnh_manager::install {
 namespace {
 
@@ -198,6 +200,38 @@ bool NxServices::PushLaunchVersion(std::uint64_t title_id, std::uint32_t version
         *error = Describe("recording the launch version", rc);
         return false;
     }
+    return true;
+}
+
+bool NxServices::GetIcon(std::uint64_t application_id, std::vector<std::uint8_t> *icon,
+                         std::string *error) {
+    icon->clear();
+    if (!m_ns_open) {
+        *error = "no control data (the ns service is not open)";
+        return false;
+    }
+    /* The answer is NACP + icon, so the buffer has to cover the whole declaration: `ns` maps it
+       as one out buffer and rejects a window that reaches past the end of a mapping.  144 KB is
+       not stack material, and one static buffer is enough because this call is never concurrent
+       (the installer runs on the thread that draws). */
+    alignas(0x1000) static std::uint8_t control[sizeof(NsApplicationControlData)];
+    u64 actual = 0;
+    const Result rc = nsGetApplicationControlData(
+        NsApplicationControlSource_Storage, application_id,
+        reinterpret_cast<NsApplicationControlData *>(control), sizeof(control), &actual);
+    if (R_FAILED(rc)) {
+        *error = "no control data for this title (0x" + ToHex(&rc, sizeof(rc)) + ")";
+        return false;
+    }
+    constexpr std::size_t kIconOffset = offsetof(NsApplicationControlData, icon);
+    constexpr std::size_t kIconSize = sizeof(NsApplicationControlData::icon);
+    if (actual <= kIconOffset) {
+        *error = "the control data carries no icon";
+        return false;
+    }
+    const std::size_t available = (actual - kIconOffset) < kIconSize ? (actual - kIconOffset)
+                                                                    : kIconSize;
+    icon->assign(control + kIconOffset, control + kIconOffset + available);
     return true;
 }
 

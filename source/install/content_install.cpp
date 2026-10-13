@@ -240,29 +240,6 @@ bool ContentInstaller::InstalledVersionPerStorage(const std::string &title_id_he
     return true;
 }
 
-namespace {
-
-/* A package's ids are the base application id plus a per-kind offset: patch = +0x800, add-on =
-   +0x1000 (plus the add-on index, which we do not need for this question).  The meta database is
-   queried by the *application* id, so the offset is removed here. */
-std::uint64_t ApplicationIdOf(std::uint64_t id, std::uint8_t meta_type) {
-    /* The offset lives in one nibble (bits 12..15), so it is masked out, not subtracted by
-       comparing the whole low word: my first version compared the low 32 bits against 0x800 and
-       0x1000, which sent every patch id down the add-on path and produced the wrong application id
-       (01006f8002325800 instead of 01006f8002326000) -- a query that then answered "no records"
-       for a console that plainly had the base game installed.  The reference implementation's
-       GetAppId does exactly this. */
-    if (meta_type == 0x81) { /* Patch */
-        return id ^ 0x800ULL;
-    }
-    if (meta_type == 0x82) { /* AddOnContent */
-        return (id ^ 0x1000ULL) & ~0xFFFULL;
-    }
-    return id;
-}
-
-}  // namespace
-
 bool ContentInstaller::InstalledState(const std::string &title_id_hex, std::uint32_t version,
                                       std::uint8_t meta_type, bool *same_version_installed,
                                       std::uint32_t *highest_version, std::string *error) {
@@ -273,7 +250,13 @@ bool ContentInstaller::InstalledState(const std::string &title_id_hex, std::uint
         *error = "the title id is not 16 hex digits";
         return false;
     }
-    const std::uint64_t app_id = ApplicationIdOf(id, meta_type);
+    /* The key the question is about: exactly the record this package would write. */
+    NcmContentMetaKey wanted{};
+    wanted.id = id;
+    wanted.version = version;
+    wanted.type = meta_type;
+    wanted.install_type = 0; /* NcmContentInstallType_Full, the kind every install writes */
+
     const NcmStorageId storages[2] = {NcmStorageId_SdCard, NcmStorageId_BuiltInUser};
     for (const NcmStorageId storage : storages) {
         NcmContentMetaDatabase db{};
@@ -283,34 +266,39 @@ bool ContentInstaller::InstalledState(const std::string &title_id_hex, std::uint
         if (R_FAILED(open_rc)) {
             continue;
         }
-        s32 total = 0;
-        s32 written = 0;
-        /* Two calls: the first asks how many records there are, the second reads them. */
-        const Result list_rc = ncmContentMetaDatabaseList(
-            &db, &total, &written, nullptr, 0, NcmContentMetaType_Unknown, app_id, 0, UINT64_MAX,
-            NcmContentInstallType_Full);
+        /* "Is this exact version and kind here?"  A record's identity is its key, so the answer
+           comes from the key itself and not from a version comparison. */
+        bool has = false;
+        const Result has_rc = ncmContentMetaDatabaseHas(&db, &has, &wanted);
         {
-            char note[128];
+            char note[160];
             std::snprintf(note, sizeof(note),
-                          "query list app=%016llx rc=0x%x total=%d written=%d",
-                          static_cast<unsigned long long>(app_id), static_cast<unsigned>(list_rc),
-                          static_cast<int>(total), static_cast<int>(written));
+                          "query has id=%016llx v=0x%x type=%u rc=0x%x has=%d",
+                          static_cast<unsigned long long>(id), static_cast<unsigned>(version),
+                          static_cast<unsigned>(meta_type), static_cast<unsigned>(has_rc),
+                          has ? 1 : 0);
             m_finish_trace.push_back(note);
         }
-        if (R_SUCCEEDED(list_rc) && total > 0) {
-            std::vector<NcmContentMetaKey> keys(static_cast<std::size_t>(total));
-            if (R_SUCCEEDED(ncmContentMetaDatabaseList(
-                    &db, &total, &written, keys.data(), static_cast<s32>(keys.size()),
-                    NcmContentMetaType_Unknown, app_id, 0, UINT64_MAX, NcmContentInstallType_Full))) {
-                for (s32 i = 0; i < written; ++i) {
-                    const NcmContentMetaKey &key = keys[static_cast<std::size_t>(i)];
-                    if (key.version > *highest_version) {
-                        *highest_version = key.version;
-                    }
-                    if (key.id == id && key.version == version && key.type == meta_type) {
-                        *same_version_installed = true;
-                    }
-                }
+        if (R_SUCCEEDED(has_rc) && has) {
+            *same_version_installed = true;
+        }
+        /* "How new is what is here?"  Keyed by the same id, so a patch answers about the patch. */
+        NcmContentMetaKey latest{};
+        const Result latest_rc = ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &latest, id);
+        {
+            char note[160];
+            std::snprintf(note, sizeof(note),
+                          "query latest id=%016llx rc=0x%x v=0x%x type=%u",
+                          static_cast<unsigned long long>(id), static_cast<unsigned>(latest_rc),
+                          static_cast<unsigned>(latest.version), static_cast<unsigned>(latest.type));
+            m_finish_trace.push_back(note);
+        }
+        if (R_SUCCEEDED(latest_rc)) {
+            if (latest.version > *highest_version) {
+                *highest_version = latest.version;
+            }
+            if (latest.version == version && latest.type == meta_type) {
+                *same_version_installed = true;
             }
         }
         ncmContentMetaDatabaseClose(&db);
@@ -476,6 +464,18 @@ bool ContentInstaller::Register(const InstallTask &task, std::string *error) {
         }
         const Result rc = ncmContentStorageRegister(&m_storage, &id, &placeholder);
         if (R_FAILED(rc)) {
+            /* A content can already be registered while we still hold a placeholder for it: an
+               earlier run of the same package registered these bytes, and the console's content
+               storage is content-addressed, so there is nothing left to register.  Treating that
+               as a failure turned a complete install into "registering a content failed
+               (0x00000805)" the second time the same package was installed. */
+            bool present = false;
+            if (R_SUCCEEDED(ncmContentStorageHas(&m_storage, &present, &id)) && present) {
+                m_finish_trace.push_back("register content " + content.content_id +
+                                         " already in the storage rc=0x" + ToHex(&rc, sizeof(rc)));
+                ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+                continue;
+            }
             *error = Describe("registering a content", rc);
             return false;
         }

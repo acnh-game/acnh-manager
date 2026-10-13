@@ -88,6 +88,12 @@ struct InstallTask {
 std::uint64_t TotalBytes(const InstallTask &task);
 std::uint64_t DoneBytes(const InstallTask &task);
 
+/* How big the package is, whatever the console already has: the confirm screen shows this (the
+   player picked a file that is *this* many bytes), while the progress bars show TotalBytes (the
+   part that still has to move).  Showing the remaining bytes on the confirm screen printed
+   "0.0 GB" for a package whose contents were all already on the console. */
+std::uint64_t PackageBytes(const InstallTask &task);
+
 /* Contents that are finished -- written in full or skipped.  The progress screen shows it as
    "第 N / M 个内容", which is why skipped entries still count here. */
 int DoneContents(const InstallTask &task);

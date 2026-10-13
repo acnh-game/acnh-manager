@@ -132,4 +132,14 @@ SkipDecision DecideSkip(const InstallOptions &options, std::uint32_t package_ver
     return SkipDecision::Install;
 }
 
+std::uint64_t ApplicationIdOf(std::uint64_t title_id, MetaType type) {
+    if (type == MetaType::Patch) {
+        return title_id ^ 0x800ULL;
+    }
+    if (type == MetaType::AddOnContent) {
+        return (title_id ^ 0x1000ULL) & ~0xFFFULL;
+    }
+    return title_id;
+}
+
 }  // namespace acnh_manager::install

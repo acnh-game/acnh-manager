@@ -50,4 +50,11 @@ SkipDecision DecideSkip(const InstallOptions &options, std::uint32_t package_ver
 /* The label the result page shows for a package (base / update / dlc), from the CNMT type. */
 const char *MetaTypeLabel(MetaType type);
 
+/* The application (base game) id a package's title id belongs to: a patch lives at
+   base + 0x800, an add-on at base + 0x1000 + index, and everything the console offers about the
+   *game* -- its control data, its icon, its name -- is filed under the base id.  The offset sits
+   in one nibble, so it is masked out rather than compared against the whole low word (the
+   reference implementation's GetAppId). */
+std::uint64_t ApplicationIdOf(std::uint64_t title_id, MetaType type);
+
 }  // namespace acnh_manager::install

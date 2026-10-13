@@ -71,6 +71,12 @@ public:
     /* ns: forget a title entirely (used when a rollback deletes what we registered). */
     bool DeleteApplicationRecord(std::uint64_t title_id, std::string *error);
 
+    /* ns: the cover the console shows for a title, as the JPEG the developer shipped (256x256
+       for every retail title).  This is the console's own answer -- the same call the home screen
+       makes -- so a package whose game is not installed simply has none.  A missing cover is
+       never an error the player has to see: the caller draws nothing and carries on. */
+    bool GetIcon(std::uint64_t application_id, std::vector<std::uint8_t> *icon, std::string *error);
+
     /* avm: the system refuses to launch a title whose launch version is below the record's, so a
        fresh install has to raise it (HOS 6.0.0+; the reference implementation does the same). */
     bool PushLaunchVersion(std::uint64_t title_id, std::uint32_t version, std::string *error);

@@ -100,6 +100,10 @@ public:
     const InstallTask &Task() const { return m_task; }
     InstallTask &MutableTask() { return m_task; }
     const InstallStatus &Status() const { return m_status; }
+    /* The cover the console has for this package's game, as the JPEG it hands out (empty when the
+       game is not installed, or when `ns` would not tell us).  The confirm screen draws it; the
+       decode lives in the UI layer, because the installer has no business knowing about pixels. */
+    const std::vector<std::uint8_t> &IconJpeg() const { return m_icon; }
     std::string TaskJson() const { return DumpTask(m_task); }
     /* The meta content's placeholder: it is filled before the CNMT can be read, and the transfer
        phase must not fetch it again. */
@@ -120,6 +124,7 @@ private:
     PackageInfo m_package;
     InstallTask m_task;
     InstallStatus m_status;
+    std::vector<std::uint8_t> m_icon; /* the game's cover, as `ns` hands it out (may be empty) */
     ContentInstaller m_installer;
     std::vector<Placeholder> m_placeholders;
     std::uint8_t *m_buffer{nullptr}; /* one block, reused: 4 MB on the applet heap is fine, a

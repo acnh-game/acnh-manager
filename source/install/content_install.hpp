@@ -106,11 +106,13 @@ public:
     bool InstalledVersionPerStorage(const std::string &title_id_hex, std::uint32_t *sd,
                                     std::uint32_t *nand, std::string *error);
 
-    /* What the console knows about this package's application: the highest version installed on
-       any storage, and whether *this exact* version and kind is already there.  The reference
-       implementation answers both by listing the meta database for the application id (converting
-       a patch's id to its base game first); asking "latest key for id" does not find a patch
-       record, which made an installed update look like it was not installed. */
+    /* What the console knows about this package's title: the highest version installed on any
+       storage, and whether *this exact* version and kind is already there.  Both answers come from
+       queries keyed by the *package's own* meta id (for an update that is the patch id, not the
+       base game's): "latest key for id" and "does this key exist" -- the same pair the reference
+       implementation uses for its skip decision.  The application id is only for questions about
+       the base game, and a query with it answers about the base game's own record, which is how an
+       installed update can look like it is not installed. */
     bool InstalledState(const std::string &title_id_hex, std::uint32_t version, std::uint8_t meta_type,
                         bool *same_version_installed, std::uint32_t *highest_version,
                         std::string *error);
