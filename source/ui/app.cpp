@@ -2508,6 +2508,12 @@ void App::RenderStorageBars(Surface surface) {
                          {i18n::StringId::StorageSystem, install::TargetStorage::Nand}};
     constexpr int kBarWidth = 150;
     constexpr int kBarHeight = 8;
+    /* One block per storage: the caption above, the bar below, both placed from these two numbers.
+       They used to be separate literals inside the loop, and moving one of them moved only the
+       track -- the filled part stayed behind, so the two layers of the same bar stopped
+       overlapping.  The whole block sits low in the header band, not against its top edge. */
+    constexpr int kCaptionY = 32;
+    constexpr int kBarY = 62;
     int x_right = surface.width - kMargin;
     for (int i = 1; i >= 0; --i) {
         std::uint64_t free_bytes = 0;
@@ -2529,19 +2535,16 @@ void App::RenderStorageBars(Surface surface) {
         std::snprintf(line, sizeof(line), "%s  %s", Tr(bars[i].label), caption);
         const int width = m_font.Measure(line, kFontSmall);
         const int x = x_right - width;
-        /* This page hides the four tabs, so the room the tabs took is what these two blocks sit
-           in; the captions and bars are laid out as one block and centred in the header band
-           instead of hugging its top edge (the earlier 22/52 left 36 px of empty green below). */
-        m_font.Draw(surface, x, 30, kFontSmall, kOnHeader, line);
+        m_font.Draw(surface, x, kCaptionY, kFontSmall, kOnHeader, line);
         /* The bar is as wide as the text above it, so the two read as one block; it used to be a
            fixed 150 px, which left the bar visibly shorter than its own caption. */
         const int bar = width > kBarWidth ? width : kBarWidth;
-        FillRoundedRect(surface, x, 60, bar, kBarHeight, kBarHeight / 2, kHeaderBadge);
+        FillRoundedRect(surface, x, kBarY, bar, kBarHeight, kBarHeight / 2, kHeaderBadge);
         if (ok && total_bytes > 0) {
             const double used = 1.0 - static_cast<double>(free_bytes) / static_cast<double>(total_bytes);
             const int filled = static_cast<int>(bar * used);
             if (filled > 0) {
-                FillRoundedRect(surface, x, 52, filled, kBarHeight, kBarHeight / 2, kOnHeader);
+                FillRoundedRect(surface, x, kBarY, filled, kBarHeight, kBarHeight / 2, kOnHeader);
             }
         }
         x_right -= bar + 30;
