@@ -373,6 +373,13 @@ bool ContentInstaller::Begin(InstallTask *task, std::vector<Placeholder> *out, s
         m_finish_trace.push_back("begin content " + content.content_id + " registered=" +
                                  (already_registered ? "1" : "0") + " has_rc=0x" +
                                  ToHex(&has_rc, sizeof(has_rc)));
+        /* Migration: builds before this one created placeholders with an all-zero uuid, and the
+           system refuses a second placeholder for the same content while one exists.  That id is
+           known, so it is removed here; no other placeholder is ever touched this way. */
+        NcmPlaceHolderId legacy_zero{};
+        if (R_SUCCEEDED(ncmContentStorageDeletePlaceHolder(&m_storage, &legacy_zero))) {
+            m_finish_trace.push_back("begin removed a legacy zero-uuid placeholder");
+        }
         NcmPlaceHolderId placeholder{};
         Result rc = ncmContentStorageGeneratePlaceHolderId(&m_storage, &placeholder);
         if (R_FAILED(rc)) {
