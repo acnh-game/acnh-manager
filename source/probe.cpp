@@ -841,74 +841,68 @@ void LargeFileAppend(Log &log, FsFileSystem &sd) {
 
 }  // namespace
 
-/* Step C: is the platform's own "file larger than 4 GiB" mechanism a concatenation file -- a
-   *directory* carrying an attribute, whose parts the filesystem presents as one file with the
-   summed size?  libnx spells it out (`FsCreateOption_BigFile`: "Creates a ConcatenationFile
-   (dir with archive bit) instead of file", and `fsFsSetConcatenationFileAttribute`), and a
-   directory that opens as a directory is exactly what a plain file cannot do -- so the same
-   trick also answers "is this particular upload one of those?" for the package in the root. */
+/* Step C: the platform's own way to hold a file above 4 GiB here is the *concatenation file*:
+   libnx's `FsCreateOption_BigFile` creates a directory carrying an attribute, the filesystem
+   presents that directory as one file (size = the sum of its numbered parts `00`, `01`, ...),
+   and each part stays below the FAT32 ceiling.  Two questions, in this order:
+
+     C1. is a package we already have filed that way?  Ask for its parts: only a concatenation
+         file has a `00` to open.  (Asking "does it open as a directory" answers wrongly -- the
+         filesystem refuses that for a concatenation file *and* for a plain one, which is how a
+         first version of this probe concluded the opposite of the truth.)
+     C2. can we create one ourselves and grow it past 4 GiB? */
 namespace {
 
 constexpr const char *kConcatDirPath = "/switch/ACNH-Manager/concat-probe.dir";
-constexpr const char *kConcatPartNames[2] = {"/switch/ACNH-Manager/concat-probe.dir/00",
-                                             "/switch/ACNH-Manager/concat-probe.dir/01"};
 constexpr const char *kBigPackagePath = "/[UPD][v3.0.3][01006F8002326800][v2228224].nsp";
 
-/* Same question, asked of an existing path: a real file refuses to open as a directory, a
-   concatenation file is one. */
+/* Does this path have numbered parts?  A part opens; nothing else does. */
 void ConcatenationLook(Log &log, FsFileSystem &sd, const char *path, const char *label) {
-    FsDir dir{};
-    const Result rc = fsFsOpenDirectory(&sd, path, FsDirOpenMode_ReadDirs | FsDirOpenMode_ReadFiles,
-                                        &dir);
-    log.Line("lprobe[C] %s: open-as-directory rc=0x%08X", label, rc);
-    if (R_FAILED(rc)) {
-        return;
+    char part_path[256];
+    std::snprintf(part_path, sizeof(part_path), "%s/00", path);
+    FsFile part{};
+    const Result rc_part = fsFsOpenFile(&sd, part_path, FsOpenMode_Read, &part);
+    log.Line("lprobe[C] %s: open \"%s\" rc=0x%08X", label, part_path, static_cast<unsigned>(rc_part));
+    if (R_SUCCEEDED(rc_part)) {
+        s64 size = 0;
+        fsFileGetSize(&part, &size);
+        log.Line("lprobe[C] %s: part 00 size=%lld", label, static_cast<long long>(size));
+        fsFileClose(&part);
     }
-    FsDirectoryEntry entries[8]{};
-    s64 count = 0;
-    if (R_SUCCEEDED(fsDirRead(&dir, &count, 8, entries))) {
-        for (s64 i = 0; i < count && i < 8; ++i) {
-            log.Line("lprobe[C] %s:   part \"%s\" %s size=%llu", label, entries[i].name,
-                     entries[i].type == FsDirEntryType_Dir ? "dir" : "file",
-                     static_cast<unsigned long long>(entries[i].file_size));
-        }
+    std::snprintf(part_path, sizeof(part_path), "%s/01", path);
+    FsFile second{};
+    const Result rc_second = fsFsOpenFile(&sd, part_path, FsOpenMode_Read, &second);
+    log.Line("lprobe[C] %s: open \"%s\" rc=0x%08X", label, part_path,
+             static_cast<unsigned>(rc_second));
+    if (R_SUCCEEDED(rc_second)) {
+        s64 size = 0;
+        fsFileGetSize(&second, &size);
+        log.Line("lprobe[C] %s: part 01 size=%lld", label, static_cast<long long>(size));
+        fsFileClose(&second);
     }
-    fsDirClose(&dir);
+    /* And what the path itself looks like to a program. */
+    u64 total = 0;
+    FsFile whole{};
+    if (R_SUCCEEDED(fsFsOpenFile(&sd, path, FsOpenMode_Read, &whole))) {
+        s64 size = 0;
+        fsFileGetSize(&whole, &size);
+        total = static_cast<u64>(size);
+        fsFileClose(&whole);
+    }
+    log.Line("lprobe[C] %s: size as one file = %llu", label, static_cast<unsigned long long>(total));
 }
 
-/* And from the other side: build one, mark it, and see whether the size call that a plain file
-   refuses now goes through. */
+/* C2: create one the way the option says to (a concatenation file, not a file) and try the size
+   call that a plain file refused -- plus the same kind of grow-by-writing the plain path could
+   not do. */
 void ConcatenationMake(Log &log, FsFileSystem &sd) {
-    log.Line("lprobe[C] make: create dir rc=0x%08X", fsFsCreateDirectory(&sd, kConcatDirPath));
-    for (const char *part : kConcatPartNames) {
-        FsFile file{};
-        Result rc = fsFsCreateFile(&sd, part, 0, 0);
-        log.Line("lprobe[C] make: create part %s rc=0x%08X", part, rc);
-        if (R_FAILED(rc)) {
-            continue;
-        }
-        if (R_SUCCEEDED(fsFsOpenFile(&sd, part, FsOpenMode_Write, &file))) {
-            std::vector<u8> chunk(1024 * 1024, 0x5A);
-            for (int i = 0; i < 4; ++i) {
-                fsFileWrite(&file, static_cast<s64>(i) * chunk.size(), chunk.data(), chunk.size(),
-                            FsWriteOption_None);
-            }
-            fsFileFlush(&file);
-            fsFileClose(&file);
-            log.Line("lprobe[C] make: wrote 4 MiB into %s", part);
-        }
-    }
-    const Result rc_attr = fsFsSetConcatenationFileAttribute(&sd, kConcatDirPath);
-    log.Line("lprobe[C] make: fsFsSetConcatenationFileAttribute rc=0x%08X",
-             static_cast<unsigned>(rc_attr));
+    const Result rc_create = fsFsCreateFile(&sd, kConcatDirPath, 0, FsCreateOption_BigFile);
+    log.Line("lprobe[C] make: fsFsCreateFile(BigFile) rc=0x%08X", static_cast<unsigned>(rc_create));
     FsFile file{};
-    const Result rc_open = fsFsOpenFile(&sd, kConcatDirPath, FsOpenMode_Write, &file);
-    log.Line("lprobe[C] make: open the directory as a file rc=0x%08X", rc_open);
+    const Result rc_open = fsFsOpenFile(&sd, kConcatDirPath, FsOpenMode_Write | FsOpenMode_Append,
+                                        &file);
+    log.Line("lprobe[C] make: open as a file rc=0x%08X", static_cast<unsigned>(rc_open));
     if (R_SUCCEEDED(rc_open)) {
-        s64 size = 0;
-        fsFileGetSize(&file, &size);
-        log.Line("lprobe[C] make: size as one file = %lld (two 4 MiB parts)",
-                 static_cast<long long>(size));
         const Result rc_size = fsFileSetSize(&file, static_cast<s64>(kLargeFileTarget));
         log.Line("lprobe[C] make: fsFileSetSize(%llu) rc=0x%08X",
                  static_cast<unsigned long long>(kLargeFileTarget), static_cast<unsigned>(rc_size));
