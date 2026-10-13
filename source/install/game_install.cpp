@@ -402,6 +402,22 @@ bool GameInstall::Prepare(std::string *error) {
         m_status.stage = InstallStage::Skipped;
         m_status.skip_message =
             decision == SkipDecision::AlreadyInstalled ? "already-installed" : "newer-installed";
+        if (decision == SkipDecision::NewerInstalled) {
+            /* Name the version the console has, the way the console names it.  A game and an
+               update both answer through the base application's control data; an add-on does not
+               (its own version is not what that data describes), so it goes without the number. */
+            const bool described_by_control =
+                m_package.cnmt.type == MetaType::Application || m_package.cnmt.type == MetaType::Patch;
+            std::string version_error;
+            if (described_by_control &&
+                !m_installer.Services().GetDisplayVersion(app_id, &m_status.installed_version_text,
+                                                          &version_error)) {
+                Note("install: the console could not name the installed version: %s",
+                     version_error.c_str());
+            }
+            Note("install: skipping for the newer installed version (0x%x, \"%s\")",
+                 installed_version, m_status.installed_version_text.c_str());
+        }
         RefreshStatus();
         return true;
     }

@@ -101,6 +101,9 @@ const char *GateStatusName(acnh_manager::install::GateStatus status) {
     return "?";
 }
 
+/* Dev flags are the only way this is used, so the release build does not carry it either (an
+   unused static function is a warning, and this build is kept at zero). */
+#if ACNH_DEV_AIDS
 bool FileExists(FsFileSystem &sd, const char *path) {
     FsFile file{};
     const acnh_manager::util::FsPath arg(path);
@@ -110,6 +113,7 @@ bool FileExists(FsFileSystem &sd, const char *path) {
     fsFileClose(&file);
     return true;
 }
+#endif
 
 /* Environment setup: we only use the raw fs* / ns / ncm / pl / time / pad interfaces and
    deliberately avoid mounting devoptab (fsdevMountSdmc), redirecting stdio, or bringing up

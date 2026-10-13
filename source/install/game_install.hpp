@@ -62,6 +62,11 @@ struct InstallStatus {
        which code path produced the skip. */
     std::uint32_t package_version{0};
     std::uint32_t installed_version{0};
+    /* What the console calls the version it has, when it can say it ("3.0.3"): the title version
+       number above is Nintendo's build id (3.0.3 = 0x220000), so "newer version (34.0.0)" is what
+       printing it as a version produces.  Empty when the console has no control data for the
+       title, and the screens then leave the number out. */
+    std::string installed_version_text;
     bool needs_keys{false};   /* the run may need /switch/prod.keys */
 };
 

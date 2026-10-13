@@ -212,6 +212,10 @@ private:
     /* Leaves the installer page: the package in hand belongs to the screen that was showing it,
        so it is dropped here and nowhere else (B is the only way out of the page). */
     void LeaveGameInstall();
+    /* One step back inside the installer: B and the footer's Ⓑ hint are two spellings of one
+       control, so both come through here and cannot drift apart.  From the source screen this
+       leaves the page. */
+    void InstallStepBack();
     /* Drops the package in hand without leaving the installer: the parsed container, the
        placeholders the CNMT/NACP read created, and the decoded cover.  What a package that was
        never installed owes the console, and nothing more -- a run that reached the register step

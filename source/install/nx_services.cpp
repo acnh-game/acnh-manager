@@ -235,4 +235,40 @@ bool NxServices::GetIcon(std::uint64_t application_id, std::vector<std::uint8_t>
     return true;
 }
 
+bool NxServices::GetDisplayVersion(std::uint64_t application_id, std::string *version,
+                                   std::string *error) {
+    version->clear();
+    if (!m_ns_open) {
+        *error = "no control data (the ns service is not open)";
+        return false;
+    }
+    alignas(0x1000) static std::uint8_t control[sizeof(NsApplicationControlData)];
+    u64 actual = 0;
+    const Result rc = nsGetApplicationControlData(
+        NsApplicationControlSource_Storage, application_id,
+        reinterpret_cast<NsApplicationControlData *>(control), sizeof(control), &actual);
+    if (R_FAILED(rc)) {
+        *error = "no control data for this title (0x" + ToHex(&rc, sizeof(std::uint32_t)) + ")";
+        return false;
+    }
+    constexpr std::size_t kOffset = offsetof(NacpStruct, display_version);
+    constexpr std::size_t kSize = sizeof(NacpStruct::display_version);
+    if (actual < kOffset + kSize) {
+        *error = "the control data carries no version string";
+        return false;
+    }
+    const auto *nacp = reinterpret_cast<const NacpStruct *>(control);
+    for (std::size_t i = 0; i < kSize; ++i) {
+        const char c = nacp->display_version[i];
+        if (c == '\0') {
+            break;
+        }
+        version->push_back(c);
+    }
+    while (!version->empty() && (version->back() == ' ' || version->back() == '\t')) {
+        version->pop_back();
+    }
+    return true;
+}
+
 }  // namespace acnh_manager::install

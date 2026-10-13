@@ -77,6 +77,12 @@ public:
        never an error the player has to see: the caller draws nothing and carries on. */
     bool GetIcon(std::uint64_t application_id, std::vector<std::uint8_t> *icon, std::string *error);
 
+    /* ns: the version string the console shows for a title ("3.0.3"), from the same control data
+       the cover comes from.  The title version *number* is Nintendo's own build id -- 3.0.3 is
+       0x220000 -- so it is not a version anyone can read, and this string is.  Empty when the
+       console has no control data to answer with. */
+    bool GetDisplayVersion(std::uint64_t application_id, std::string *version, std::string *error);
+
     /* avm: the system refuses to launch a title whose launch version is below the record's, so a
        fresh install has to raise it (HOS 6.0.0+; the reference implementation does the same). */
     bool PushLaunchVersion(std::uint64_t title_id, std::uint32_t version, std::string *error);

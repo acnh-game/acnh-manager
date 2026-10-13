@@ -126,6 +126,7 @@ constexpr int kActionInstallDownload = 17; /* the installer's "download" card (X
 constexpr int kActionInstallUpload = 18;   /* the installer's "upload" card (A) */
 constexpr int kActionInstallPickRow = 19; /* a row of the installer's file list */
 constexpr int kActionInstallStart = 20;   /* "start" on the confirm screen (A) */
+constexpr int kActionInstallBack = 21;    /* the installer's footer "Ⓑ 返回" hint (same as the key) */
 
 /* Player settings (language today).  Separate from state.json because uninstall deletes that. */
 constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
@@ -957,41 +958,25 @@ void App::HandleKeys(u32 down) {
             }
             break;
         case Page::GameInstall:
-            /* Two sub-screens, two key maps: the picker moves with up/down and picks with A, the
-               source screen uses Y/X/A for the three sources.  B is "one level back" in both, and
-               leaves the modal page from the source screen. */
+            /* One key map per screen: the picker moves with up/down and picks with A, the source
+               screen uses Y/X/A for the three sources, and B (or the footer's Ⓑ hint, which is the
+               same control) steps back one screen -- leaving the modal page from the source
+               screen.  See InstallStepBack(). */
             if (m_install_screen == InstallScreen::Progress) {
                 break; /* the engine owns the thread: no key does anything here */
+            }
+            if ((down & HidNpadButton_B) != 0) {
+                InstallStepBack();
+                break;
             }
             if (m_install_screen == InstallScreen::Confirm) {
                 if ((down & HidNpadButton_A) != 0) {
                     RunGameInstall();
-                } else if ((down & HidNpadButton_B) != 0) {
-                    /* Back to where this package was picked from, not out of the installer: the
-                       package in hand is dropped on the way, together with the placeholders the
-                       CNMT/NACP read created for it. */
-                    LeaveInstallScreen();
-                    m_install_screen = m_install_origin;
-                    m_focus = FirstEnabled(m_actions);
-                }
-                break;
-            }
-            if (m_install_screen == InstallScreen::Result) {
-                /* The result page is the end of one run, so "back" returns to the screen the run
-                   started from -- another package from the same place, or B once more for the
-                   source screen. */
-                if ((down & HidNpadButton_B) != 0) {
-                    LeaveInstallScreen();
-                    m_install_screen = m_install_origin;
-                    m_focus = FirstEnabled(m_actions);
                 }
                 break;
             }
             if (m_install_screen == InstallScreen::Files) {
-                if ((down & HidNpadButton_B) != 0) {
-                    m_install_screen = InstallScreen::Choose;
-                    m_focus = FirstEnabled(m_actions);
-                } else if ((down & HidNpadButton_Y) != 0) {
+                if ((down & HidNpadButton_Y) != 0) {
                     LeaveDirectory();
                 } else if ((down & HidNpadButton_A) != 0) {
                     PickFocusedFile();
@@ -1002,15 +987,15 @@ void App::HandleKeys(u32 down) {
                 }
                 break;
             }
+            if (m_install_screen == InstallScreen::Result) {
+                break; /* B -- and the footer's Ⓑ -- is the only way off this screen */
+            }
             if ((down & HidNpadButton_Y) != 0) {
                 ActivateAction(kActionInstallLocal);
             } else if ((down & HidNpadButton_X) != 0) {
                 ActivateAction(kActionInstallDownload);
             } else if ((down & HidNpadButton_A) != 0) {
                 ActivateAction(kActionInstallUpload);
-            } else if ((down & HidNpadButton_B) != 0) {
-                LeaveGameInstall();
-                m_focus = FirstEnabled(m_actions);
             }
             break;
         case Page::Install:
@@ -1140,6 +1125,7 @@ void App::ActivateAction(int id) {
             break;
         case kActionInstallPickRow: PickFocusedFile(); break;
         case kActionInstallStart: RunGameInstall(); break;
+        case kActionInstallBack: InstallStepBack(); break;
         case kActionInstallDownload: Trace("install: source = download"); break;
         case kActionInstallUpload: Trace("install: source = upload"); break;
         case kActionUninstall:
@@ -1426,17 +1412,22 @@ void App::RenderFooter(Surface surface) {
     }
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Confirm) {
         /* Two hints, side by side: "start" is only useful next to "leave", and drawing them at the
-           same spot (which the first version did) makes an unreadable pile. */
+           same spot (which the first version did) makes an unreadable pile.  Each hint *is* a
+           button here: what is drawn as a control has to be one, and this page's card is
+           information, not a control. */
         int x = kMargin;
-        const auto draw_hint = [&](const char *key, const char *label, Color face, Color ink) {
+        const auto draw_hint = [&](const char *key, const char *label, Color face, Color ink,
+                                   int action) {
             FillRoundedRect(surface, x, y + 7, 30, 30, 15, face);
             const int key_width = m_font.Measure(key, kFontSmall);
             m_font.DrawBold(surface, x + (30 - key_width) / 2, y + 13, kFontSmall, ink, key);
             m_font.Draw(surface, x + 42, y + 12, kFontSmall, kText, label);
-            x += 42 + m_font.Measure(label, kFontSmall) + 34;
+            const int label_width = m_font.Measure(label, kFontSmall);
+            m_actions.push_back({action, Rect{x - 6, y + 3, 48 + label_width + 12, 38}, true});
+            x += 42 + label_width + 34;
         };
-        draw_hint("A", Tr(i18n::StringId::ConfirmStart), kHeader, kOnHeader);
-        draw_hint("B", Tr(i18n::StringId::LabelBack), kBorder, kText);
+        draw_hint("A", Tr(i18n::StringId::ConfirmStart), kHeader, kOnHeader, kActionInstallStart);
+        draw_hint("B", Tr(i18n::StringId::LabelBack), kBorder, kText, kActionInstallBack);
         const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
                     kBuildStamp);
@@ -1460,6 +1451,17 @@ void App::RenderFooter(Surface surface) {
         /* Measured on the console: the layout's offset puts the label's optical centre on the
            badge's (the glyph box is not the visual box). */
         m_font.Draw(surface, hint.label_x, hint.text_y, kFontSmall, kSubtle, label);
+        /* The installer page is the one page whose footer hint is pushed here rather than in
+           AddChromeActions (that function skips the whole page, tabs included): its hint is the
+           same control as its B key -- the page keeps its own screen stack -- so a tap steps back
+           exactly like the key does.  Everywhere else the action is already there. */
+        if (m_page == Page::GameInstall) {
+            const int width = (hint.label_x - hint.badge_x) + m_font.Measure(label, kFontSmall);
+            m_actions.push_back({kActionInstallBack,
+                                 Rect{hint.badge_x - 6, hint.badge_y - 4, width + 12,
+                                      hint.badge + 8},
+                                 true});
+        }
     }
     const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
     m_font.Draw(surface, surface.width - kMargin - stamp_width, hint.text_y, kFontSmall, kSubtle,
@@ -2778,6 +2780,29 @@ void App::LeaveInstallScreen() {
     m_install_error.clear();
 }
 
+void App::InstallStepBack() {
+    switch (m_install_screen) {
+        case InstallScreen::Confirm:
+        case InstallScreen::Result:
+            /* Back to where the run in hand started: the package (and the placeholders the
+               CNMT/NACP read created for it) is dropped on the way. */
+            LeaveInstallScreen();
+            m_install_screen = m_install_origin;
+            break;
+        case InstallScreen::Files:
+            /* The list keeps its position; picking another file is one press away. */
+            m_install_screen = InstallScreen::Choose;
+            break;
+        case InstallScreen::Choose:
+            LeaveGameInstall();
+            break;
+        case InstallScreen::Progress:
+        default:
+            return; /* the engine owns the thread: nothing may leave this screen */
+    }
+    m_focus = FirstEnabled(m_actions);
+}
+
 /* The progress screen: how far along by *bytes*, because one content in a real update is several
    GB and the others are kilobytes -- "3 of 5 contents" would sit at 20% until the very end. */
 void App::RenderInstallProgress(Surface surface) {
@@ -3045,8 +3070,10 @@ void App::RenderInstallConfirm(Surface surface) {
             m_font.Draw(surface, row_x, y + 10, kFontSmall, kWarn, note, text_width);
         }
     }
-    m_actions.push_back({kActionInstallStart,
-                         Rect{card_x, card_top, card_width, card_height}, true});
+    /* The card itself is not a button: it is what this package *is*, and the control that starts
+       the install is the Ⓐ hint in the footer, which says so.  (A tap anywhere on the card used to
+       start the install, which is exactly the "this looks like information but acts like a
+       button" problem the control model exists to avoid.) */
 }
 
 int App::DrawPackageCover(Surface surface, int card_x, int card_top, int card_w, int card_h) {
@@ -3159,14 +3186,19 @@ void App::RenderInstallResult(Surface surface) {
     char happened[256];
     switch (status.stage) {
         case install::InstallStage::Skipped: {
-            char installed_version[32];
-            std::snprintf(installed_version, sizeof(installed_version), "%u.%u.%u",
-                          static_cast<unsigned>((status.installed_version >> 16) & 0xFFFF),
-                          static_cast<unsigned>((status.installed_version >> 8) & 0xFF),
-                          static_cast<unsigned>(status.installed_version & 0xFF));
             if (status.installed_version > status.package_version) {
-                std::snprintf(happened, sizeof(happened),
-                              Tr(i18n::StringId::ResultNewerVersionDetail), installed_version);
+                /* The name the console gives the version it has -- never the title version number,
+                   which is Nintendo's build id (3.0.3 is 0x220000, i.e. "34.0.0" if read as one).
+                   When the console has no name for it, the sentence simply leaves the number
+                   out instead of inventing one. */
+                if (status.installed_version_text.empty()) {
+                    std::snprintf(happened, sizeof(happened), "%s",
+                                  Tr(i18n::StringId::ResultNewerVersionPlain));
+                } else {
+                    std::snprintf(happened, sizeof(happened),
+                                  Tr(i18n::StringId::ResultNewerVersionDetail),
+                                  status.installed_version_text.c_str());
+                }
             } else {
                 std::snprintf(happened, sizeof(happened), "%s",
                               Tr(i18n::StringId::ResultSameVersionDetail));

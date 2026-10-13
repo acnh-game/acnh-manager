@@ -18,6 +18,10 @@ namespace acnh_manager::i18n {
 
 enum class Language { ZhHans, English };
 
+/* ResultNewerVersionPlain is the "a newer version is installed" line for the case where the
+   console cannot name that version: the title version number is Nintendo's own build id (3.0.3
+   is 0x220000), so it is never printed as if it were a version. */
+
 enum class StringId {
     AppTitle,
     TabStatus,
@@ -203,6 +207,7 @@ enum class StringId {
     ResultSameVersionDetail,
     ResultNewerVersionDetail,
     ProgressDoNotInterrupt,
+    ResultNewerVersionPlain,
 };
 
 const char *Text(StringId id, Language language);
