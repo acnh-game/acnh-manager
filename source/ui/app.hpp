@@ -212,6 +212,11 @@ private:
     /* Leaves the installer page: the package in hand belongs to the screen that was showing it,
        so it is dropped here and nowhere else (B is the only way out of the page). */
     void LeaveGameInstall();
+    /* Drops the package in hand without leaving the installer: the parsed container, the
+       placeholders the CNMT/NACP read created, and the decoded cover.  What a package that was
+       never installed owes the console, and nothing more -- a run that reached the register step
+       has already given the console its content and its record. */
+    void LeaveInstallScreen();
     void RenderInstallConfirm(Surface surface);
     void RenderInstallProgress(Surface surface);
     void RenderInstallResult(Surface surface);
@@ -219,6 +224,9 @@ private:
        drawn on the card's right-hand side.  Returns the width the card's text may still use. */
     int DrawPackageCover(Surface surface, int card_x, int card_top, int card_w, int card_h);
     std::string m_picked_file;
+    /* Which screen started the run in hand: "back" on the confirm and result screens returns here
+       (the file list for a card install, the input screen for a URL or an upload). */
+    InstallScreen m_install_origin{InstallScreen::Choose};
     std::unique_ptr<install::LocalFileSource> m_file_source;
     std::unique_ptr<install::GameInstall> m_game_install;
     install::InstallStatus m_install_status;

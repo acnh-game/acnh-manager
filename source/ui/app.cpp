@@ -866,7 +866,11 @@ void App::HandleKeys(u32 down) {
         ActivateAction(kActionTabDetails);
         return;
     }
-    if ((down & HidNpadButton_B) != 0) {
+    /* The installer page is the exception: it has its own stack of screens, and there B means "one
+       step back" (see the Page::GameInstall case below, which is where that is decided).  Handling
+       it here too is what turned "back" into "leave the installer" on every one of its screens --
+       and *returning* here instead of falling through would leave B doing nothing at all. */
+    if ((down & HidNpadButton_B) != 0 && m_page != Page::GameInstall) {
         if (m_page == Page::Home) {
             m_should_exit = true; /* B on the home screen leaves the app, as before */
             return;
@@ -875,8 +879,6 @@ void App::HandleKeys(u32 down) {
            everywhere else B is "back to the status page". */
         if (m_page == Page::Guide) {
             m_page = m_guide_return;
-        } else if (m_page == Page::GameInstall) {
-            LeaveGameInstall();
         } else {
             m_page = Page::Home;
         }
@@ -944,7 +946,22 @@ void App::HandleKeys(u32 down) {
                 if ((down & HidNpadButton_A) != 0) {
                     RunGameInstall();
                 } else if ((down & HidNpadButton_B) != 0) {
-                    m_install_screen = InstallScreen::Choose;
+                    /* Back to where this package was picked from, not out of the installer: the
+                       package in hand is dropped on the way, together with the placeholders the
+                       CNMT/NACP read created for it. */
+                    LeaveInstallScreen();
+                    m_install_screen = m_install_origin;
+                    m_focus = FirstEnabled(m_actions);
+                }
+                break;
+            }
+            if (m_install_screen == InstallScreen::Result) {
+                /* The result page is the end of one run, so "back" returns to the screen the run
+                   started from -- another package from the same place, or B once more for the
+                   source screen. */
+                if ((down & HidNpadButton_B) != 0) {
+                    LeaveInstallScreen();
+                    m_install_screen = m_install_origin;
                     m_focus = FirstEnabled(m_actions);
                 }
                 break;
@@ -2422,6 +2439,7 @@ void App::OpenGameInstall() {
     m_game_install_return = m_page;
     m_page = Page::GameInstall;
     m_install_screen = InstallScreen::Choose; /* always start at "pick a source" */
+    m_install_origin = InstallScreen::Choose;
     m_file_dir = "/";
     m_focus = FirstEnabled(m_actions);
     Trace("install: opened from page %d", static_cast<int>(m_game_install_return));
@@ -2511,11 +2529,14 @@ void App::RenderStorageBars(Surface surface) {
         std::snprintf(line, sizeof(line), "%s  %s", Tr(bars[i].label), caption);
         const int width = m_font.Measure(line, kFontSmall);
         const int x = x_right - width;
-        m_font.Draw(surface, x, 22, kFontSmall, kOnHeader, line);
+        /* This page hides the four tabs, so the room the tabs took is what these two blocks sit
+           in; the captions and bars are laid out as one block and centred in the header band
+           instead of hugging its top edge (the earlier 22/52 left 36 px of empty green below). */
+        m_font.Draw(surface, x, 30, kFontSmall, kOnHeader, line);
         /* The bar is as wide as the text above it, so the two read as one block; it used to be a
            fixed 150 px, which left the bar visibly shorter than its own caption. */
         const int bar = width > kBarWidth ? width : kBarWidth;
-        FillRoundedRect(surface, x, 52, bar, kBarHeight, kBarHeight / 2, kHeaderBadge);
+        FillRoundedRect(surface, x, 60, bar, kBarHeight, kBarHeight / 2, kHeaderBadge);
         if (ok && total_bytes > 0) {
             const double used = 1.0 - static_cast<double>(free_bytes) / static_cast<double>(total_bytes);
             const int filled = static_cast<int>(bar * used);
@@ -2579,6 +2600,9 @@ void App::PickFocusedFile() {
 void App::OpenPickedPackage() {
     m_install_error.clear();
     m_install_status = install::InstallStatus{};
+    /* The file list is where this run starts: "back" from the confirm and result screens returns
+       here, so the player who picked the wrong file is one press from picking another. */
+    m_install_origin = InstallScreen::Files;
     m_file_source.reset();
     m_game_install.reset();
     m_cover = ui::Bitmap{};
@@ -2708,7 +2732,22 @@ void App::RunGameInstall() {
 }
 
 void App::LeaveGameInstall() {
+    LeaveInstallScreen();
     m_page = m_game_install_return;
+}
+
+void App::LeaveInstallScreen() {
+    if (m_game_install != nullptr) {
+        const install::InstallStage stage = m_game_install->Status().stage;
+        /* A package that was never installed owes the console the placeholders the CNMT/NACP
+           read created; a run that got as far as registering owns nothing to take back (the
+           content and the record are the player's), which is why the stage is checked before
+           `Abandon` -- that call also rolls a registered run back. */
+        if (stage != install::InstallStage::Done && stage != install::InstallStage::Skipped) {
+            std::string ignored;
+            m_game_install->Abandon(&ignored);
+        }
+    }
     m_game_install.reset();
     m_file_source.reset();
     m_cover = ui::Bitmap{};
