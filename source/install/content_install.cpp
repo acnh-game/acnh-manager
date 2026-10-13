@@ -434,7 +434,10 @@ bool ContentInstaller::Write(const InstallTask &task, const RangeRequest &range,
            flushed -- the earlier version of this diagnostic was lost that way. */
         *error = Describe("writing into the placeholder", rc) + " at offset 0x" +
                  ToHex(&range.offset, sizeof(range.offset)) + " size 0x" +
-                 ToHex(&size, sizeof(size)) + " of content " + content.content_id;
+                 ToHex(&size, sizeof(size)) + " of content " + content.content_id +
+                 " (content offset 0x" + ToHex(&content.offset, sizeof(content.offset)) +
+                 " size 0x" + ToHex(&content.size, sizeof(content.size)) + " written 0x" +
+                 ToHex(&content.written, sizeof(content.written)) + ")";
         return false;
     }
     return true;
