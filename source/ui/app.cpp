@@ -129,8 +129,9 @@ constexpr int kActionInstallStart = 20;   /* "start" on the confirm screen (A) *
 constexpr int kActionInstallBack = 21;    /* the installer's footer "Ⓑ 返回" hint (same as the key) */
 
 /* The four header entries and which of them wear a key badge (the layout needs the same mask
-   for the drawn pill and for the touch target -- see RenderHeader). */
-constexpr bool kHeaderTabHasBadge[acnh_manager::ui::kHeaderTabCount] = {true, false, true, true};
+   for the drawn pill and for the touch target -- see RenderHeader).  Same order as the tabs
+   there: + installer, Ⓛ status, details (none), Ⓡ guide. */
+constexpr bool kHeaderTabHasBadge[acnh_manager::ui::kHeaderTabCount] = {true, true, false, true};
 
 /* Player settings (language today).  Separate from state.json because uninstall deletes that. */
 constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
@@ -1329,16 +1330,16 @@ void App::RenderHeader(Surface surface) {
         i18n::StringId label;
         int action;
     };
-    /* Order matters twice: it is what the player reads left to right, and the device tests
-       identify the current page by which entry carries the underline.  The badges tell what the
-       keys do: Ⓛ and Ⓡ on the two ends of the ring (the shoulder keys that move through it), +
-       on the installer (a mode, entered deliberately), and none on the middle of the ring --
-       nothing goes *straight* there, so a badge would be a promise no key keeps.  - still opens
-       the guide, which is the ring's last stop; the header shows the ring's key rather than two
-       keys for one page. */
-    const Tab tabs[kHeaderTabCount] = {{"L", i18n::StringId::TabStatus, kActionTabStatus},
+    /* Order matters three times: it is what the player reads left to right; the device tests find
+       the current page through the entry that carries the underline; and the *grouping* says what
+       the keys do.  The mode goes first, on its own, then the three pages the ring moves between
+       -- so the two entries that do not answer to L / R never sit between the ones that do.  The
+       badges say the same thing: + on the installer (a mode, entered deliberately), Ⓛ / Ⓡ on the
+       two ends of the ring, and none on the middle of the ring (nothing goes *straight* there, so
+       a badge would be a promise no key keeps).  - still opens the guide, the ring's last stop. */
+    const Tab tabs[kHeaderTabCount] = {{"+", i18n::StringId::TabInstall, kActionGameInstall},
+                                       {"L", i18n::StringId::TabStatus, kActionTabStatus},
                                        {"", i18n::StringId::TabDetails, kActionTabDetails},
-                                       {"+", i18n::StringId::TabInstall, kActionGameInstall},
                                        {"R", i18n::StringId::TabGuide, kActionGuide}};
     int label_width[kHeaderTabCount] = {};
     for (int i = 0; i < kHeaderTabCount; ++i) {
@@ -1393,11 +1394,13 @@ void App::AddChromeActions(int surface_width, int surface_height) {
     if (m_page == Page::Progress || m_page == Page::GameInstall) {
         return;
     }
+    /* Same order as RenderHeader draws (the installer first, then the ring's three pages): the
+       drawn pill and its touch target have to come from one place, and this is the other half. */
     const i18n::StringId header_labels[kHeaderTabCount] = {
-        i18n::StringId::TabStatus, i18n::StringId::TabDetails, i18n::StringId::TabInstall,
+        i18n::StringId::TabInstall, i18n::StringId::TabStatus, i18n::StringId::TabDetails,
         i18n::StringId::TabGuide};
-    const int header_actions[kHeaderTabCount] = {kActionTabStatus, kActionTabDetails,
-                                                 kActionGameInstall, kActionGuide};
+    const int header_actions[kHeaderTabCount] = {kActionGameInstall, kActionTabStatus,
+                                                 kActionTabDetails, kActionGuide};
     int label_width[kHeaderTabCount] = {};
     for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(header_labels[i]), kFontHeading);

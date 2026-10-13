@@ -1531,17 +1531,18 @@ void TestHeaderTabs() {
 
     /* An entry with no badge of its own (the middle of the ring -- no key goes straight there):
        its slot collapses instead of leaving a hole, its label keeps its place, and the entry is
-       still hit-testable where it is drawn. */
-    const bool no_badge[kHeaderTabCount] = {true, false, true, true};
+       still hit-testable where it is drawn.  The mask is the header's real one: + installer, then
+       the ring's three pages, whose middle carries no badge. */
+    const bool no_badge[kHeaderTabCount] = {true, true, false, true};
     const auto ring_layout = LayoutHeaderTabs(1280, label_width, no_badge);
-    CHECK(ring_layout.badge_x[1] == ring_layout.label_x[1]);
-    CHECK(ring_layout.label_x[1] == layout.label_x[1]);
+    CHECK(ring_layout.badge_x[2] == ring_layout.label_x[2]);
+    CHECK(ring_layout.label_x[2] == layout.label_x[2]);
     CHECK(ring_layout.badge_x[0] > layout.badge_x[0]); /* the strip closes up to its right */
     std::vector<acnh_manager::ui::Action> ring_tabs;
     for (int i = 0; i < kHeaderTabCount; ++i) {
         ring_tabs.push_back({i + 1, ring_layout.hit[i], true});
     }
-    CHECK(HitTest(ring_tabs, ring_layout.label_x[1] + label_width[1] / 2, 56) == 2);
+    CHECK(HitTest(ring_tabs, ring_layout.label_x[2] + label_width[2] / 2, 56) == 3);
     for (int i = 0; i + 1 < kHeaderTabCount; ++i) {
         CHECK(ring_layout.hit[i].x + ring_layout.hit[i].w <= ring_layout.hit[i + 1].x);
     }
