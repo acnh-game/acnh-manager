@@ -429,7 +429,12 @@ bool ContentInstaller::Write(const InstallTask &task, const RangeRequest &range,
     const Result rc = ncmContentStorageWritePlaceHolder(&m_storage, &placeholder, range.offset,
                                                         data, size);
     if (R_FAILED(rc)) {
-        *error = Describe("writing into the placeholder", rc);
+        /* Which write, how big, and where.  The reason goes into the *error* string rather than
+           the finish trace: a failed write never reaches Finish, and that is where the trace is
+           flushed -- the earlier version of this diagnostic was lost that way. */
+        *error = Describe("writing into the placeholder", rc) + " at offset 0x" +
+                 ToHex(&range.offset, sizeof(range.offset)) + " size 0x" +
+                 ToHex(&size, sizeof(size)) + " of content " + content.content_id;
         return false;
     }
     return true;
