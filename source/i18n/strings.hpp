@@ -22,6 +22,9 @@ enum class Language { ZhHans, English };
    console cannot name that version: the title version number is Nintendo's own build id (3.0.3
    is 0x220000), so it is never printed as if it were a version. */
 
+/* ResultAgentAlreadyInstalled is the result page's "what now" line when there is nothing to
+   install: the agent is already in place, so telling the player to install it would be wrong. */
+
 enum class StringId {
     AppTitle,
     TabStatus,
@@ -208,6 +211,7 @@ enum class StringId {
     ResultNewerVersionDetail,
     ProgressDoNotInterrupt,
     ResultNewerVersionPlain,
+    ResultAgentAlreadyInstalled,
 };
 
 const char *Text(StringId id, Language language);

@@ -212,6 +212,10 @@ private:
     /* Leaves the installer page: the package in hand belongs to the screen that was showing it,
        so it is dropped here and nowhere else (B is the only way out of the page). */
     void LeaveGameInstall();
+    /* True while the agent's files are in place (and the state file says so): the one answer to
+       "is there an agent to install?", used by the home screen's buttons and by the installer's
+       result page. */
+    bool AgentInstalled() const;
     /* One step back inside the installer: B and the footer's Ⓑ hint are two spellings of one
        control, so both come through here and cannot drift apart.  From the source screen this
        leaves the page. */

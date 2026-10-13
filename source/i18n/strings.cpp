@@ -203,6 +203,7 @@ constexpr Entry kStrings[] = {
 
     {"传输进行中,请不要离开本页面", "Transfer in progress - please stay on this screen"},  /* ProgressDoNotInterrupt */
     {"机器上已经有更新的版本,没有改动", "A newer version is already installed; nothing changed"},  /* ResultNewerVersionPlain */
+    {"agent 已经装好了", "The agent is already installed"},  /* ResultAgentAlreadyInstalled */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

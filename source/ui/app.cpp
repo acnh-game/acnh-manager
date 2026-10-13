@@ -1673,8 +1673,7 @@ void App::BuildHomeActions(int width, int height) {
     (void)height;
     const int inner = width - kHomeMargin * 2;
     const int half = (inner - kHomeGap) / 2;
-    const bool installed = m_have_state && m_home_kind != HomeKind::NeedsInstall &&
-                           m_home_kind != HomeKind::GameMissing;
+    const bool installed = AgentInstalled();
     /* A greyed-out primary button means "nothing to do": already up to date, or this build
        cannot be handled at all. */
     /* Unsupported keeps an enabled primary button: it opens the game installer instead of doing
@@ -2803,6 +2802,14 @@ void App::InstallStepBack() {
     m_focus = FirstEnabled(m_actions);
 }
 
+bool App::AgentInstalled() const {
+    /* "NeedsInstall" is exactly "this console has no agent yet" and "GameMissing" is a console with
+       no game to attach one to; everything else counts as present here -- including a half-written
+       agent, which the home screen offers to repair rather than to install from scratch. */
+    return m_have_state && m_home_kind != HomeKind::NeedsInstall &&
+           m_home_kind != HomeKind::GameMissing;
+}
+
 /* The progress screen: how far along by *bytes*, because one content in a real update is several
    GB and the others are kilobytes -- "3 of 5 contents" would sit at 20% until the very end. */
 void App::RenderInstallProgress(Surface surface) {
@@ -3234,8 +3241,12 @@ void App::RenderInstallResult(Surface surface) {
                                             ? status.installed_version
                                             : status.package_version;
         if (AgentSupportedFor(package.cnmt.title_id, effective)) {
+            /* "The agent can be installed now" is only true while it is not installed yet: after
+               the player has installed it, every later skip (the same package again, or an older
+               one) used to repeat the invitation, which reads as "your agent is missing". */
             m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
-                        Tr(i18n::StringId::ResultAgentReady));
+                        Tr(AgentInstalled() ? i18n::StringId::ResultAgentAlreadyInstalled
+                                            : i18n::StringId::ResultAgentReady));
         } else if (TitleIsOurs(package.cnmt.title_id)) {
             /* The same line as the confirm page, formatted the same way: this string carries the
                versions the agent does handle, so it is a format, not a sentence. */
