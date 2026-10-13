@@ -1383,12 +1383,22 @@ void App::RenderFooter(Surface surface) {
         return;
     }
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Confirm) {
-        const char *start = Tr(i18n::StringId::ConfirmStart);
-        FillRoundedRect(surface, kMargin, y + 7, 30, 30, 15, kHeader);
-        const int key_width = m_font.Measure("A", kFontSmall);
-        m_font.DrawBold(surface, kMargin + (30 - key_width) / 2, y + 13, kFontSmall, kOnHeader,
-                        "A");
-        m_font.Draw(surface, kMargin + 42, y + 12, kFontSmall, kText, start);
+        /* Two hints, side by side: "start" is only useful next to "leave", and drawing them at the
+           same spot (which the first version did) makes an unreadable pile. */
+        int x = kMargin;
+        const auto draw_hint = [&](const char *key, const char *label, Color face, Color ink) {
+            FillRoundedRect(surface, x, y + 7, 30, 30, 15, face);
+            const int key_width = m_font.Measure(key, kFontSmall);
+            m_font.DrawBold(surface, x + (30 - key_width) / 2, y + 13, kFontSmall, ink, key);
+            m_font.Draw(surface, x + 42, y + 12, kFontSmall, kText, label);
+            x += 42 + m_font.Measure(label, kFontSmall) + 34;
+        };
+        draw_hint("A", Tr(i18n::StringId::ConfirmStart), kHeader, kOnHeader);
+        draw_hint("B", Tr(i18n::StringId::LabelBack), kBorder, kText);
+        const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
+        m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
+                    kBuildStamp);
+        return;
     }
     /* The confirmation and result pages carry their own Ⓑ button, so the footer stays quiet
        there: one key, one place. */
