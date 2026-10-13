@@ -426,18 +426,25 @@ bool ContentInstaller::Write(const InstallTask &task, const RangeRequest &range,
         *error = "this content has no placeholder recorded yet";
         return false;
     }
-    const Result rc = ncmContentStorageWritePlaceHolder(&m_storage, &placeholder, range.offset,
+    /* The placeholder *is* the content, so its offsets are content-relative: this writes at
+       `written`, not at `range.offset`.  `range.offset` is where the bytes come from in the
+       container (and it is not even 4 KB aligned -- the container data starts at 0x190), which is
+       why writing there looked fine for a few gigabytes and then had the last chunk refused with
+       an alignment error.  The reference implementation writes at its own running offset too. */
+    char detail[192];
+    std::snprintf(detail, sizeof(detail),
+                  " at content offset %llu size %llu of %s (source offset %llu, content size %llu)",
+                  static_cast<unsigned long long>(content.written),
+                  static_cast<unsigned long long>(size), content.content_id.c_str(),
+                  static_cast<unsigned long long>(range.offset),
+                  static_cast<unsigned long long>(content.size));
+    const Result rc = ncmContentStorageWritePlaceHolder(&m_storage, &placeholder, content.written,
                                                         data, size);
     if (R_FAILED(rc)) {
         /* Which write, how big, and where.  The reason goes into the *error* string rather than
            the finish trace: a failed write never reaches Finish, and that is where the trace is
            flushed -- the earlier version of this diagnostic was lost that way. */
-        *error = Describe("writing into the placeholder", rc) + " at offset 0x" +
-                 ToHex(&range.offset, sizeof(range.offset)) + " size 0x" +
-                 ToHex(&size, sizeof(size)) + " of content " + content.content_id +
-                 " (content offset 0x" + ToHex(&content.offset, sizeof(content.offset)) +
-                 " size 0x" + ToHex(&content.size, sizeof(content.size)) + " written 0x" +
-                 ToHex(&content.written, sizeof(content.written)) + ")";
+        *error = Describe("writing into the placeholder", rc) + detail;
         return false;
     }
     return true;
