@@ -202,6 +202,7 @@ enum class StringId {
     ResultWroteLine,
     ResultSameVersionDetail,
     ResultNewerVersionDetail,
+    ProgressDoNotInterrupt,
 };
 
 const char *Text(StringId id, Language language);

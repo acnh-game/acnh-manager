@@ -1370,6 +1370,26 @@ void App::RenderFooter(Surface surface) {
     StrokeRect(surface, 0, y, surface.width, 2, 2, kBorder);
     /* The footer keeps one thing the buttons cannot show: how to leave.  B gets the same kind
        of badge the buttons use, so the "one button, one action" rule still holds. */
+    /* Two screens of the install flow say something extra here, because the player has to know it
+       before pressing anything:
+         * the transfer runs on this thread and takes no keys at all, so promising a "back" would
+           be a lie -- the footer asks to stay instead (`Y`/`B` cancel on a worker thread, which is
+           a later piece of work; see the design doc);
+         * the confirm screen can be started with `Ⓐ`, and that hint belongs next to "leave". */
+    if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Progress) {
+        const char *hint = Tr(i18n::StringId::ProgressDoNotInterrupt);
+        const int hint_width = m_font.Measure(hint, kFontSmall);
+        m_font.Draw(surface, (surface.width - hint_width) / 2, y + 12, kFontSmall, kWarn, hint);
+        return;
+    }
+    if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Confirm) {
+        const char *start = Tr(i18n::StringId::ConfirmStart);
+        FillRoundedRect(surface, kMargin, y + 7, 30, 30, 15, kHeader);
+        const int key_width = m_font.Measure("A", kFontSmall);
+        m_font.DrawBold(surface, kMargin + (30 - key_width) / 2, y + 13, kFontSmall, kOnHeader,
+                        "A");
+        m_font.Draw(surface, kMargin + 42, y + 12, kFontSmall, kText, start);
+    }
     /* The confirmation and result pages carry their own Ⓑ button, so the footer stays quiet
        there: one key, one place. */
     const bool has_back_button = HasOwnBackButton();
@@ -3026,7 +3046,10 @@ void App::RenderInstallResult(Surface surface) {
             break;
         }
     }
-    m_font.Draw(surface, card_x + 40, card_top + 176, kFontBody, kSubtle, happened);
+    /* Wrapped to the card: a diagnostic like "writing into the placeholder failed (0x307202) at
+       offset ..." ran off the screen edge when it was drawn as one line. */
+    m_font.Draw(surface, card_x + 40, card_top + 176, kFontBody, kSubtle, happened,
+                card_width - 80);
 
     /* What now: only about the agent, and only when it is true. */
     if (status.stage == install::InstallStage::Done ||

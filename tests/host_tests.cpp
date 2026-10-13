@@ -1266,8 +1266,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::ResultNewerVersionDetail) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ResultNewerVersionDetail); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::ProgressDoNotInterrupt) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ProgressDoNotInterrupt); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
