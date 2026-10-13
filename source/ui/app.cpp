@@ -2630,6 +2630,7 @@ void App::RunGameInstall() {
     std::string error;
     if (!m_game_install->Begin(&error)) {
         m_install_error = error;
+        Trace("install: begin failed: %s", error.c_str());
         m_game_install->Abandon(&error);
         m_install_screen = InstallScreen::Result;
         Render();
@@ -2645,6 +2646,9 @@ void App::RunGameInstall() {
     m_install_status = m_game_install->Status();
     if (m_install_status.stage == install::InstallStage::Failed) {
         m_install_error = m_install_status.error;
+        /* The failure has to reach log.txt in full: the screen may wrap or clip it, and a
+           diagnostic that only exists on a 1280-pixel card is not a diagnostic. */
+        Trace("install: transfer failed: %s", m_install_error.c_str());
         m_game_install->Abandon(&error);
         m_install_screen = InstallScreen::Result;
         Render();
@@ -2664,6 +2668,7 @@ void App::RunGameInstall() {
     }
     if (!finished) {
         m_install_error = error;
+        Trace("install: finish failed: %s", error.c_str());
         m_game_install->Abandon(&error);
     }
     m_install_status = m_game_install->Status();
