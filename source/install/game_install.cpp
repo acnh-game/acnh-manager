@@ -206,6 +206,12 @@ bool GameInstall::Prepare(std::string *error) {
              m_package.cnmt.extended_header_size, m_package.cnmt.content_meta_count);
         Note("install: cnmt entries %s", m_package.cnmt.parse_note.c_str());
     }
+    /* Two ids come from the package and are needed again later: the title the meta records are
+       keyed by, and the *application* the game's own data (its name, version, cover, records) is
+       filed under -- base + 0x800 for a patch, base + 0x1000 for an add-on. */
+    const std::uint64_t package_title_id =
+        std::strtoull(m_package.cnmt.title_id.c_str(), nullptr, 16);
+    const std::uint64_t app_id = ApplicationIdOf(package_title_id, m_package.cnmt.type);
 
     /* The control content carries the NACP: the game's name and the version string the player
        knows.  Which content that is comes from the *NCA header* of each file, not from the CNMT's
@@ -299,9 +305,6 @@ bool GameInstall::Prepare(std::string *error) {
        same call the home screen makes.  A game that is not installed has no cover to show, and
        that is not a failure -- the confirm screen simply draws no picture. */
     {
-        const std::uint64_t app_id =
-            ApplicationIdOf(std::strtoull(m_package.cnmt.title_id.c_str(), nullptr, 16),
-                            m_package.cnmt.type);
         std::string icon_error;
         if (m_installer.Services().GetIcon(app_id, &m_icon, &icon_error)) {
             char note[48];
@@ -379,8 +382,22 @@ bool GameInstall::Prepare(std::string *error) {
         std::snprintf(installed_note, sizeof(installed_note), " installed=0x%x", installed_version);
         m_status.detail += installed_note;
     }
-    const SkipDecision decision = DecideSkip(m_options, m_package.cnmt.version, installed_version,
-                                             same_version_installed && RecordPointsAtThisVersion());
+    /* Two ways to arrive at "this version is already here": the exact key is in the meta database,
+       or the newest record for this title id is this version.  Either way it counts as installed
+       only when the console's own application record points at it -- a version that exists in the
+       meta database alone (an install whose record was filed under the patch id) is not something
+       the console can use, and the way to fix it is to install again (no bytes move). */
+    const bool version_matches =
+        installed_version == m_package.cnmt.version && installed_version != 0;
+    bool has_this_version = same_version_installed || version_matches;
+    if (has_this_version && !RecordPointsAtThisVersion()) {
+        Note("install: %s is in the meta database but the console's record for %016llx does not "
+             "point at it: finishing again so the console can use it",
+             m_package.cnmt.title_id.c_str(), static_cast<unsigned long long>(app_id));
+        has_this_version = false;
+    }
+    const SkipDecision decision =
+        DecideSkip(m_options, m_package.cnmt.version, installed_version, has_this_version);
     if (decision != SkipDecision::Install) {
         m_status.stage = InstallStage::Skipped;
         m_status.skip_message =

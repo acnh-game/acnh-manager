@@ -3132,8 +3132,13 @@ void App::RenderInstallResult(Surface surface) {
             m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
                         Tr(i18n::StringId::ResultAgentReady));
         } else if (TitleIsOurs(package.cnmt.title_id)) {
-            m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kWarn,
-                        Tr(i18n::StringId::InstallAgentUnsupported));
+            /* The same line as the confirm page, formatted the same way: this string carries the
+               versions the agent does handle, so it is a format, not a sentence. */
+            char note[160];
+            std::snprintf(note, sizeof(note), Tr(i18n::StringId::InstallAgentUnsupported),
+                          AgentSupportedVersionsFor(package.cnmt.title_id).c_str());
+            m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kWarn, note,
+                        card_width - 80);
         }
     }
     if (status.modified) {

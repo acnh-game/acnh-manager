@@ -38,14 +38,18 @@ bool ReadPackage(ContainerReader &reader, std::string_view name, std::uint64_t c
    here rather than a surprise while fetching. */
 bool FillTaskContents(const PackageInfo &package, InstallTask *task, std::string *error);
 
-/* The two skips the design promises, decided from numbers alone (design section 9, step 4). */
+/* The two skips the design promises, decided from numbers alone (design section 9, step 4).
+   `has_this_version` means "this exact version is installed *and* the console's application record
+   points at it" -- a version that only exists in the meta database is not something the console
+   can use, and the caller passes false so the install repairs the record instead of reporting
+   "nothing to do". */
 enum class SkipDecision {
     Install,
-    AlreadyInstalled, /* same version, and the console already has every content */
+    AlreadyInstalled, /* same version, and the console already has it registered */
     NewerInstalled,   /* the console's version is higher and downgrades are off */
 };
 SkipDecision DecideSkip(const InstallOptions &options, std::uint32_t package_version,
-                        std::uint32_t installed_version, bool same_version_installed);
+                        std::uint32_t installed_version, bool has_this_version);
 
 /* The label the result page shows for a package (base / update / dlc), from the CNMT type. */
 const char *MetaTypeLabel(MetaType type);

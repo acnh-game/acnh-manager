@@ -1187,6 +1187,38 @@ void TestInstallOptions() {
     CHECK(!ticket_only.Validate(&error));
 }
 
+/* The skip decision, which is what decides between "nothing to do" and "install": it is one
+   question now -- is this exact version installed, by the console's own reckoning -- plus the
+   downgrade rule.  The distinction matters because the console's meta database and its application
+   record can disagree, and the answer for a version the console cannot use has to be "install". */
+void TestDecideSkip() {
+    using acnh_manager::install::DecideSkip;
+    using acnh_manager::install::InstallOptions;
+    using acnh_manager::install::SkipDecision;
+
+    const InstallOptions options;
+    constexpr std::uint32_t kVersion2 = 0x160000;
+    constexpr std::uint32_t kVersion3 = 0x220000;
+
+    /* Nothing there: install. */
+    CHECK(DecideSkip(options, kVersion2, 0, false) == SkipDecision::Install);
+    /* This exact version, and the console can use it: skip. */
+    CHECK(DecideSkip(options, kVersion2, kVersion2, true) == SkipDecision::AlreadyInstalled);
+    /* The same number, but the console's record does not point at it: install (this is the repair
+       path -- the bytes are already in the storage, so only the finish step runs). */
+    CHECK(DecideSkip(options, kVersion2, kVersion2, false) == SkipDecision::Install);
+    /* Something newer is installed and downgrades are off: skip, and say which kind of skip. */
+    CHECK(DecideSkip(options, kVersion2, kVersion3, false) == SkipDecision::NewerInstalled);
+
+    InstallOptions upgraded = options;
+    upgraded.allow_downgrade = true;
+    CHECK(DecideSkip(upgraded, kVersion2, kVersion3, false) == SkipDecision::Install);
+
+    InstallOptions forced = options;
+    forced.skip_if_already_installed = false;
+    CHECK(DecideSkip(forced, kVersion2, kVersion2, true) == SkipDecision::Install);
+}
+
 /* The installer's file picker is the app's first scrolling list; the cases below are the ones
    that would otherwise be discovered by scrolling on a console. */
 void TestListView() {
@@ -1637,6 +1669,7 @@ int main() {
     TestInstallTask();
     TestApplicationIdOf();
     TestInstallOptions();
+    TestDecideSkip();
     TestJsonBasics();
     TestJsonRejects();
     TestJsonDumpRoundTrip();

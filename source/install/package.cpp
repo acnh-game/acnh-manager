@@ -115,15 +115,10 @@ bool FillTaskContents(const PackageInfo &package, InstallTask *task, std::string
 }
 
 SkipDecision DecideSkip(const InstallOptions &options, std::uint32_t package_version,
-                        std::uint32_t installed_version, bool same_version_installed) {
-    /* "This exact version and kind is already installed" comes from the record list, not from a
-       version comparison: an update that was installed but whose record lives under a different
-       id must not be mistaken for "nothing there". */
-    if (options.skip_if_already_installed && same_version_installed) {
-        return SkipDecision::AlreadyInstalled;
-    }
-    if (options.skip_if_already_installed && installed_version == package_version &&
-        installed_version != 0) {
+                        std::uint32_t installed_version, bool has_this_version) {
+    /* "This exact version is already here" is one question, asked by the console (see
+       GameInstall::Prepare): the meta database and the application record both have it. */
+    if (options.skip_if_already_installed && has_this_version) {
         return SkipDecision::AlreadyInstalled;
     }
     if (!options.allow_downgrade && installed_version > package_version) {
