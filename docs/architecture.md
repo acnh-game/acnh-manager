@@ -318,6 +318,10 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
 - 清单与内嵌 payload 由导入工具从 acnh-agent 的发布产物生成(门控与落盘清单见
   `docs/release-process.md` 第 2 节)。**没导入时**状态页显示"未内置(等待发布导入)",App 仍能
   启动并显示环境,只是无法安装。
+下面的探针与开关**只存在于开发构建里**:`Makefile` 的 `DEV_AIDS` 默认 0,`tools/build.sh`(开发循环)
+默认打开(构建戳带 `+devaids`),`tools/release.sh` 用 `--release` 关闭并在发布前核对 NRO 里没有探针
+字符串 —— 发布件即使看到这些开关文件也不会有任何反应。
+
 - **M0 探针仍随 App 保留**:在 SD 卡上创建空文件 `/switch/ACNH-Manager/dev-probe` 时,App 会在
   环境报告之后额外运行 M0 取证的探针(写 `spike.log`),用于复核 `fsp-ldr` 等已否路线。
 - **写盘探针**:存在 `/switch/ACNH-Manager/dev-writeprobe` 时,启动阶段会对"绝对/相对 × 普通目录/

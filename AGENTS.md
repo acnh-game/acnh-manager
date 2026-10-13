@@ -16,8 +16,14 @@ Switch 构建纪律)与跨仓库命名规则见工作区根 `AGENTS.md`;产品�
 ## 构建
 
 ```bash
-./tools/build.sh     # 固定镜像 devkitpro/devkita64:20260219;Docker 需 escalation
+./tools/build.sh              # 开发构建(默认带开发期专用件:各探针 + `ui-text` 文本界面),固定镜像
+./tools/build.sh --release    # 发布构建:开发期专用件一律不编译进去(见 Makefile 的 DEV_AIDS)
 ```
+
+**开发期专用件受编译开关控制**(`Makefile` 的 `DEV_AIDS`,默认 0;`tools/build.sh` 默认开、`--release` 关):
+`source/probe.cpp` 的全部探针(M0 环境 / 写盘 / 触摸 / fs 会话 / 大文件)与它们的开关文件检查、
+`source/ui/text_ui.cpp` 的文本界面回退、`dev-pause` 分段暂停。开关打开时构建戳会带 `+devaids`,发布件
+不带;`tools/release.sh` 用 `--release` 构建,并在发布前 `grep` 核对 NRO 里不含探针字符串。
 
 Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,真机安装/测试由用户手工执行。
 链接依赖(见 `docs/architecture.md` 第 7 节):`-lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx`。

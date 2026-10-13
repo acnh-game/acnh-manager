@@ -142,7 +142,14 @@ python3 "${repo_dir}/tools/import-agent-release.py" \
 
 if [ "${skip_nro}" -eq 0 ]; then
     step "4/8 build the NRO (embeds data/)"
-    "${repo_dir}/tools/build.sh"
+    # --release: development aids (probes, text UI) are left out of this build.
+    "${repo_dir}/tools/build.sh" --release
+    # And prove it: the shipped binary must not contain the probes' own strings.
+    if grep -aq "large-file probe\|wprobe\[" "${repo_dir}/acnh-manager.nro"; then
+        echo "release check failed: the NRO still carries development probes" >&2
+        exit 1
+    fi
+    echo "release check: no development probes in acnh-manager.nro"
 else
     step "4/8 skipping the NRO build"
 fi

@@ -1,3 +1,12 @@
+/* Development aid: the console text UI is the fallback used when `/switch/ACNH-Manager/ui-text`
+   exists (see main.cpp).  With DEV_AIDS=0 -- the default, and what a release uses -- it is not
+   built at all. */
+#ifndef ACNH_DEV_AIDS
+#define ACNH_DEV_AIDS 0
+#endif
+
+#if ACNH_DEV_AIDS
+
 #include "text_ui.hpp"
 
 #include <cstdio>
@@ -198,3 +207,5 @@ void TextUi::Run(acnh_manager::Log *log, FsFileSystem &sd) {
 }
 
 }  // namespace acnh_manager::ui
+
+#endif /* ACNH_DEV_AIDS */

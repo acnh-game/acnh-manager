@@ -44,6 +44,14 @@ CFLAGS	+=	-Wno-missing-field-initializers
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 CFLAGS	+=	-DACNH_BUILD_STAMP="\"$(BUILD_STAMP)\""
+# Development aids: the probes in source/probe.cpp (M0 environment, SD write, touch, fs session,
+# large file) and the switches that gate them, plus the console text-UI fallback.  They are
+# *off by default*, because a released binary must not carry machinery that, for example, writes
+# a 4.5 GB file into someone's card because a file with a magic name happens to sit next to it.
+# tools/build.sh turns them on for the development loop (`make DEV_AIDS=1` by hand does the same);
+# tools/release.sh builds with them off and checks the result.
+DEV_AIDS	?=	0
+CFLAGS	+=	-DACNH_DEV_AIDS=$(DEV_AIDS)
 # The app version reaches the code the same way the build stamp does, so a version bump is a
 # one-line change in this file (the manifest gate validates app.minVersion against it).
 CFLAGS	+=	-DACNH_APP_VERSION="\"$(APP_VERSION)\""

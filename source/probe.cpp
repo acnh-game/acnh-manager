@@ -1,3 +1,11 @@
+/* Development aids only: with DEV_AIDS=0 (the default, and what a release uses) this file
+   compiles to nothing, so the shipped binary carries none of the probe code or its strings. */
+#ifndef ACNH_DEV_AIDS
+#define ACNH_DEV_AIDS 0
+#endif
+
+#if ACNH_DEV_AIDS
+
 #include "probe.hpp"
 
 #include <cstddef>
@@ -931,3 +939,5 @@ void RunLargeFileProbe(Log &log, FsFileSystem &sd) {
 }
 
 }  // namespace acnh_manager::probe
+
+#endif /* ACNH_DEV_AIDS */

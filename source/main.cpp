@@ -9,14 +9,24 @@
 #include "log.hpp"
 #include "manifest/manifest.hpp"
 #include "payload/embedded.hpp"
-#include "probe.hpp"
 #include "ui/app.hpp"
-#include "ui/text_ui.hpp"
 #include "util/fs_path.hpp"
 #include "version.hpp"
 
+/* The probes and the text-UI fallback are development aids: the makefile leaves them out of a
+   release build entirely (see DEV_AIDS there), which is also why their includes are behind the
+   same switch -- a released binary should not even carry the strings. */
+#if ACNH_DEV_AIDS
+#include "probe.hpp"
+#include "ui/text_ui.hpp"
+#endif
+
 #ifndef ACNH_BUILD_STAMP
 #define ACNH_BUILD_STAMP "unknown"
+#endif
+
+#ifndef ACNH_DEV_AIDS
+#define ACNH_DEV_AIDS 0
 #endif
 
 /* Exiting: hand the applet back to the applet manager instead of returning to the loader.
@@ -43,6 +53,7 @@ constexpr const char *kBuildStamp = ACNH_BUILD_STAMP;
 constexpr const char *kAppDir = "/switch/ACNH-Manager";
 constexpr const char *kLogPath = "/switch/ACNH-Manager/log.txt";
 constexpr const char *kLogHistoryPath = "/switch/ACNH-Manager/log-history.log";
+#if ACNH_DEV_AIDS
 constexpr const char *kProbeFlagPath = "/switch/ACNH-Manager/dev-probe";
 constexpr const char *kWriteProbeFlagPath = "/switch/ACNH-Manager/dev-writeprobe";
 constexpr const char *kFsProbeFlagPath = "/switch/ACNH-Manager/dev-fsprobe";
@@ -51,6 +62,7 @@ constexpr const char *kFsProbeFlagPath = "/switch/ACNH-Manager/dev-fsprobe";
 constexpr const char *kLargeFileProbeFlagPath = "/switch/ACNH-Manager/dev-largefileprobe";
 constexpr const char *kTouchProbeFlagPath = "/switch/ACNH-Manager/dev-touchprobe";
 constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
+#endif
 constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
 
 const char *AppletTypeName(int type) {
@@ -204,6 +216,7 @@ int main(int argc, char **argv) {
                  rc_dir);
         const auto report = acnh_manager::env::Collect(sd);
         ReportEnvironment(log, report);
+#if ACNH_DEV_AIDS
         if (FileExists(sd, kProbeFlagPath)) {
             log.Line("dev-probe flag present: running the M0 environment probe as well");
             acnh_manager::probe::Run(log, sd);
@@ -220,6 +233,7 @@ int main(int argc, char **argv) {
             log.Line("dev-largefileprobe flag present: measuring how this card handles >4 GiB");
             acnh_manager::probe::RunLargeFileProbe(log, sd);
         }
+#endif
         log.Line("=== done: press + to exit ===");
         log.Sync();
     }
@@ -233,8 +247,9 @@ int main(int argc, char **argv) {
     }
     PrepareEnvironment(R_SUCCEEDED(rc_log) ? &log : nullptr);
 
-    /* UI mode: graphics by default; `/switch/ACNH-Manager/ui-text` falls back to the
-       console text UI. */
+    /* UI mode: graphics by default; `/switch/ACNH-Manager/ui-text` falls back to the console text
+       UI (a development aid, so a release build only has the graphics path). */
+#if ACNH_DEV_AIDS
     const bool want_text_ui = FileExists(sd, kTextUiFlagPath);
     if (want_text_ui) {
         if (R_SUCCEEDED(rc_log)) {
@@ -253,6 +268,7 @@ int main(int argc, char **argv) {
         }
         return 0;
     }
+#endif
 
     /* Graphics path: the log stays open and every stage is recorded, so a crash leaves
        evidence behind. */
@@ -271,10 +287,12 @@ int main(int argc, char **argv) {
             /* Touch probe runs with the first frame already on screen, so the log tells us
                both "did hid give us touch" and "what does a tap look like", with the user
                able to see the UI while they tap. */
+#if ACNH_DEV_AIDS
             if (R_SUCCEEDED(rc_log) && FileExists(sd, kTouchProbeFlagPath)) {
                 log.Line("dev-touchprobe flag present: running the touch probe");
                 acnh_manager::probe::RunTouchProbe(log, sd);
             }
+#endif
             app.Run();
             app.Exit();
             if (R_SUCCEEDED(rc_log)) {

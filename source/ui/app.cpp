@@ -15,8 +15,17 @@
 #include "log.hpp"
 #include "net/update_policy.hpp"
 #include "version.hpp"
-#include "probe.hpp"
 #include "util/fs_path.hpp"
+
+#ifndef ACNH_DEV_AIDS
+#define ACNH_DEV_AIDS 0
+#endif
+
+/* The probes are development aids and are absent from a release build (DEV_AIDS=0 in the
+   makefile); the two places that call them below are behind the same switch. */
+#if ACNH_DEV_AIDS
+#include "probe.hpp"
+#endif
 
 namespace acnh_manager::ui {
 
@@ -35,6 +44,7 @@ void App::Trace(const char *fmt, ...) {
 
 namespace {
 
+#if ACNH_DEV_AIDS
 /* Development switches live as empty files on the card; the app only checks whether the file
    can be opened, never its contents. */
 bool DevFlagPresent(FsFileSystem &sd, const char *path) {
@@ -46,6 +56,7 @@ bool DevFlagPresent(FsFileSystem &sd, const char *path) {
     fsFileClose(&flag);
     return true;
 }
+#endif
 
 /* Family palette (same origin as the icon): teal accent, cream background, sand highlights. */
 constexpr Color kBackground{0xF6, 0xF1, 0xE3, 0xFF};
@@ -265,6 +276,7 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
             }
         }
     }
+#if ACNH_DEV_AIDS
     /* Debug switch: while /switch/ACNH-Manager/dev-pause exists, stop before the first frame
        and wait for +, so sys-agent can read the memory layout of a live process (see
        docs/device-acceptance.md). */
@@ -292,6 +304,7 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
             m_stage_pause = true;
         }
     }
+#endif
     /* Paint one frame right away: that separates "the framebuffer works" from "collecting
        data works". */
     Trace("ui: first frame ...");
@@ -752,9 +765,11 @@ void App::RunInstall() {
     }
     /* Development switch: record every fs call the engine makes, so a failure can be read back
        with the pointer and memory state the kernel saw at that moment. */
+#if ACNH_DEV_AIDS
     if (DevFlagPresent(*m_sd, "/switch/ACNH-Manager/dev-fsprobe")) {
         install::SetFsTraceSink(m_log);
     }
+#endif
     /* The install runs on this thread, so the interface cannot animate while it works -- but it
        can (and must) say what it is doing: one frame before the first byte moves, and one after
        every file.  Without this the player stares at the confirmation page for as long as the
@@ -778,9 +793,11 @@ void App::RunInstall() {
           result.error.empty() ? "" : " error=", result.error.c_str());
     /* Development switch: capture what the fs session can still do, in the state that just
        failed, instead of guessing from a later (healthy) run. */
+#if ACNH_DEV_AIDS
     if (!result.ok && DevFlagPresent(*m_sd, "/switch/ACNH-Manager/dev-fsprobe")) {
         probe::RunFsSessionProbe(*m_log, *m_sd, "after install failure");
     }
+#endif
     if (result.ok) {
         /* The record now describes the version we just installed; the remote release is no
            longer "newer than what is installed", so the next Collect() drops it (and with it the
@@ -792,9 +809,11 @@ void App::RunInstall() {
 }
 
 void App::RunUninstall() {
+#if ACNH_DEV_AIDS
     if (DevFlagPresent(*m_sd, "/switch/ACNH-Manager/dev-fsprobe")) {
         install::SetFsTraceSink(m_log);
     }
+#endif
     BeginProgress(/*uninstall=*/true, static_cast<int>(m_state.files.size()));
     const auto result = install::Uninstall(*m_sd, /*dry_run=*/false,
                                            [this](const install::Progress &p) {
@@ -810,9 +829,11 @@ void App::RunUninstall() {
     m_result_files = result.files_written;
     Trace("uninstall: ok=%d files=%d%s%s", result.ok ? 1 : 0, result.files_written,
           result.error.empty() ? "" : " error=", result.error.c_str());
+#if ACNH_DEV_AIDS
     if (!result.ok && DevFlagPresent(*m_sd, "/switch/ACNH-Manager/dev-fsprobe")) {
         probe::RunFsSessionProbe(*m_log, *m_sd, "after uninstall failure");
     }
+#endif
     if (result.ok) {
         Collect();
     }

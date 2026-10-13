@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # Build the NRO in the pinned image.  The docker socket is sandboxed, so this needs
 # escalation.
+#
+# Development aids (the probes in source/probe.cpp and the console text-UI fallback) are ON by
+# default here, because this is the development loop.  `--release` turns them off, which is what
+# tools/release.sh uses: a released binary must not carry a probe that writes a 4.5 GB file when a
+# file with a magic name exists.
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 image="devkitpro/devkita64:20260219"
+dev_aids=1
+for arg in "$@"; do
+    case "${arg}" in
+        --release) dev_aids=0 ;;
+        *) echo "unknown argument: ${arg}" >&2; exit 2 ;;
+    esac
+done
 
 # Build stamp = UTC time + commit + source-tree hash.  It is written into the binary and
 # shown in the log and in the UI footer, so "is this the build I just made?" has an answer:
@@ -18,10 +30,17 @@ if commit="$(git -C "${repo_dir}" rev-parse --short HEAD 2>/dev/null)"; then
 fi
 src_hash="$(cd "${repo_dir}" && find source -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-8)"
 stamp="${stamp}+src:${src_hash}"
+if [ "${dev_aids}" -eq 1 ]; then
+    stamp="${stamp}+devaids"
+else
+    # Say it on the tin: the footer and log.txt then answer "which kind of build is this?" --
+    # a release build carries no probes, and the stamp is where that is visible.
+    stamp="${stamp}+release"
+fi
 echo "build stamp: ${stamp}"
 
 exec docker run --rm --platform linux/amd64 \
     -v "${repo_dir}:/work" -w /work \
     -e "ACNH_BUILD_STAMP=${stamp}" \
     "${image}" \
-    bash -lc 'source /opt/devkitpro/switchvars.sh && make BUILD_STAMP="$ACNH_BUILD_STAMP"'
+    bash -lc "source /opt/devkitpro/switchvars.sh && make BUILD_STAMP=\"\$ACNH_BUILD_STAMP\" DEV_AIDS=${dev_aids}"
