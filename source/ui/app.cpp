@@ -363,6 +363,9 @@ void App::Collect() {
     if (!m_report.problems.empty()) {
         Trace("collect: problems: %s", m_report.problems.c_str());
     }
+    for (const std::string &note : m_report.notes) {
+        Trace("collect: %s", note.c_str());
+    }
     RefreshPlan();
     UpdateHomeState();
     Trace("collect: gate=%s plan=%s", m_gate.reason.c_str(), PlanActionName(m_plan.action));

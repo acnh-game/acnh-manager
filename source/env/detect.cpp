@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "env/cheat_file.hpp"
+#include "install/nca.hpp"
 #include "util/fs_path.hpp"
 
 namespace acnh_manager::env {
@@ -118,6 +119,89 @@ void CollectDmnt(EnvironmentReport *report) {
    answer and must not be dressed up as a detection problem on the details page (measured on a
    1.0.0 console: rc=0x00000E05).  With a patch installed the same failure *is* a problem and is
    reported. */
+
+/* One line per stored meta record: its size, what its own header says, and the first bytes.  The
+   console reads a title's content list -- and therefore its control data, its icon and the version
+   it shows -- out of these bytes, so a record that this app wrote in a different shape than the
+   system writes its own is the difference between a game the home menu can draw and one it cannot.
+   Both records are logged (the base game's, written by the system, and the update's, written by
+   us) because the comparison is the whole point. */
+void LogMetaBlob(NcmContentMetaDatabase &db, const NcmContentMetaKey &key, const char *label,
+                 EnvironmentReport *report) {
+    char line[256];
+    u64 size = 0;
+    const Result rc_size = ncmContentMetaDatabaseGetSize(&db, &size, &key);
+    std::snprintf(line, sizeof(line), "%s meta blob: size rc=0x%08x size=%llu", label,
+                  static_cast<unsigned>(rc_size), static_cast<unsigned long long>(size));
+    report->notes.emplace_back(line);
+    if (R_FAILED(rc_size) || size == 0 || size > 0x10000) {
+        return;
+    }
+    std::vector<std::uint8_t> blob(static_cast<std::size_t>(size));
+    u64 got = size;
+    const Result rc_get = ncmContentMetaDatabaseGet(&db, &key, &got, blob.data(), blob.size());
+    if (R_FAILED(rc_get)) {
+        std::snprintf(line, sizeof(line), "%s meta blob: read rc=0x%08x", label,
+                      static_cast<unsigned>(rc_get));
+        report->notes.emplace_back(line);
+        return;
+    }
+    install::CnmtInfo info;
+    std::string parse_error;
+    if (install::ParseCnmt(blob.data(), static_cast<std::size_t>(got), &info, &parse_error)) {
+        std::snprintf(line, sizeof(line),
+                      "%s meta blob: header ext=%u contents=%zu metas=%u title=%s v=0x%x type=%u",
+                      label, info.extended_header_size, info.contents.size(),
+                      info.content_meta_count, info.title_id.c_str(), info.version,
+                      static_cast<unsigned>(info.type));
+        report->notes.emplace_back(line);
+    } else {
+        std::snprintf(line, sizeof(line), "%s meta blob: not parseable (%s)", label,
+                      parse_error.c_str());
+        report->notes.emplace_back(line);
+    }
+    std::string hex;
+    const std::size_t dump = got < 0x78 ? static_cast<std::size_t>(got) : 0x78;
+    for (std::size_t i = 0; i < dump; ++i) {
+        std::snprintf(line, sizeof(line), "%02x", blob[i]);
+        hex += line;
+        if (i % 4 == 3) {
+            hex += ' ';
+        }
+        if (i % 0x18 == 0x17) {
+            char row[256];
+            std::snprintf(row, sizeof(row), "%s meta blob: +0x%02zx %s", label, i + 1 - 0x18,
+                          hex.c_str());
+            report->notes.emplace_back(row);
+            hex.clear();
+        }
+    }
+    if (!hex.empty()) {
+        std::snprintf(line, sizeof(line), "%s meta blob: tail %s", label, hex.c_str());
+        report->notes.emplace_back(line);
+    }
+    /* What `ncm` itself reads out of those bytes: the list is the console's answer to "which
+       contents does this title have", and it is the same answer the home menu uses to find the
+       icon.  Comparing it with the bytes above settles the record's layout question with the
+       service's own parser instead of mine. */
+    NcmContentInfo infos[8]{};
+    s32 written = 0;
+    const Result rc_list = ncmContentMetaDatabaseListContentInfo(&db, &written, infos, 8, &key, 0);
+    std::snprintf(line, sizeof(line), "%s meta blob: ncm list rc=0x%08x count=%d", label,
+                  static_cast<unsigned>(rc_list), static_cast<int>(written));
+    report->notes.emplace_back(line);
+    for (s32 i = 0; i < written && i < 8; ++i) {
+        char id_hex[0x21];
+        Hex(id_hex, infos[i].content_id.c, 16);
+        u64 size = 0;
+        ncmContentInfoSizeToU64(&infos[i], &size);
+        std::snprintf(line, sizeof(line), "%s meta blob: ncm info %d id=%s size=%llu type=%u", label,
+                      static_cast<int>(i), id_hex, static_cast<unsigned long long>(size),
+                      static_cast<unsigned>(infos[i].content_type));
+        report->notes.emplace_back(line);
+    }
+}
+
 void CollectNcm(EnvironmentReport *report, bool update_absent) {
     if (R_FAILED(ncmInitialize())) {
         report->problems += "ncmInitialize failed";
@@ -156,6 +240,15 @@ void CollectNcm(EnvironmentReport *report, bool update_absent) {
         Hex(hex, infos[i].content_id.c, 16);
         report->build.content_id = hex;
         break;
+    }
+    /* The base game's record, for the comparison above: it is the same kind of record the install
+       writes for an update, written by the console itself. */
+    {
+        NcmContentMetaKey base{};
+        if (R_SUCCEEDED(ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &base, kAcnhTitleId))) {
+            LogMetaBlob(db, base, "base", report);
+        }
+        LogMetaBlob(db, key, "patch", report);
     }
     serviceClose(&db.s);
 }

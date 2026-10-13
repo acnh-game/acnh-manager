@@ -390,9 +390,9 @@ bool GameInstall::Prepare(std::string *error) {
     const bool version_matches =
         installed_version == m_package.cnmt.version && installed_version != 0;
     bool has_this_version = same_version_installed || version_matches;
-    if (has_this_version && !RecordPointsAtThisVersion()) {
-        Note("install: %s is in the meta database but the console's record for %016llx does not "
-             "point at it: finishing again so the console can use it",
+    if (has_this_version && !ConsoleCanUseInstalledVersion()) {
+        Note("install: %s is in the meta database but the console cannot use that record yet: "
+             "finishing again for %016llx",
              m_package.cnmt.title_id.c_str(), static_cast<unsigned long long>(app_id));
         has_this_version = false;
     }
@@ -569,7 +569,14 @@ bool GameInstall::Finish(std::string *error) {
     inputs.title_id = m_package.cnmt.title_id;
     inputs.version = m_package.cnmt.version;
     inputs.meta_type = static_cast<std::uint8_t>(m_package.cnmt.type);
-    inputs.meta_blob = m_package.meta_blob;
+    /* The record's payload is built in the console's own layout, not copied from the CNMT file --
+       see BuildMetaRecordBlob.  Without this the console stores a record whose content list it
+       cannot read, which is how a title ends up with no control data. */
+    if (!BuildMetaRecordBlob(m_package, &inputs.meta_blob, error)) {
+        m_status.stage = InstallStage::Failed;
+        m_status.error = *error;
+        return false;
+    }
     for (const auto &content : m_task.contents) {
         inputs.content_ids.push_back(content.content_id);
     }
@@ -651,7 +658,7 @@ void GameInstall::RefreshStatus() {
     }
 }
 
-bool GameInstall::RecordPointsAtThisVersion() {
+bool GameInstall::ConsoleCanUseInstalledVersion() {
     const std::uint64_t title_id = std::strtoull(m_package.cnmt.title_id.c_str(), nullptr, 16);
     const std::uint64_t app_id = ApplicationIdOf(title_id, m_package.cnmt.type);
     std::vector<ContentStorageRecord> records;
@@ -673,7 +680,26 @@ bool GameInstall::RecordPointsAtThisVersion() {
     }
     Note("install: record list app=%016llx entries=%zu has-this-version=%d",
          static_cast<unsigned long long>(app_id), records.size(), found ? 1 : 0);
-    return found;
+    if (!found) {
+        return false;
+    }
+    /* Filed under the right application is not the same as usable: the console reads a title's
+       content list -- and through it its control data -- out of the record's payload, so a record
+       written in the wrong shape has to be written again. */
+    const std::size_t trace_before = m_installer.FinishTrace().size();
+    bool usable = false;
+    std::string usable_error;
+    if (!m_installer.RecordIsUsable(m_package.cnmt.title_id, m_package.cnmt.version,
+                                   static_cast<std::uint8_t>(m_package.cnmt.type), &usable,
+                                   &usable_error)) {
+        Note("install: the stored record could not be checked: %s", usable_error.c_str());
+        return false;
+    }
+    const std::vector<std::string> &trace = m_installer.FinishTrace();
+    for (std::size_t i = trace_before; i < trace.size(); ++i) {
+        Note("install: %s", trace[i].c_str());
+    }
+    return usable;
 }
 
 }  // namespace acnh_manager::install

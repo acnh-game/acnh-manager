@@ -38,6 +38,20 @@ bool ReadPackage(ContainerReader &reader, std::string_view name, std::uint64_t c
    here rather than a surprise while fetching. */
 bool FillTaskContents(const PackageInfo &package, InstallTask *task, std::string *error);
 
+/* The bytes the console stores as this package's content-meta record (and reads back when it wants
+   a title's contents, its control data, its icon and its version).
+
+   This is *not* the CNMT file, although it holds the same header, extended header and content
+   entries: the console's record starts with the 8-byte ContentMetaHeader (the CNMT file keeps that
+   at offset 0x0E behind the title id), then the extended header, then one 24-byte content info per
+   content -- the 32-byte SHA-256 that the CNMT carries in front of each entry is not part of it --
+   and finally the content-meta infos.  The package's own meta content (the .cnmt.nca) is listed
+   first and is not in the CNMT's own table, so it is added here; without it the console cannot
+   find a title's control data at all (measured: the home menu drew an empty tile and
+   `nsGetApplicationControlData` answered 0x8C10 while the record itself existed). */
+bool BuildMetaRecordBlob(const PackageInfo &package, std::vector<std::uint8_t> *out,
+                         std::string *error);
+
 /* The two skips the design promises, decided from numbers alone (design section 9, step 4).
    `has_this_version` means "this exact version is installed *and* the console's application record
    points at it" -- a version that only exists in the meta database is not something the console

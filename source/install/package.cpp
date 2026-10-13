@@ -7,6 +7,15 @@
 namespace acnh_manager::install {
 namespace {
 
+/* CNMT layout (the payload `ReadPackage` leaves in PackageInfo::meta_blob).  The header the
+   console's own record starts with sits at 0x0E inside it, after the title id, the version, the
+   meta type and the platform byte. */
+constexpr std::size_t kCnmtHeaderOffset = 0x0E;
+constexpr std::size_t kCnmtHeaderSize = 0x20;       /* title id .. required system version */
+constexpr std::size_t kCnmtContentEntrySize = 0x38; /* 0x20 sha256 + 0x18 content info */
+constexpr std::size_t kContentInfoSize = 0x18;
+constexpr std::size_t kMetaInfoSize = 0x10;
+
 bool EndsWith(std::string_view text, std::string_view suffix) {
     return text.size() >= suffix.size() &&
            text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -23,7 +32,121 @@ const ContainerEntry *FindContentEntry(const ContainerInfo &container, const std
     return nullptr;
 }
 
+std::uint16_t ReadU16(const std::uint8_t *p) {
+    return static_cast<std::uint16_t>(p[0] | (p[1] << 8));
+}
+
+void WriteU16(std::vector<std::uint8_t> *out, std::uint16_t value) {
+    out->push_back(static_cast<std::uint8_t>(value & 0xFF));
+    out->push_back(static_cast<std::uint8_t>((value >> 8) & 0xFF));
+}
+
+/* 32 hex digits -> the 16 bytes they spell.  Content ids are written in a file name and in the
+   record in the same order (checked against a real package: every id the CNMT lists appears in
+   the container's file names character for character). */
+bool IdFromHex(const std::string &hex, std::uint8_t *out) {
+    if (hex.size() < 32) {
+        return false;
+    }
+    for (std::size_t i = 0; i < 16; ++i) {
+        unsigned value = 0;
+        for (int half = 0; half < 2; ++half) {
+            const char c = hex[i * 2 + static_cast<std::size_t>(half)];
+            unsigned digit = 0;
+            if (c >= '0' && c <= '9') {
+                digit = static_cast<unsigned>(c - '0');
+            } else if (c >= 'a' && c <= 'f') {
+                digit = static_cast<unsigned>(c - 'a') + 10;
+            } else if (c >= 'A' && c <= 'F') {
+                digit = static_cast<unsigned>(c - 'A') + 10;
+            } else {
+                return false;
+            }
+            value = (value << 4) | digit;
+        }
+        out[i] = static_cast<std::uint8_t>(value);
+    }
+    return true;
+}
+
+/* One 24-byte NcmContentInfo: id, 40-bit size, attribute, content type, id offset. */
+void AppendContentInfo(std::vector<std::uint8_t> *out, const std::uint8_t *id,
+                       std::uint64_t size, std::uint8_t type) {
+    out->insert(out->end(), id, id + 16);
+    out->push_back(static_cast<std::uint8_t>(size & 0xFF));
+    out->push_back(static_cast<std::uint8_t>((size >> 8) & 0xFF));
+    out->push_back(static_cast<std::uint8_t>((size >> 16) & 0xFF));
+    out->push_back(static_cast<std::uint8_t>((size >> 24) & 0xFF));
+    out->push_back(static_cast<std::uint8_t>((size >> 32) & 0xFF));
+    out->push_back(0);    /* attribute */
+    out->push_back(type); /* NcmContentType */
+    out->push_back(0);    /* id offset: only delta fragments use it */
+}
+
 }  // namespace
+
+bool BuildMetaRecordBlob(const PackageInfo &package, std::vector<std::uint8_t> *out,
+                         std::string *error) {
+    out->clear();
+    const std::vector<std::uint8_t> &payload = package.meta_blob;
+    if (payload.size() < kCnmtHeaderSize) {
+        *error = "the CNMT payload is too small to describe a record";
+        return false;
+    }
+    const std::uint16_t extended_header_size = ReadU16(payload.data() + kCnmtHeaderOffset);
+    const std::uint16_t content_count = ReadU16(payload.data() + kCnmtHeaderOffset + 2);
+    const std::uint16_t content_meta_count = ReadU16(payload.data() + kCnmtHeaderOffset + 4);
+    const std::uint8_t attributes = payload[kCnmtHeaderOffset + 6];
+    const std::uint8_t storage_id = payload[kCnmtHeaderOffset + 7];
+    const std::size_t extended = kCnmtHeaderSize + extended_header_size;
+    const std::size_t entries_end =
+        extended + static_cast<std::size_t>(content_count) * kCnmtContentEntrySize;
+    const std::size_t metas_end =
+        entries_end + static_cast<std::size_t>(content_meta_count) * kMetaInfoSize;
+    if (metas_end > payload.size()) {
+        *error = "the CNMT content table runs past the end of the payload";
+        return false;
+    }
+    const ContainerEntry *meta = nullptr;
+    for (const auto &entry : package.container.contents) {
+        if (entry.name == package.meta_content_name) {
+            meta = &entry;
+            break;
+        }
+    }
+    if (meta == nullptr) {
+        *error = "the container does not carry the meta content it names";
+        return false;
+    }
+
+    std::vector<std::uint8_t> blob;
+    blob.reserve(8 + extended_header_size + (1 + static_cast<std::size_t>(content_count)) *
+                                                          kContentInfoSize +
+                 static_cast<std::size_t>(content_meta_count) * kMetaInfoSize);
+    /* The header the console stores, with this package's meta content counted as a content. */
+    WriteU16(&blob, extended_header_size);
+    WriteU16(&blob, static_cast<std::uint16_t>(content_count + 1));
+    WriteU16(&blob, content_meta_count);
+    blob.push_back(attributes);
+    blob.push_back(storage_id);
+    blob.insert(blob.end(), payload.begin() + kCnmtHeaderSize, payload.begin() + extended);
+    /* The meta content first: it is what the console reads to reach the rest of the title. */
+    std::uint8_t meta_id[16] = {};
+    if (!IdFromHex(meta->name, meta_id)) {
+        *error = "the meta content's name is not a content id";
+        return false;
+    }
+    AppendContentInfo(&blob, meta_id, meta->size, 0); /* 0 = NcmContentType_Meta */
+    for (std::uint16_t i = 0; i < content_count; ++i) {
+        const std::size_t entry =
+            extended + static_cast<std::size_t>(i) * kCnmtContentEntrySize;
+        blob.insert(blob.end(), payload.begin() + entry + 0x20,
+                    payload.begin() + entry + 0x20 + kContentInfoSize);
+    }
+    blob.insert(blob.end(), payload.begin() + entries_end, payload.begin() + metas_end);
+    *out = std::move(blob);
+    return true;
+}
 
 bool ReadPackage(ContainerReader &reader, std::string_view name, std::uint64_t container_size,
                  PackageInfo *out, std::string *error) {

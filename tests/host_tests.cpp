@@ -1662,12 +1662,96 @@ void TestApplicationIdOf() {
     CHECK(ApplicationIdOf(0x01006F800232A800ULL, MetaType::AddOnContent) == 0x01006F800232B000ULL);
 }
 
+/* The record the console stores, built from a CNMT: the layout is what the *service* reads back
+   (there is no second parser to disagree with), so it is pinned here byte by byte.  The console's
+   own record for an installed game is 8-byte header + extended header + 24-byte content infos, in
+   that order, with the meta content listed first and no SHA-256 in front of each entry -- storing
+   the CNMT file's bytes instead is what left a console unable to draw an installed title. */
+void TestBuildMetaRecordBlob() {
+    using acnh_manager::install::BuildMetaRecordBlob;
+    using acnh_manager::install::CnmtContent;
+    using acnh_manager::install::CnmtInfo;
+    using acnh_manager::install::ContainerEntry;
+    using acnh_manager::install::ContentType;
+    using acnh_manager::install::MetaType;
+    using acnh_manager::install::PackageInfo;
+
+    /* A patch with two contents and a 24-byte extended header (the layout of a real update). */
+    PackageInfo package;
+    ContainerEntry meta;
+    meta.name = "3c38f213ac463876a7cb515ae54d7599.cnmt.nca";
+    meta.offset = 0x100;
+    meta.size = 11776;
+    package.meta_content_name = meta.name;
+    package.container.contents.push_back(meta);
+    package.cnmt.title_id = "01006f8002326800";
+    package.cnmt.version = 0x160000;
+    package.cnmt.type = MetaType::Patch;
+    package.cnmt.extended_header_size = 24;
+    package.cnmt.contents = {
+        {"24ff98b9e4329ed7732a0bab58bc9e7a", ContentType::Program, 4229336576},
+        {"f4adcc8d788455d78dd9d93899793b65", ContentType::Control, 1512448},
+    };
+
+    /* The CNMT payload as the device reads it: header at 0x0E, extended header, then one 0x38-byte
+       entry per content (32-byte hash + 24-byte content info). */
+    std::vector<std::uint8_t> payload(0x20 + 24, 0);
+    payload[0x0C] = 0x81; /* Patch */
+    payload[0x0E] = 24;   /* extended header size */
+    payload[0x10] = 2;    /* content count */
+    for (std::size_t i = 0; i < 2; ++i) {
+        const std::size_t entry = 0x20 + 24 + i * 0x38;
+        payload.resize(entry + 0x38, 0);
+        const std::string &id = package.cnmt.contents[i].content_id;
+        for (std::size_t b = 0; b < 16; ++b) {
+            const auto hex = id.substr(b * 2, 2);
+            payload[entry + 0x20 + b] = static_cast<std::uint8_t>(std::stoul(hex, nullptr, 16));
+        }
+        std::uint64_t size = package.cnmt.contents[i].size;
+        for (std::size_t b = 0; b < 4; ++b) {
+            payload[entry + 0x20 + 16 + b] = static_cast<std::uint8_t>((size >> (8 * b)) & 0xFF);
+        }
+        payload[entry + 0x20 + 20] = static_cast<std::uint8_t>((size >> 32) & 0xFF);
+        /* Content type as the CNMT carries it: 1 = Program, 3 = Control (NcmContentType). */
+        payload[entry + 0x20 + 22] = i == 0 ? 1 : 3;
+    }
+    package.meta_blob = payload;
+
+    std::vector<std::uint8_t> blob;
+    std::string error;
+    CHECK(BuildMetaRecordBlob(package, &blob, &error));
+    /* 8 header + 24 extended + 3 content infos (the meta content counts) + no meta infos. */
+    CHECK(blob.size() == 8 + 24 + 3 * 0x18);
+    CHECK(blob[0] == 24 && blob[1] == 0);      /* extended header size */
+    CHECK(blob[2] == 3 && blob[3] == 0);       /* one more content than the CNMT lists */
+    CHECK(blob[4] == 0 && blob[5] == 0);       /* no content-meta infos */
+    CHECK(blob[6] == 0 && blob[7] == 0);       /* attributes, storage */
+    /* The meta content comes first, with the type the service expects for it (0 = Meta). */
+    CHECK(blob[8 + 24 + 0] == 0x3C && blob[8 + 24 + 1] == 0x38);
+    CHECK(blob[8 + 24 + 16] == static_cast<std::uint8_t>(11776 & 0xFF));
+    CHECK(blob[8 + 24 + 22] == 0);
+    /* Then the CNMT's own contents, in order, with their types and sizes kept. */
+    CHECK(blob[8 + 24 + 0x18 + 0] == 0x24 && blob[8 + 24 + 0x18 + 1] == 0xFF);
+    CHECK(blob[8 + 24 + 0x18 + 22] == 1);
+    CHECK(blob[8 + 24 + 0x30 + 0] == 0xF4 && blob[8 + 24 + 0x30 + 1] == 0xAD);
+    CHECK(blob[8 + 24 + 0x30 + 22] == 3);
+    /* The hashes are not part of the record: each entry is exactly 24 bytes. */
+    CHECK(blob[8 + 24 + 0x18 + 16] == static_cast<std::uint8_t>(4229336576 & 0xFF));
+
+    /* A truncated CNMT is refused rather than half-copied. */
+    PackageInfo broken = package;
+    broken.meta_blob.resize(0x20 + 24 + 0x38);
+    CHECK(!BuildMetaRecordBlob(broken, &blob, &error));
+    CHECK(!error.empty());
+}
+
 int main() {
     TestContainer();
     TestQrCode();
     TestNcaAndCnmt();
     TestInstallTask();
     TestApplicationIdOf();
+    TestBuildMetaRecordBlob();
     TestInstallOptions();
     TestDecideSkip();
     TestJsonBasics();

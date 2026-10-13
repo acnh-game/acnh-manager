@@ -139,6 +139,9 @@ void ReportEnvironment(acnh_manager::Log &log,
     if (!report.problems.empty()) {
         log.Line("problems: %s", report.problems.c_str());
     }
+    for (const std::string &note : report.notes) {
+        log.Line("%s", note.c_str());
+    }
 
     /* The manifest this build installs from: the embedded release channel, which the interface
        calls "bundled with the app".  This block used to evaluate with a null manifest and print a

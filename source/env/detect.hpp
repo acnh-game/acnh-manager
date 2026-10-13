@@ -69,6 +69,10 @@ struct EnvironmentReport {
 
     /* Failure diagnostics: empty means every reading succeeded */
     std::string problems;
+    /* Readings that belong in log.txt rather than on the details page: the shape of the meta
+       records the console stores for this title, which is what decides whether the home menu can
+       draw the game at all.  One line per entry. */
+    std::vector<std::string> notes;
 };
 
 /* Collect the environment report.  Read-only: writes no file, changes no config. */

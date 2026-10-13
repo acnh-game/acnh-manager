@@ -116,14 +116,14 @@ public:
 private:
     void RefreshStatus();
     bool WriteRange(const RangeRequest &range, std::uint64_t size, std::string *error);
-    /* True when the console's application record for this game already points at this exact
-       version.  "The meta database has the record" and "the console can use the update" are two
-       different things: an install that filed the record under the patch id instead of the
-       application id left ncm knowing 2.0.0 while the home screen still said 1.0.0.  Treating that
-       as "nothing to do" would make the install unrepairable from the app, so it counts as
-       something to do -- and costs nothing, because every content is already in the storage and
-       only the finish step runs. */
-    bool RecordPointsAtThisVersion();
+    /* True when the console can actually use the version it has recorded.  Two things can be true
+       about a record without that being true: it can sit under the wrong id (an install that filed
+       an update's record as an application of its own left an empty tile on the home screen while
+       ncm knew the version), and its payload can be written in a shape the service cannot read (a
+       record copied from the CNMT file instead of the layout the console stores leaves a title
+       with no control data at all).  Either way the answer is "install again": every content is
+       already in the storage, so only the finish step runs. */
+    bool ConsoleCanUseInstalledVersion();
 
     ContainerReader &m_reader;
     std::string m_name;

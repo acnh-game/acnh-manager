@@ -317,6 +317,65 @@ bool ContentInstaller::InstalledVersion(const std::string &title_id_hex, std::ui
     return true;
 }
 
+bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint32_t version,
+                                      std::uint8_t meta_type, bool *usable, std::string *error) {
+    *usable = false;
+    const std::uint64_t id = std::strtoull(title_id_hex.c_str(), nullptr, 16);
+    if (id == 0) {
+        *error = "the title id is not 16 hex digits";
+        return false;
+    }
+    /* A title's control data is reached through the control content, so a record for a game or an
+       update that cannot name one is a record the console cannot draw (an add-on has no control
+       content, so there the answer is only "the list is readable"). */
+    const bool needs_control = meta_type == 0x80 || meta_type == 0x81;
+    const NcmStorageId storages[2] = {NcmStorageId_SdCard, NcmStorageId_BuiltInUser};
+    for (const NcmStorageId storage : storages) {
+        NcmContentMetaDatabase db{};
+        if (R_FAILED(ncmOpenContentMetaDatabase(&db, storage))) {
+            continue;
+        }
+        NcmContentMetaKey key{};
+        const Result key_rc = ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &key, id);
+        if (R_SUCCEEDED(key_rc) && key.version == version) {
+            NcmContentInfo infos[64]{};
+            s32 count = 0;
+            const Result list_rc = ncmContentMetaDatabaseListContentInfo(&db, &count, infos, 64,
+                                                                         &key, 0);
+            bool has_control = false;
+            bool has_sized = false;
+            for (s32 i = 0; i < count && i < 64; ++i) {
+                u64 size = 0;
+                ncmContentInfoSizeToU64(&infos[i], &size);
+                if (size > 0) {
+                    has_sized = true;
+                }
+                if (infos[i].content_type == 3) { /* NcmContentType_Control */
+                    has_control = true;
+                }
+            }
+            {
+                char note[160];
+                std::snprintf(note, sizeof(note),
+                              "usable? storage=%u rc=0x%x contents=%d sized=%d control=%d",
+                              static_cast<unsigned>(storage), static_cast<unsigned>(list_rc),
+                              static_cast<int>(count), has_sized ? 1 : 0, has_control ? 1 : 0);
+                m_finish_trace.push_back(note);
+            }
+            /* A list the service cannot really read comes back as entries full of zeroes (the
+               offsets it computed run past the payload), which is what a record written in the
+               wrong shape produces; a content with no size is not a content. */
+            if (R_SUCCEEDED(list_rc) && count > 0 && has_sized && (!needs_control || has_control)) {
+                *usable = true;
+                ncmContentMetaDatabaseClose(&db);
+                return true;
+            }
+        }
+        ncmContentMetaDatabaseClose(&db);
+    }
+    return true;
+}
+
 bool ContentInstaller::Has(const std::string &content_id, bool *out, std::string *error) {
     *out = false;
     if (!EnsureOpen(error)) {
@@ -749,28 +808,22 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
                                              old.type == key.type)) {
                         continue;
                     }
-                    u64 blob_size = 0;
-                    if (R_FAILED(ncmContentMetaDatabaseGetSize(&m_meta, &blob_size, &old)) ||
-                        blob_size == 0) {
-                        continue;
-                    }
-                    std::vector<std::uint8_t> blob(blob_size);
-                    if (R_FAILED(ncmContentMetaDatabaseGet(&m_meta, &old, &blob_size, blob.data(),
-                                                           blob.size()))) {
-                        continue;
-                    }
-                    CnmtInfo old_info;
-                    std::string parse_error;
-                    if (ParseCnmt(blob.data(), blob.size(), &old_info, &parse_error)) {
-                        for (const auto &content : old_info.contents) {
+                    /* The old version's contents come from the meta *database*, through the
+                       service's own parser: the stored record is not a CNMT file, and reading it
+                       as one returns nothing (the layout difference is exactly what made the
+                       console unable to draw a title after an install). */
+                    NcmContentInfo infos[64]{};
+                    s32 count = 0;
+                    if (R_SUCCEEDED(ncmContentMetaDatabaseListContentInfo(&m_meta, &count, infos,
+                                                                         64, &old, 0))) {
+                        for (s32 c = 0; c < count && c < 64; ++c) {
+                            NcmContentId id = infos[c].content_id;
+                            const std::string content_hex = ToHex(id.c, 16);
                             if (std::find(inputs.content_ids.begin(), inputs.content_ids.end(),
-                                          content.content_id) != inputs.content_ids.end()) {
+                                          content_hex) != inputs.content_ids.end()) {
                                 continue; /* shared with the version we are installing */
                             }
-                            NcmContentId id{};
-                            if (ContentIdFromHex(content.content_id, &id)) {
-                                ncmContentStorageDelete(&m_storage, &id);
-                            }
+                            ncmContentStorageDelete(&m_storage, &id);
                         }
                     }
                     ncmContentMetaDatabaseRemove(&m_meta, &old);
@@ -807,41 +860,56 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
         }
     }
     {
-        /* The record list belongs to the application id.  What is already there is read back and
-           pushed again unchanged, with this package's key replaced or added: pushing our key alone
-           would leave the rest of the list to the service's merge behaviour, and an install must
-           never be the reason a base game's record disappears.  One record per *content meta*
-           entry (which title, which version, which storage); the individual contents are reached
-           through it, which is why the reference implementation pushes one as well. */
+        /* One record, under the application id: this package's own key and the storage it lives
+           on.  The service adds it to that application's list -- the reference implementation
+           pushes exactly one record for exactly this reason.  Re-pushing the list's other entries
+           was our own invention, and re-pushing a record one did not understand is a way to
+           damage it. */
         ContentStorageRecord mine{};
         mine.key = key;
         mine.storage_id = static_cast<std::uint8_t>(ToNcmStorage(m_target));
-        std::vector<ContentStorageRecord> records;
-        std::vector<ContentStorageRecord> existing;
-        std::string list_error;
-        if (m_services.ListApplicationRecords(record_id, &existing, &list_error)) {
-            for (const auto &entry : existing) {
-                if (entry.key.id == mine.key.id && entry.key.version == mine.key.version &&
-                    entry.key.type == mine.key.type) {
-                    continue; /* the key we are about to push */
-                }
-                records.push_back(entry);
-            }
-        } else {
-            m_finish_trace.push_back("record list unreadable (" + list_error +
-                                     "); pushing this key alone");
-        }
-        records.push_back(mine);
+        const std::vector<ContentStorageRecord> records{mine};
         {
             char note[96];
-            std::snprintf(note, sizeof(note), "record app=%016llx storage=%u list=%zu",
+            std::snprintf(note, sizeof(note), "record app=%016llx key=%016llx storage=%u",
                           static_cast<unsigned long long>(record_id),
-                          static_cast<unsigned>(mine.storage_id), records.size());
+                          static_cast<unsigned long long>(key.id),
+                          static_cast<unsigned>(mine.storage_id));
             m_finish_trace.push_back(note);
         }
         if (!m_services.PushApplicationRecord(record_id, records, error)) {
             return false;
         }
+    }
+
+    /* An update or add-on must never be filed as an application of its own: a build of this app
+       that pushed the record under the patch's id left an extra, empty tile on the home screen
+       (the console knew an application with that id and had nothing to draw for it).  Clearing
+       that application's record list is what removes it, and it touches no content. */
+    if (key.id != record_id) {
+        std::string cleanup_error;
+        if (m_services.DeleteApplicationRecord(key.id, &cleanup_error)) {
+            m_finish_trace.push_back("cleared the record list of " + inputs.title_id +
+                                     " (this package is not an application of its own)");
+        } else {
+            m_finish_trace.push_back("record-list cleanup for " + inputs.title_id + " failed: " +
+                                     cleanup_error);
+        }
+    }
+
+    /* What the console can read back out of the record we just wrote: the same question the home
+       menu asks when it looks for a title's control data.  A record whose content list cannot be
+       read is a title that cannot be drawn, so the answer is traced here instead of inferred from
+       a blank tile later. */
+    {
+        NcmContentInfo infos[64]{};
+        s32 count = 0;
+        const Result list_rc =
+            ncmContentMetaDatabaseListContentInfo(&m_meta, &count, infos, 64, &key, 0);
+        char note[128];
+        std::snprintf(note, sizeof(note), "record read-back rc=0x%x contents=%d",
+                      static_cast<unsigned>(list_rc), static_cast<int>(count));
+        m_finish_trace.push_back(note);
     }
 
     /* 4. The launch version: without it the system refuses to start a title whose record is

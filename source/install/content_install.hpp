@@ -121,6 +121,14 @@ public:
        space calculation both ask. */
     bool Has(const std::string &content_id, bool *out, std::string *error);
 
+    /* True when the console can *use* the record it has for this exact version: the entry exists
+       and the service can read its content list -- the list the home menu walks to reach a title's
+       control data, and therefore its name, its version and its icon.  A record written in the
+       wrong shape is present but unreadable ("the version is installed" and "the console can run
+       it" are different statements), and installing again is what repairs it. */
+    bool RecordIsUsable(const std::string &title_id_hex, std::uint32_t version,
+                        std::uint8_t meta_type, bool *usable, std::string *error);
+
     /* Removes placeholders (the cancel path, and rolling back what a failed run created). */
     bool DropPlaceholders(const std::vector<Placeholder> &placeholders, std::string *error);
 
