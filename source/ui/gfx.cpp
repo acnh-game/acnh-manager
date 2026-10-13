@@ -137,11 +137,35 @@ void Fill(Surface surface, Color color) {
     FillRect(surface, 0, 0, surface.width, surface.height, color);
 }
 
+namespace {
+
+/* Is this image pixel inside the rounded rectangle?  The four corner quadrants are the only
+   places the answer is ever no, so they are tested first and the straight middle costs one
+   comparison.  The same quarter-circle rule FillRoundedRect chips its corners with, so an image
+   drawn with radius r nests in a frame of radius r + inset. */
+bool RoundedRectContains(int w, int h, int r, int px, int py) {
+    if (px >= r && px < w - r) {
+        return true;
+    }
+    if (py >= r && py < h - r) {
+        return true;
+    }
+    /* Which corner: its centre is r in from both edges. */
+    const int cx = px < r ? r : w - 1 - r;
+    const int cy = py < r ? r : h - 1 - r;
+    const int dx = px - cx;
+    const int dy = py - cy;
+    return dx * dx + dy * dy <= r * r;
+}
+
+}  // namespace
+
 void BlitRgbaScaled(Surface surface, int x, int y, int w, int h, const std::uint8_t *rgba, int src_w,
-                    int src_h) {
+                    int src_h, int radius) {
     if (rgba == nullptr || src_w <= 0 || src_h <= 0 || w <= 0 || h <= 0) {
         return;
     }
+    const int r = std::max(0, std::min(radius, std::min(w, h) / 2));
     const Bounds bounds = DrawBounds(surface);
     for (int row = 0; row < h; ++row) {
         const int ty = y + row;
@@ -157,6 +181,9 @@ void BlitRgbaScaled(Surface surface, int x, int y, int w, int h, const std::uint
         for (int col = 0; col < w; ++col) {
             const int tx = x + col;
             if (tx < bounds.x0 || tx >= bounds.x1) {
+                continue;
+            }
+            if (r > 0 && !RoundedRectContains(w, h, r, col, row)) {
                 continue;
             }
             const int sx0 = static_cast<int>(static_cast<long long>(col) * src_w / w);

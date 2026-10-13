@@ -3057,10 +3057,12 @@ int App::DrawPackageCover(Surface surface, int card_x, int card_top, int card_w,
     constexpr int kCover = 200;
     const int x = card_x + card_w - 30 - kCover;
     const int y = card_top + (card_h - kCover) / 2;
-    /* A hairline frame, so a bright cover does not bleed into the card around it. */
+    /* A hairline frame, so a bright cover does not bleed into the card around it -- and the
+       picture's own corners follow it (radius 10 = the frame's 14 less the 4 px inset), so the
+       two read as one rounded object instead of a rounded outline around a square picture. */
     FillRoundedRect(surface, x - 4, y - 4, kCover + 8, kCover + 8, 14, kBorder);
     BlitRgbaScaled(surface, x, y, kCover, kCover, m_cover.rgba.data(), m_cover.width,
-                   m_cover.height);
+                   m_cover.height, 10);
     /* Room left for text, measured from the card's own text inset (36). */
     const int available = x - 24 - (card_x + 36);
     return available > 0 ? available : full_width;

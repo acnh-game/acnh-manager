@@ -74,8 +74,10 @@ void BlendPixel(Surface surface, int x, int y, Color color);
    source box of each destination pixel instead of dropping pixels: a 256x256 cover drawn at 200
    loses every fifth line with nearest-neighbour, which shows as a shimmering picture, while the
    average costs a few hundred microseconds more.  Upscaling repeats the nearest source pixel.
-   The image is blended onto what is already there, so a card drawn underneath shows through. */
+   The image is blended onto what is already there, so a card drawn underneath shows through.
+   `radius` rounds the image's own corners (0 leaves them square), which is what a framed cover
+   needs: a square picture inside a rounded frame shows the frame's corners around empty space. */
 void BlitRgbaScaled(Surface surface, int x, int y, int w, int h, const std::uint8_t *rgba, int src_w,
-                    int src_h);
+                    int src_h, int radius = 0);
 
 }  // namespace acnh_manager::ui
