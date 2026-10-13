@@ -700,12 +700,20 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
     key.type = inputs.meta_type;
     key.install_type = 0; /* NcmContentInstallType_Full */
 
+    /* The record and the launch version belong to the *application*, with this package's key
+       inside: that is how the system connects an update to the game it updates, and how it knows
+       which control data to serve.  Filing the patch's record under the patch id instead left the
+       console reporting 1.0.0 while ncm had the 2.0.0 record (measured on the console: our own
+       query by the application id found only the base game's record). */
+    const std::uint64_t record_id = inputs.record_title_id != 0 ? inputs.record_title_id : key.id;
+
     {
         char note[160];
-        std::snprintf(note, sizeof(note), "key id=%s version=0x%x type=%u install=%u contents=%zu",
+        std::snprintf(note, sizeof(note),
+                      "key id=%s version=0x%x type=%u install=%u contents=%zu record=%016llx",
                       inputs.title_id.c_str(), inputs.version,
                       static_cast<unsigned>(inputs.meta_type), static_cast<unsigned>(key.install_type),
-                      inputs.content_ids.size());
+                      inputs.content_ids.size(), static_cast<unsigned long long>(record_id));
         m_finish_trace.push_back(note);
     }
 
@@ -799,40 +807,71 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
         }
     }
     {
-        /* One record, not one per content: the console's record is about the *content meta*
-           entry (which title, which version, which storage), and the individual contents are
-           reached through it -- the reference implementation pushes exactly one as well. */
-        ContentStorageRecord record{};
-        record.key = key;
-        record.storage_id = static_cast<std::uint8_t>(ToNcmStorage(m_target));
-        const std::vector<ContentStorageRecord> records{record};
+        /* The record list belongs to the application id.  What is already there is read back and
+           pushed again unchanged, with this package's key replaced or added: pushing our key alone
+           would leave the rest of the list to the service's merge behaviour, and an install must
+           never be the reason a base game's record disappears.  One record per *content meta*
+           entry (which title, which version, which storage); the individual contents are reached
+           through it, which is why the reference implementation pushes one as well. */
+        ContentStorageRecord mine{};
+        mine.key = key;
+        mine.storage_id = static_cast<std::uint8_t>(ToNcmStorage(m_target));
+        std::vector<ContentStorageRecord> records;
+        std::vector<ContentStorageRecord> existing;
+        std::string list_error;
+        if (m_services.ListApplicationRecords(record_id, &existing, &list_error)) {
+            for (const auto &entry : existing) {
+                if (entry.key.id == mine.key.id && entry.key.version == mine.key.version &&
+                    entry.key.type == mine.key.type) {
+                    continue; /* the key we are about to push */
+                }
+                records.push_back(entry);
+            }
+        } else {
+            m_finish_trace.push_back("record list unreadable (" + list_error +
+                                     "); pushing this key alone");
+        }
+        records.push_back(mine);
         {
             char note[96];
-            std::snprintf(note, sizeof(note), "record id=%016llx storage=%u",
-                          static_cast<unsigned long long>(key.id),
-                          static_cast<unsigned>(record.storage_id));
+            std::snprintf(note, sizeof(note), "record app=%016llx storage=%u list=%zu",
+                          static_cast<unsigned long long>(record_id),
+                          static_cast<unsigned>(mine.storage_id), records.size());
             m_finish_trace.push_back(note);
         }
-        if (!m_services.PushApplicationRecord(key.id, records, error)) {
+        if (!m_services.PushApplicationRecord(record_id, records, error)) {
             return false;
         }
     }
 
     /* 4. The launch version: without it the system refuses to start a title whose record is
           newer than what it was told to launch (HOS 6.0.0+). */
-    if (!m_services.PushLaunchVersion(key.id, inputs.version, error)) {
+    if (!m_services.PushLaunchVersion(
+            record_id, inputs.launch_version != 0 ? inputs.launch_version : inputs.version, error)) {
         return false;
+    }
+    {
+        char note[96];
+        std::snprintf(note, sizeof(note), "launch version app=%016llx version=0x%x",
+                      static_cast<unsigned long long>(record_id),
+                      static_cast<unsigned>(inputs.launch_version != 0 ? inputs.launch_version
+                                                                     : inputs.version));
+        m_finish_trace.push_back(note);
     }
     /* The system serves a cached NACP per title: without this the version and name it reports
        stay at whatever they were before the install (measured: contents written, record pushed,
        home screen still said 1.0.0).  A patch's control data belongs to the base title, so both
-       ids are refreshed; a failure here is reported, never swallowed. */
+       ids are refreshed (and a base game's own id when the package is a base game); a failure
+       here is reported, never swallowed. */
     if (!m_services.InvalidateApplicationControlCache(key.id, error)) {
+        return false;
+    }
+    if (record_id != key.id && !m_services.InvalidateApplicationControlCache(record_id, error)) {
         return false;
     }
     if (!inputs.base_title_id.empty()) {
         const std::uint64_t base = std::strtoull(inputs.base_title_id.c_str(), nullptr, 16);
-        if (base != 0 && base != key.id &&
+        if (base != 0 && base != key.id && base != record_id &&
             !m_services.InvalidateApplicationControlCache(base, error)) {
             return false;
         }

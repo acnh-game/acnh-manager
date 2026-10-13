@@ -116,6 +116,14 @@ public:
 private:
     void RefreshStatus();
     bool WriteRange(const RangeRequest &range, std::uint64_t size, std::string *error);
+    /* True when the console's application record for this game already points at this exact
+       version.  "The meta database has the record" and "the console can use the update" are two
+       different things: an install that filed the record under the patch id instead of the
+       application id left ncm knowing 2.0.0 while the home screen still said 1.0.0.  Treating that
+       as "nothing to do" would make the install unrepairable from the app, so it counts as
+       something to do -- and costs nothing, because every content is already in the storage and
+       only the finish step runs. */
+    bool RecordPointsAtThisVersion();
 
     ContainerReader &m_reader;
     std::string m_name;

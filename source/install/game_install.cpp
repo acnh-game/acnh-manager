@@ -380,7 +380,7 @@ bool GameInstall::Prepare(std::string *error) {
         m_status.detail += installed_note;
     }
     const SkipDecision decision = DecideSkip(m_options, m_package.cnmt.version, installed_version,
-                                             same_version_installed);
+                                             same_version_installed && RecordPointsAtThisVersion());
     if (decision != SkipDecision::Install) {
         m_status.stage = InstallStage::Skipped;
         m_status.skip_message =
@@ -557,6 +557,30 @@ bool GameInstall::Finish(std::string *error) {
         inputs.content_ids.push_back(content.content_id);
     }
     inputs.base_title_id = m_package.cnmt.application_id; /* set for patches */
+    /* The record and the launch version are filed under the base application id (for a base game
+       that is its own id), with this package's key inside -- see ContentInstaller::Finish. */
+    const std::uint64_t title_id = std::strtoull(m_package.cnmt.title_id.c_str(), nullptr, 16);
+    inputs.record_title_id = ApplicationIdOf(title_id, m_package.cnmt.type);
+    inputs.launch_version = m_package.cnmt.version;
+    if (m_package.cnmt.type != MetaType::Patch) {
+        /* A base game or add-on installed on top of an update must not lower what the console is
+           allowed to launch: the reference implementation takes the newest version it can see for
+           the game.  An update's own version is the package's version (that is the newest record
+           it can be). */
+        char ids[2][0x11];
+        std::snprintf(ids[0], sizeof(ids[0]), "%016llx",
+                      static_cast<unsigned long long>(inputs.record_title_id));
+        std::snprintf(ids[1], sizeof(ids[1]), "%016llx",
+                      static_cast<unsigned long long>(inputs.record_title_id ^ 0x800ULL));
+        for (const char *id_hex : ids) {
+            std::uint32_t installed = 0;
+            std::string ignored;
+            if (m_installer.InstalledVersion(id_hex, &installed, &ignored) &&
+                installed > inputs.launch_version) {
+                inputs.launch_version = installed;
+            }
+        }
+    }
     inputs.ticket = m_package.ticket;
     inputs.certificate = m_package.certificate;
     if (!m_installer.Finish(inputs, error)) {
@@ -608,6 +632,31 @@ void GameInstall::RefreshStatus() {
     if (NextRange(m_task, kBlockSize, &next)) {
         m_status.current_name = m_task.contents[next.index].name;
     }
+}
+
+bool GameInstall::RecordPointsAtThisVersion() {
+    const std::uint64_t title_id = std::strtoull(m_package.cnmt.title_id.c_str(), nullptr, 16);
+    const std::uint64_t app_id = ApplicationIdOf(title_id, m_package.cnmt.type);
+    std::vector<ContentStorageRecord> records;
+    std::string list_error;
+    if (!m_installer.Services().ListApplicationRecords(app_id, &records, &list_error)) {
+        /* Without an answer the safe reading is "the console cannot use it yet": the finish step
+           runs again and, at worst, rewrites the same record. */
+        Note("install: the record list for %016llx could not be read: %s",
+             static_cast<unsigned long long>(app_id), list_error.c_str());
+        return false;
+    }
+    bool found = false;
+    for (const auto &record : records) {
+        if (record.key.id == title_id && record.key.version == m_package.cnmt.version &&
+            record.key.type == static_cast<std::uint8_t>(m_package.cnmt.type)) {
+            found = true;
+            break;
+        }
+    }
+    Note("install: record list app=%016llx entries=%zu has-this-version=%d",
+         static_cast<unsigned long long>(app_id), records.size(), found ? 1 : 0);
+    return found;
 }
 
 }  // namespace acnh_manager::install

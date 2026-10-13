@@ -142,6 +142,16 @@ public:
         /* For a patch, the base title whose control data has to be refreshed.  Empty when the
            package is not a patch. */
         std::string base_title_id;
+        /* The id the application *record* and the launch version are filed under: the base
+           application id, with this package's own meta key inside the record.  An update whose
+           record is pushed under its own patch id leaves the console convinced it still has the
+           old version -- ncm knows the patch, the home screen still says "Ver. 1.0.0".  Zero
+           means "the package's own id" (a base game is filed under itself). */
+        std::uint64_t record_title_id{0};
+        /* What the console is told it may launch.  Normally the package's version, but a base game
+           or add-on installed on top of a newer update must not undo it; zero means
+           `version`. */
+        std::uint32_t launch_version{0};
         std::vector<std::uint8_t> ticket;
         std::vector<std::uint8_t> certificate;
     };
