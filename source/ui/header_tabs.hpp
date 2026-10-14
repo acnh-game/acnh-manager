@@ -19,8 +19,13 @@ constexpr int kHeaderMargin = 40;
 /* Height of the bar the tabs live in (they are drawn in its upper part). */
 constexpr int kHeaderBarHeight = 96;
 constexpr int kHeaderTabBadge = 40;
-constexpr int kHeaderTabBadgeGap = 14;  /* badge <-> label */
-constexpr int kHeaderTabSpacing = 26;   /* between the two tab groups */
+/* Badge-to-label gap and entry-to-entry spacing: they set how much of the header the strip takes,
+   and the strip's left edge is what the app's name and subtitle are drawn against (see
+   RenderHeader).  Measured in English: with the wider values the strip started at x≈420 and the
+   subtitle ("Manager for the Animal Crossing agent") ran under the "+" badge; the tighter values
+   below leave it the room it needs without shortening anybody's words. */
+constexpr int kHeaderTabBadgeGap = 12;  /* badge <-> label */
+constexpr int kHeaderTabSpacing = 16;   /* between entries */
 constexpr int kHeaderTabPadX = 8;       /* touch slop around the drawn group */
 constexpr int kHeaderTabPadY = 8;
 constexpr int kHeaderTabTop = 32;       /* top of the badge */
