@@ -3124,7 +3124,12 @@ void App::RenderInstallConfirm(Surface surface) {
     const int card_x = 180;
     const int card_top = kHeaderHeight + 40;
     const int card_width = surface.width - card_x * 2;
-    const int card_height = 400;
+    /* The second name is a line of its own under the title, so the card grows with it: the rows
+       below (and the note under them, which can wrap to two lines) keep their room instead of
+       being pushed into the card's edge. */
+    const bool second_name = !m_install_status.game_name_alt.empty();
+    const int name_block = second_name ? 44 : 0;
+    const int card_height = 400 + name_block;
     FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
     FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
     /* The cover goes in first: everything the card says is laid out around the room it leaves. */
@@ -3135,11 +3140,29 @@ void App::RenderInstallConfirm(Surface surface) {
                 Tr(i18n::StringId::ConfirmStart));
     const std::string title = m_install_status.game_name.empty() ? package.cnmt.title_id
                                                                 : m_install_status.game_name;
-    m_font.Draw(surface, card_x + 36, card_top + 56, kFontTitle, kText, title.c_str());
+    /* A long name steps down a size or two instead of being cut: this line is the name of the
+       thing being installed, and the cover at the card's right leaves a fixed 630 px for it -- a
+       name like "Animal Crossing: New Horizons" misses that by a few pixels at the full size and
+       would otherwise always end in an ellipsis.  Below the floor a name that is still too long
+       is ellipsized, the way every other line in this UI handles it. */
+    int title_size = kFontTitle;
+    while (title_size > 28 && m_font.Measure(title.c_str(), title_size) > text_width) {
+        title_size -= 2;
+    }
+    m_font.Draw(surface, card_x + 36, card_top + 56, title_size, kText,
+                m_font.Fit(title, title_size, text_width, 1).c_str());
+
+    /* The console's own name for the same package, when its language setting says something else
+       (install/title_name.hpp): one size down, in the colour the labels use, so it reads as the
+       same title in the other language rather than as a second headline. */
+    if (second_name) {
+        m_font.Draw(surface, card_x + 36, card_top + 112, kFontBody, kSubtle,
+                    m_font.Fit(m_install_status.game_name_alt, kFontBody, text_width, 1).c_str());
+    }
 
     const int row_x = card_x + 36;
     const int value_x = card_x + 296;
-    int y = card_top + 136;
+    int y = card_top + 136 + name_block;
     const auto row = [&](i18n::StringId label, const std::string &text) {
         m_font.Draw(surface, row_x, y, kFontBody, kSubtle, Tr(label));
         m_font.Draw(surface, value_x, y, kFontBody, kText, text.c_str());
@@ -3303,7 +3326,8 @@ void App::RenderInstallResult(Surface surface) {
         std::snprintf(what, sizeof(what), "%s %s(%s)", name.c_str(),
                       status.game_version.c_str(), Tr(kind_label));
     }
-    m_font.Draw(surface, card_x + 40, card_top + 118, kFontBody + 4, kText, what);
+    m_font.Draw(surface, card_x + 40, card_top + 118, kFontBody + 4, kText,
+                m_font.Fit(what, kFontBody + 4, card_width - 80, 1).c_str());
 
     /* What happened. */
     char happened[256];

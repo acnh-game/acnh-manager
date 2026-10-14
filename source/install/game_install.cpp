@@ -1,10 +1,13 @@
 #include "install/game_install.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
+#include "i18n/strings.hpp"
 #include "install/nca.hpp"
 #include "install/nca_crypto.hpp"
+#include "install/title_name.hpp"
 
 #include "log.hpp"
 
@@ -36,6 +39,30 @@ void Note(const char *format, ...) {
    that a status poll can slip between two of them, large enough that the per-request cost is
    noise (section 3). */
 constexpr std::size_t kBlockSize = 4 * 1024 * 1024;
+
+std::string EntryName(const NacpLanguageEntry *entry) {
+    if (entry == nullptr) {
+        return std::string();
+    }
+    std::string name;
+    for (char c : entry->name) {
+        if (c == '\0') {
+            break;
+        }
+        name.push_back(c);
+    }
+    return name;
+}
+
+/* Every name the package carries, in the NACP's own slot order, so the choice between them is
+   plain data (`install::ChooseTitleNames`) instead of index arithmetic here. */
+std::array<std::string, kNacpLangCount> EntryNames(const NacpStruct *nacp) {
+    std::array<std::string, kNacpLangCount> names;
+    for (int i = 0; i < kNacpLangCount; ++i) {
+        names[static_cast<std::size_t>(i)] = EntryName(&nacp->lang[i]);
+    }
+    return names;
+}
 
 }  // namespace
 
@@ -286,13 +313,18 @@ bool GameInstall::Prepare(std::string *error) {
                     NacpStruct parsed{};
                     std::memcpy(&parsed, nacp.data(), sizeof(parsed));
                     NacpLanguageEntry *entry = nullptr;
-                    if (R_SUCCEEDED(nacpGetLanguageEntry(&parsed, &entry)) && entry != nullptr) {
-                        m_status.game_name = entry->name;
-                    } else {
-                        for (int i = 0; i < 16 && m_status.game_name.empty(); ++i) {
-                            m_status.game_name = parsed.lang[i].name;
-                        }
+                    if (R_FAILED(nacpGetLanguageEntry(&parsed, &entry))) {
+                        entry = nullptr;
                     }
+                    /* `entry` is the console's answer for its *system* language; the app's own
+                       setting names the package, and the console's name rides along when it says
+                       something else (install/title_name.hpp). */
+                    const TitleNames names =
+                        ChooseTitleNames(EntryNames(&parsed), EntryName(entry), i18n::Current());
+                    m_status.game_name = names.primary;
+                    m_status.game_name_alt = names.alternate;
+                    Note("install: name=\"%s\" console-name=\"%s\"", names.primary.c_str(),
+                         names.alternate.c_str());
                     m_status.game_version = parsed.display_version;
                     nacp_note = "nacp=ok";
                 }

@@ -16,6 +16,7 @@ SOURCES := host_tests.cpp \
            ../source/install/install_task.cpp \
            ../source/install/nca.cpp \
            ../source/install/package.cpp \
+           ../source/install/title_name.cpp \
            ../source/util/qr_code.cpp \
            ../source/ui/settings.cpp \
            ../source/util/sha256.cpp \

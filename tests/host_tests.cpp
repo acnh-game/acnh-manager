@@ -4,6 +4,7 @@
        make -C tests
    The numbers in the cases below come from real hardware (docs/architecture.md section 5). */
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -24,6 +25,7 @@
 #include "install/nca.hpp"
 #include "install/options.hpp"
 #include "install/package.hpp"
+#include "install/title_name.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
 #include "util/size_text.hpp"
@@ -1672,6 +1674,75 @@ void TestHomeState() {
     CHECK(Classify(missing_game) == HomeKind::GameMissing);
 }
 
+/* Which name the confirm screen leads with, and when a second line appears.  The console answers
+   for its own system language, so a package used to be named in Chinese inside the English
+   interface; the app's language now decides, and the console's name rides along underneath. */
+void TestTitleNames() {
+    using acnh_manager::i18n::Language;
+    using acnh_manager::install::ChooseTitleNames;
+    using acnh_manager::install::kNacpAmericanEnglish;
+    using acnh_manager::install::kNacpBritishEnglish;
+    using acnh_manager::install::kNacpLangCount;
+    using acnh_manager::install::kNacpSimplifiedChinese;
+    using acnh_manager::install::kNacpTraditionalChinese;
+
+    std::array<std::string, kNacpLangCount> names;
+    names[kNacpAmericanEnglish] = "Animal Crossing: New Horizons";
+    names[kNacpSimplifiedChinese] = "集合啦!动物森友会";
+    names[kNacpTraditionalChinese] = "集合啦!動物森友會";
+
+    /* The two settings agree: one name, and no second line repeating it. */
+    const auto agreeing =
+        ChooseTitleNames(names, names[kNacpSimplifiedChinese], Language::ZhHans);
+    CHECK(agreeing.primary == names[kNacpSimplifiedChinese]);
+    CHECK(agreeing.alternate.empty());
+
+    /* They disagree: the app's language leads (that is the setting in front of the player), the
+       console's answer follows -- it is the spelling the home menu shows. */
+    const auto differing = ChooseTitleNames(names, names[kNacpSimplifiedChinese], Language::English);
+    CHECK(differing.primary == names[kNacpAmericanEnglish]);
+    CHECK(differing.alternate == names[kNacpSimplifiedChinese]);
+
+    /* Same text from both routes is not two languages. */
+    const auto repeated = ChooseTitleNames(names, names[kNacpAmericanEnglish], Language::English);
+    CHECK(repeated.primary == names[kNacpAmericanEnglish]);
+    CHECK(repeated.alternate.empty());
+
+    /* A title that ships only the sibling spelling still names itself for the app's language, and
+       the console's pick (the same text) adds nothing. */
+    std::array<std::string, kNacpLangCount> traditional_only;
+    traditional_only[kNacpTraditionalChinese] = names[kNacpTraditionalChinese];
+    const auto sibling = ChooseTitleNames(traditional_only, names[kNacpTraditionalChinese],
+                                         Language::ZhHans);
+    CHECK(sibling.primary == names[kNacpTraditionalChinese]);
+    CHECK(sibling.alternate.empty());
+
+    std::array<std::string, kNacpLangCount> british_only;
+    british_only[kNacpBritishEnglish] = "Animal Crossing: New Horizons";
+    const auto british = ChooseTitleNames(british_only, std::string(), Language::English);
+    CHECK(british.primary == british_only[kNacpBritishEnglish]);
+    CHECK(british.alternate.empty());
+
+    /* The package carries nothing in the app's language: the console's name is all there is, and
+       it is not repeated underneath itself. */
+    std::array<std::string, kNacpLangCount> japanese_only;
+    japanese_only[2] = "あつまれ どうぶつの森";
+    const auto foreign = ChooseTitleNames(japanese_only, japanese_only[2], Language::English);
+    CHECK(foreign.primary == japanese_only[2]);
+    CHECK(foreign.alternate.empty());
+
+    /* Neither the app's language nor a console answer: the first slot the package filled. */
+    const auto anywhere = ChooseTitleNames(japanese_only, std::string(), Language::ZhHans);
+    CHECK(anywhere.primary == japanese_only[2]);
+    CHECK(anywhere.alternate.empty());
+
+    /* A package with no name at all: both empty, and the screens then show the title id. */
+    std::array<std::string, kNacpLangCount> unnamed;
+    const auto nothing = ChooseTitleNames(unnamed, std::string(), Language::English);
+    CHECK(nothing.primary.empty());
+    CHECK(nothing.alternate.empty());
+}
+
 /* Settings (interface language and whatever follows it).  They live in their own file so they
    survive an uninstall, and the round trip has to be exact: a parse that quietly drops the
    language is how "the language resets after a restart" came back from the console. */
@@ -1870,6 +1941,7 @@ int main() {
     TestMetaTypeCarriesGameVersion();
     TestHomeState();
     TestSettings();
+    TestTitleNames();
     TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

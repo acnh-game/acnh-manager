@@ -57,6 +57,11 @@ struct InstallStatus {
        person recognises.  Empty until the control content has been read, which is also what
        decides whether the "the agent can be installed afterwards" note is even true. */
     std::string game_name;
+    /* The console's own name for the same package, when its language setting differs from this
+       app's: the screens draw it as a second, smaller line under `game_name` (see
+       install/title_name.hpp for why the app's language leads).  Empty when there is nothing to
+       add. */
+    std::string game_name_alt;
     std::string game_version;
     /* Both versions, so the screens can say *why* something was skipped without depending on
        which code path produced the skip. */
