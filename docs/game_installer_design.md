@@ -413,9 +413,16 @@ emuMMC / 需要 `prod.keys` 的转换项,其中几项在我们的流程里没有
 版本**,所以确认页与结果页对它们**一个字都不提**(真机踩过:装一个 DLC 却弹出"agent 不支持此
 版本" —— 那句话的前提是"这次安装会改变版本",而 DLC 不改变任何版本)。判定在
 `install::MetaTypeCarriesGameVersion()`,主机测试钉住。
-**卡片右侧放游戏封面**:封面就是系统通过 `nsGetApplicationControlData` 给出的那张 JPEG
-(首页显示图标用的是同一个调用),用 portlibs 的 libjpeg(`-ljpeg`)解一次、按盒子平均缩到
-200×200 画上去;机器上没有这个游戏时没有封面,卡片照旧(封面只是"这是什么"的补充)。
+**卡片右侧放游戏封面,图从安装包自身取**:控制内容里每个语言一张图(`icon_AmericanEnglish.dat`、
+`icon_SimplifiedChinese.dat`、…,与 NACP 那十六种语言同一套命名),按 **App 当前界面语言**挑
+(与游戏名同一条规则,`install::ChooseIconFile()` / `source/install/icon_file.hpp`,主机测试钉住);
+本语言的两张都不在时退到 `icon_AmericanEnglish.dat`,再退到"任意一张 `icon_*.dat`"(取名字最小的
+那张,结果与目录列举顺序无关)。挑到的 JPEG 用 portlibs 的 libjpeg(`-ljpeg`)解一次、按盒子平均
+缩到 200×200 画上去。**这样机器上没有这个游戏也照样有图** —— 从包里读,而不是问系统要:
+系统那份控制数据只在游戏装着时才答(而且它答的可能是缓存里那份旧的,我们自己的收尾步骤会把它
+清掉,真机上就出现过"封面自己消失")。包里没有控制内容、或控制内容里没有图时(小的追加内容就是
+这样),才回头问系统 `nsGetApplicationControlData`(首页画图标用的同一个调用);两边都没有就
+不画图,卡片照旧(封面只是"这是什么"的补充)。
 **游戏名按 App 的语言取,主机系统语言的写法另起一行**:同一个标题在 NACP 里最多有 16 种语言的
 写法,而 `nacpGetLanguageEntry()` 回答的是**主机系统语言**那一种 —— App 设成英文、主机是中文时,
 确认页会显示中文游戏名,读起来像 App 忽略了语言设置(真机反馈)。所以:主行用 **App 当前界面语言**
@@ -554,6 +561,7 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
 | `source/install/source_http_client.*` | libcurl 流式下载 + Range 续传 | 设备 |
 | `source/install/source_local_file.*` | SD 文件来源(含文件浏览器数据源) | 设备(逻辑可主机测) |
 | `source/install/title_name.*` | 包里的名字该用哪一种语言显示:App 界面语言的写法放主行,主机系统语言的写法不同时做第二行(第 8 节、第 14 节第 31 条) | 主机(已覆盖) |
+| `source/install/icon_file.*` | 封面取控制内容里的哪一张图:按 App 界面语言挑 `icon_<语言>.dat`,退到 `icon_AmericanEnglish.dat`,再退到任意一张(第 8 节) | 主机(已覆盖) |
 | `source/util/swkbd.*` | 系统软键盘薄封装(参考实现同形状):取 URL、最近 URL 历史 | 设备 |
 | `source/ui/list_view.*` | **新列表控件**:列表绘制 + 焦点 + 滚动(安装页的 SD 文件列表用:只列支持的扩展名) | 主机(布局与滚动计算) |
 | `source/ui/storage_space.*` | 存储指示条:两条内容存储(microSD / 系统)的 free+total 取数,以及"可用 / 总"的人类可读格式化 | 主机(格式化与行组装);取数走设备 |
@@ -579,6 +587,7 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
 | 文案 | 新增文案两列齐全、格式化占位符一致(`tools/check-i18n.py`) |
 | 存储数字格式化 | 字节 → `85.6 GB`;边界:0、恰好 1 GiB、极大值;以及"可用 / 总"整行的组装;读取失败 → 占位串而非 0 |
 | 游戏名取哪一种语言 | App 与主机给的名字一致 → 只有主行;不一致 → 主行 + 第二行;包里没有 App 的语言 → 退回主机给的名字;两边都没有 → 包里第一个非空写法;完全没有名字 → 空(屏上退回 title id) |
+| 封面取哪一张图 | 控制内容里本语言的那张 → 同类语言的另一张 → `icon_AmericanEnglish.dat` → 任意一张 `icon_*.dat`(取名字最小的);一张都没有 → 空(调用方再问系统);名字形状不对的文件(如 `icons.dat`)不算图标 |
 | 安装选项默认值 | 第 5 节那套默认值与参考实现 `include/app.hpp` 一致;非法组合(例如"跳过基础部分"同时"仅安装票据")有明确规则 |
 | 薄层的判定逻辑 | `task id` / 期望 offset 不匹配 → 409;带旧 task id 的请求被拒;`/status.json` 字段组装(不依赖 socket 的部分) |
 

@@ -180,7 +180,8 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   **纯逻辑(由 `tests/host_tests.cpp` 钉住)**:`container.*`(PFS0/HFS0 解析、`.msp` 拒绝)、
   `install_task.*`(按字节的进度、取数区间、`install-task.json`)、`nca.*`(CNMT 与 NCA 头解析、
   distribution 位改写)、`package.*`(容器+CNMT+票据 → "这是什么",以及跳过判定)、`options.hpp`(默认值)、
-  `title_name.*`(包里的名字用哪一种语言显示:App 界面语言优先,主机系统语言的写法另起一行);
+  `title_name.*`(包里的名字用哪一种语言显示:App 界面语言优先,主机系统语言的写法另起一行)、
+  `icon_file.*`(封面取控制内容里的哪一张图:同样按 App 界面语言挑,退到英文图与任意一张);
   **设备侧**:`nca_crypto.*`(spl 现算 NCA 头密钥、头解/加密)、`content_install.*`(ncm 占位/写入/
   Register/收尾/回滚、存储余量)、`nx_services.*`(libnx 没有的 `es`/`ns` 裸 IPC)、
   `source_local_file.*`(SD 文件来源);后续的 `source_http_*` / `http_server.*` / `ui/*` 同样落在这里;

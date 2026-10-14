@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "i18n/strings.hpp"
+#include "install/icon_file.hpp"
 #include "install/nca.hpp"
 #include "install/nca_crypto.hpp"
 #include "install/title_name.hpp"
@@ -247,7 +248,11 @@ bool GameInstall::Prepare(std::string *error) {
        field said "no control content" for a package that plainly has one.  Same read mechanism as
        the CNMT: install the content, mount it, read the file out. */
     {
-        std::string nacp_note = "nacp=none";
+        /* Two facts of their own, each on its own line: this app's log lines are built in a
+           192-byte buffer (App::Trace), and a "-> confirm (...)" line carrying the identity *and*
+           these two used to end mid-word. */
+        std::string nacp_note = "none";
+        std::string icon_note = "none";
         const ContainerEntry *control_entry = nullptr;
         /* The id the mount needs is the one in *this* content's own header: the reference
            implementation passes `nca.header.program_id`, and for an update package that differs
@@ -282,7 +287,7 @@ bool GameInstall::Prepare(std::string *error) {
             }
         }
         if (control_entry == nullptr) {
-            nacp_note = "nacp=no-control-nca";
+            nacp_note = "none (the package carries no control content)";
         } else {
             TaskContent control;
             control.name = control_entry->name;
@@ -294,9 +299,9 @@ bool GameInstall::Prepare(std::string *error) {
             std::string path;
             std::string nacp_error;
             if (!m_installer.InstallContentForRead(m_reader, control, &placeholder, &nacp_error)) {
-                nacp_note = "nacp=install-failed:" + nacp_error;
+                nacp_note = "install-failed: " + nacp_error;
             } else if (!m_installer.PlaceholderFilePath(placeholder, &path, &nacp_error)) {
-                nacp_note = "nacp=path-failed:" + nacp_error;
+                nacp_note = "path-failed: " + nacp_error;
                 m_installer.DropPlaceholders({placeholder}, &nacp_error);
             } else {
                 m_read_placeholders.push_back(placeholder);
@@ -306,9 +311,9 @@ bool GameInstall::Prepare(std::string *error) {
                 if (!m_installer.ReadFromContent(path, control_title_id,
                                                  FsFileSystemType_ContentControl, "/control.nacp",
                                                  &nacp, &nacp_error)) {
-                    nacp_note = "nacp=read-failed:" + nacp_error;
+                    nacp_note = "read-failed: " + nacp_error;
                 } else if (nacp.size() < sizeof(NacpStruct)) {
-                    nacp_note = "nacp=too-small";
+                    nacp_note = "too small to be an NACP";
                 } else {
                     NacpStruct parsed{};
                     std::memcpy(&parsed, nacp.data(), sizeof(parsed));
@@ -326,25 +331,47 @@ bool GameInstall::Prepare(std::string *error) {
                     Note("install: name=\"%s\" console-name=\"%s\"", names.primary.c_str(),
                          names.alternate.c_str());
                     m_status.game_version = parsed.display_version;
-                    nacp_note = "nacp=ok";
+                    nacp_note = "ok";
+                }
+                /* The picture is in this same content, one file per language (install/
+                   icon_file.hpp): read from the package, so the card shows what is about to be
+                   installed even on a console where that game is not installed at all. */
+                std::vector<std::string> control_files;
+                std::string icon_error;
+                if (!m_installer.ListContentFiles(path, control_title_id,
+                                                  FsFileSystemType_ContentControl, &control_files,
+                                                  &icon_error)) {
+                    icon_note = "list-failed: " + icon_error;
+                } else {
+                    const std::string icon_file = ChooseIconFile(control_files, i18n::Current());
+                    if (icon_file.empty()) {
+                        icon_note = "none (the control content carries no icon)";
+                    } else if (!m_installer.ReadFromContent(path, control_title_id,
+                                                            FsFileSystemType_ContentControl,
+                                                            "/" + icon_file, &m_icon,
+                                                            &icon_error)) {
+                        icon_note = "read-failed: " + icon_error;
+                    } else {
+                        icon_note = icon_file + " (" + std::to_string(m_icon.size()) + " bytes)";
+                    }
                 }
             }
         }
-        m_status.detail += " " + nacp_note;
+        Note("install: control content: %s", nacp_note.c_str());
+        Note("install: cover: %s", icon_note.c_str());
     }
 
-    /* The cover comes from the console's own control data for the *game* the package belongs to,
-       not from the package's own control content: the icon is the game's, and asking `ns` is the
-       same call the home screen makes.  A game that is not installed has no cover to show, and
-       that is not a failure -- the confirm screen simply draws no picture. */
-    {
+    /* Only when the package carries no picture of its own (an add-on, whose control content holds
+       the NACP and no icon, or a package with no control content at all) does the console get
+       asked for the game's icon -- the same call the home screen makes.  It answers only while the
+       game is installed: its control data is served from a cache that our own finish step clears
+       after an install, so a stale picture can disappear without anything having gone wrong. */
+    if (m_icon.empty()) {
         std::string icon_error;
         if (m_installer.Services().GetIcon(app_id, &m_icon, &icon_error)) {
-            char note[48];
-            std::snprintf(note, sizeof(note), " icon=%zuB", m_icon.size());
-            m_status.detail += note;
+            Note("install: cover: the package has none; the console's own is %zu bytes",
+                 m_icon.size());
         } else {
-            m_status.detail += " icon=none";
             Note("install: no cover for %016llx: %s", static_cast<unsigned long long>(app_id),
                  icon_error.c_str());
         }

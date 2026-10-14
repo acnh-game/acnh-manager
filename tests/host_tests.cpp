@@ -25,6 +25,7 @@
 #include "install/nca.hpp"
 #include "install/options.hpp"
 #include "install/package.hpp"
+#include "install/icon_file.hpp"
 #include "install/title_name.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
@@ -1674,6 +1675,52 @@ void TestHomeState() {
     CHECK(Classify(missing_game) == HomeKind::GameMissing);
 }
 
+/* Which picture file inside a control content the confirm card shows.  The card used to have no
+   picture whenever the game was not installed (the console then has no control data to hand out,
+   and its cached one can be cleared by an install), so the package's own icon is what the choice
+   is made from now. */
+void TestIconFile() {
+    using acnh_manager::i18n::Language;
+    using acnh_manager::install::ChooseIconFile;
+    using acnh_manager::install::kIconFallbackFile;
+
+    /* A package that ships the full set: the app's language picks, not the console's. */
+    const std::vector<std::string> complete = {
+        "control.nacp", "icon_Japanese.dat", "icon_AmericanEnglish.dat",
+        "icon_BritishEnglish.dat", "icon_SimplifiedChinese.dat", "icon_TraditionalChinese.dat",
+        "icon_Korean.dat", "legalinfo"};
+    CHECK(ChooseIconFile(complete, Language::English) == "icon_AmericanEnglish.dat");
+    CHECK(ChooseIconFile(complete, Language::ZhHans) == "icon_SimplifiedChinese.dat");
+
+    /* Only the sibling spelling is there: a reader of the other one still gets that language. */
+    const std::vector<std::string> siblings = {"control.nacp", "icon_BritishEnglish.dat",
+                                              "icon_TraditionalChinese.dat"};
+    CHECK(ChooseIconFile(siblings, Language::English) == "icon_BritishEnglish.dat");
+    CHECK(ChooseIconFile(siblings, Language::ZhHans) == "icon_TraditionalChinese.dat");
+
+    /* Neither of the app's two spellings: the reference implementation's fallback, which every
+       package that carries icons at all carries. */
+    const std::vector<std::string> english_only = {"control.nacp", "icon_AmericanEnglish.dat",
+                                                  "icon_Japanese.dat"};
+    CHECK(ChooseIconFile(english_only, Language::ZhHans) == kIconFallbackFile);
+
+    /* Nothing the app reads, but a picture all the same: the smallest name, so the answer does not
+       depend on the order the filesystem handed the names over. */
+    const std::vector<std::string> foreign = {"control.nacp", "icon_Korean.dat",
+                                             "icon_Japanese.dat"};
+    CHECK(ChooseIconFile(foreign, Language::English) == "icon_Japanese.dat");
+    const std::vector<std::string> foreign_reordered = {"icon_Japanese.dat", "icon_Korean.dat",
+                                                       "control.nacp"};
+    CHECK(ChooseIconFile(foreign_reordered, Language::English) == "icon_Japanese.dat");
+
+    /* A control content with no icon at all (a small add-on): no picture, and the caller asks the
+       console instead.  Names that merely start with "icon" are not icons: the shape is
+       "icon_<language>.dat". */
+    const std::vector<std::string> none = {"control.nacp", "iconoth.dat", "icons.dat"};
+    CHECK(ChooseIconFile(none, Language::English).empty());
+    CHECK(ChooseIconFile({}, Language::ZhHans).empty());
+}
+
 /* Which name the confirm screen leads with, and when a second line appears.  The console answers
    for its own system language, so a package used to be named in Chinese inside the English
    interface; the app's language now decides, and the console's name rides along underneath. */
@@ -1942,6 +1989,7 @@ int main() {
     TestHomeState();
     TestSettings();
     TestTitleNames();
+    TestIconFile();
     TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

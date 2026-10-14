@@ -710,9 +710,9 @@ install: name="集合啦！动物森友会" console-name=""
 
 第二次的 `console-name` 为空是规则本身:主机给的名字与 App 语言读到的一致,就不重复给第二行。
 没有 NACP 的包照旧显示 title id(本次用 `[DLC][01006F800232712C][v0].nsp`,日志写
-`nacp=no-control-nca`)。同一次也走了"装 → 结果页 → 再选同一个文件 → 「已安装,跳过」"这条链,
-确认改名字这件事没有碰到安装流程本身。名字过长时主行降一档字号(英文名在 40 px 下比卡片留出的
-宽度多几个像素,原先总以省略号结尾)。
+`install: control content: none (the package carries no control content)`)。同一次也走了
+"装 → 结果页 → 再选同一个文件 → 「已安装,跳过」"这条链,确认改名字这件事没有碰到安装流程本身。
+名字过长时主行降一档字号(英文名在 40 px 下比卡片留出的宽度多几个像素,原先总以省略号结尾)。
 
 **顺带观察(本轮不改,先记下来)**:机器上只有追加内容、没有本体时,装完之后桌面上会多出一个
 空白带转圈的方块。收尾把记录推到**应用 id**(`01006F8002326000`)下,参考实现也是这么做的,
@@ -720,3 +720,29 @@ install: name="集合啦！动物森友会" console-name=""
 之后多了且只多了这一条(`collect: ns app 01006F8002326000 events=3 metas=1 130:v=0x0@5`),
 桌面上也相应多了且只多了一个方块。预期装上本体之后这块就是本体那一块(本轮未验)。
 这次装的是 `[DLC][01006F800232712C][v0].nsp`(116 KB),验证完留在机器上。
+
+## 封面改从安装包自身读(2026-10-14,同一轮)
+
+用户报"开始安装页看不到封面图"。查下来不是界面代码被删:封面那时来自系统的
+`nsGetApplicationControlData`,而它只在游戏装着时才有控制数据可给 —— 之前看到的那张图是系统
+缓存里剩下的(这台机器以前装过本体),而安装收尾会**主动清掉这份缓存**(必须清,否则装完更新后
+系统读到的还是旧控制数据),机器上又没有本体,封面就没了。当时的日志原文:
+`install: no cover for 01006F8002326000: no control data for this title (0x10640000)`。
+
+改为**从安装包自身的控制内容读图**(`install::ChooseIconFile()`,规则见
+`docs/game_installer_design.md` 第 8 节):控制内容里每个语言一张 `icon_<语言>.dat`,按 App 界面
+语言挑,退到 `icon_AmericanEnglish.dat`,再退到任意一张;包里没有图才回头问系统。真机实测(同一台
+机器、**本体没有安装**、卡上同一份 `.NSP/Animal Crossing New Horizons [01006F8002326000][v0].nsp`):
+
+| App 界面语言 | 画面 | 日志 |
+|---|---|---|
+| 中文 | 中文封面(画面上是"集合啦！动物森友会"那张) | `install: control content: ok` + `install: cover: icon_SimplifiedChinese.dat (101298 bytes)` |
+| 英文 | 英文封面(画面上是 "Animal Crossing: New Horizons" 那张) | `install: cover: icon_AmericanEnglish.dat (100536 bytes)` |
+
+没有控制内容的包(`[DLC][01006F800232712C][v0].nsp`)如实记录成两行,画面不带图:
+`install: control content: none (the package carries no control content)`、
+`install: cover: none`,随后系统那边也答"没有这个标题的控制数据"。
+
+顺带把两处日志修得能读:控制内容与封面各自单独一行(原来塞在 `-> confirm (…)` 那一行末尾,
+而那一行由 `App::Trace` 的 192 字节缓冲生成,尾巴会被截断 —— 真机上那行一直停在 `nacp`
+四个字符上),`install: name=…` 与它们一起构成"这一步读到了什么"的完整证据。

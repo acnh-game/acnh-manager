@@ -26,6 +26,22 @@ FsContentStorageId ToFsContentStorage(TargetStorage target) {
     return target == TargetStorage::Nand ? FsContentStorageId_User : FsContentStorageId_SdCard;
 }
 
+/* Mounts a content for reading.  The path comes out of a std::string that was built by
+   concatenation, so it goes through util::FsPath first: the declared-window rule (see
+   util/fs_path.hpp) applies to the path handed to `fsOpenFileSystemWithId` just as much as to the
+   file inside, and one that happens to end its allocation fails the mount with 0xD401. */
+bool MountContent(const std::string &path, std::uint64_t title_id, FsFileSystemType type,
+                  FsFileSystem *out, std::string *error) {
+    const util::FsPath safe(path);
+    const Result rc =
+        fsOpenFileSystemWithId(out, title_id, type, safe.c_str(), FsContentAttributes_All);
+    if (R_FAILED(rc)) {
+        *error = Describe("mounting the installed content", rc);
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 std::string ToHex(const void *bytes, std::size_t size) {
@@ -743,16 +759,54 @@ bool ContentInstaller::ContentPath(const std::string &content_id, std::string *o
     return true;
 }
 
+bool ContentInstaller::ListContentFiles(const std::string &path, std::uint64_t title_id,
+                                        FsFileSystemType type, std::vector<std::string> *out,
+                                        std::string *error) {
+    out->clear();
+    FsFileSystem fs{};
+    if (!MountContent(path, title_id, type, &fs, error)) {
+        return false;
+    }
+    FsDir dir{};
+    Result rc = fsFsOpenDirectory(&fs, "/", FsDirOpenMode_ReadFiles, &dir);
+    if (R_FAILED(rc)) {
+        fsFsClose(&fs);
+        *error = Describe("listing the content", rc);
+        return false;
+    }
+    /* One entry per call: the control content holds a handful of files, so the extra calls cost
+       nothing next to getting the buffer size wrong. */
+    FsDirectoryEntry entry{};
+    while (true) {
+        s64 read = 0;
+        rc = fsDirRead(&dir, &read, 1, &entry);
+        if (R_FAILED(rc)) {
+            fsDirClose(&dir);
+            fsFsClose(&fs);
+            *error = Describe("reading the content's directory", rc);
+            return false;
+        }
+        if (read < 1) {
+            break;
+        }
+        if (entry.type == FsDirEntryType_File) {
+            out->emplace_back(entry.name);
+        }
+    }
+    fsDirClose(&dir);
+    fsFsClose(&fs);
+    return true;
+}
+
 bool ContentInstaller::ReadFromContent(const std::string &path, std::uint64_t title_id,
                                        FsFileSystemType type, const std::string &name,
                                        std::vector<std::uint8_t> *out, std::string *error) {
     out->clear();
     FsFileSystem fs{};
-    Result rc = fsOpenFileSystemWithId(&fs, title_id, type, path.c_str(), FsContentAttributes_All);
-    if (R_FAILED(rc)) {
-        *error = Describe("mounting the installed content", rc);
+    if (!MountContent(path, title_id, type, &fs, error)) {
         return false;
     }
+    Result rc = 0;
     std::string target = name;
     if (target.empty()) {
         /* The meta content's root holds one file: the CNMT.  Listing instead of hardcoding its

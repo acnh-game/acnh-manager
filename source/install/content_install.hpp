@@ -96,6 +96,12 @@ public:
                          const std::string &name, std::vector<std::uint8_t> *out,
                          std::string *error);
 
+    /* The file names in the root of a mounted content, in the order the filesystem hands them
+       over (callers that need a stable choice sort or rank them themselves).  The control content
+       needs this to find the icon for a language: its name is not a fact the CNMT carries. */
+    bool ListContentFiles(const std::string &path, std::uint64_t title_id, FsFileSystemType type,
+                          std::vector<std::string> *out, std::string *error);
+
     /* True when any application (a game) is running, suspended in the background included.  The
        installer asks this before it even opens the package: its finish step deletes the older
        version of the title it installs, and a player who is told "close the game first" can act
