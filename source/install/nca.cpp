@@ -57,6 +57,10 @@ const char *MetaTypeLabel(MetaType type) {
     return "unknown";
 }
 
+bool MetaTypeCarriesGameVersion(MetaType type) {
+    return type == MetaType::Application || type == MetaType::Patch;
+}
+
 /* Title ids are stored little-endian in the headers but written big-endian everywhere a person
    reads them (file names, tickets, the log).  Content ids are the other way round: they are
    already in the order the names use.  Getting this backwards made the console answer "no such

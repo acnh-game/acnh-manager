@@ -1587,6 +1587,21 @@ void TestFormatSize() {
     CHECK(FormatSize(1024ULL * 1024 * 1024) == "1.0 GB");
 }
 
+/* Which package kinds the agent's version gate is about: only the game and its update change the
+   version the gate reads.  Getting this wrong is a *wrong* sentence on screen (an add-on install
+   once warned that the agent does not support "this version", which an add-on does not touch). */
+void TestMetaTypeCarriesGameVersion() {
+    using acnh_manager::install::MetaType;
+    using acnh_manager::install::MetaTypeCarriesGameVersion;
+
+    CHECK(MetaTypeCarriesGameVersion(MetaType::Application));
+    CHECK(MetaTypeCarriesGameVersion(MetaType::Patch));
+    CHECK(!MetaTypeCarriesGameVersion(MetaType::AddOnContent));
+    CHECK(!MetaTypeCarriesGameVersion(MetaType::DataPatch));
+    CHECK(!MetaTypeCarriesGameVersion(MetaType::Delta));
+    CHECK(!MetaTypeCarriesGameVersion(MetaType::Unknown));
+}
+
 /* Home-screen state: the eight states and their priority.  Getting the order wrong would
    show "install" to someone whose game is not even installed, so it is pinned here. */
 void TestHomeState() {
@@ -1830,6 +1845,7 @@ int main() {
     TestHeaderTabs();
     TestPeerRing();
     TestFormatSize();
+    TestMetaTypeCarriesGameVersion();
     TestHomeState();
     TestSettings();
     TestTextWrap();

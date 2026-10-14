@@ -3125,10 +3125,12 @@ void App::RenderInstallConfirm(Surface surface) {
     }
     row(i18n::StringId::ConfirmTarget, Tr(i18n::StringId::StorageSdCard));
 
-    if (TitleIsOurs(package.cnmt.title_id)) {
+    if (TitleIsOurs(package.cnmt.title_id) &&
+        install::MetaTypeCarriesGameVersion(package.cnmt.type)) {
         /* Three cases, not two: our game with a supported version is the only one where the agent
            can be installed afterwards.  Our game with a version the agent does not handle has to
-           say so; a package that is not ours says nothing at all. */
+           say so; a package that is not ours says nothing at all -- and neither does an add-on or
+           a data patch, because the version this note is about is not theirs to change. */
         const bool supported = AgentSupportedFor(package.cnmt.title_id, package.cnmt.version);
         if (supported) {
             m_font.Draw(surface, row_x, y + 10, kFontSmall, kGood,
@@ -3299,9 +3301,12 @@ void App::RenderInstallResult(Surface surface) {
     m_font.Draw(surface, card_x + 40, card_top + 176, kFontBody, kSubtle, happened,
                 card_width - 80);
 
-    /* What now: only about the agent, and only when it is true. */
-    if (status.stage == install::InstallStage::Done ||
-        status.stage == install::InstallStage::Skipped) {
+    /* What now: only about the agent, and only when it is true.  An add-on or a data patch is not
+       a version question at all -- it leaves the game's version where it was -- so this run has
+       nothing to say about the agent either way. */
+    if ((status.stage == install::InstallStage::Done ||
+         status.stage == install::InstallStage::Skipped) &&
+        install::MetaTypeCarriesGameVersion(package.cnmt.type)) {
         const std::uint32_t effective = status.stage == install::InstallStage::Skipped
                                             ? status.installed_version
                                             : status.package_version;

@@ -55,6 +55,12 @@ enum class ContentType {
 /* What the player sees on the confirm page: 本体 / 更新 / DLC. */
 const char *MetaTypeLabel(MetaType type);
 
+/* True for the two kinds whose version is the one the agent's gate asks about: the game itself
+   and its update.  An add-on (DLC) and a data patch leave that version where it was, so a note
+   about "this version works with the agent" describes nothing they touch -- which is how
+   installing an add-on could warn that the agent does not support "this version". */
+bool MetaTypeCarriesGameVersion(MetaType type);
+
 struct CnmtContent {
     std::string content_id; /* 32 hex digits, lower case */
     ContentType type{ContentType::Unknown};
