@@ -220,6 +220,8 @@ enum class StringId {
     ResultNewerVersionPlain,
     ResultAgentAlreadyInstalled,
     FooterPagesHint,
+    ResultAgentFollowUpInstalled,
+    ResultAgentFollowUpFailed,
 };
 
 const char *Text(StringId id, Language language);

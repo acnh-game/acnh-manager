@@ -7,6 +7,7 @@
 #include <switch.h>
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -213,6 +214,24 @@ private:
        screen when the package turns out to be pointless (already installed / newer installed). */
     void OpenPickedPackage();
     void RunGameInstall();
+    /* The agent's own install, on this thread: the payload that matches the manifest's origin,
+       the engine, and the per-file progress.  It owns no screen and decides no result -- the home
+       screen's button and the step that follows a game install call it and report their own way. */
+    bool InstallAgentNow(int *files_written, std::string *error,
+                         const std::function<void(const install::Progress &)> &on_progress);
+    /* What the step after a game install did.  `AlreadyCurrent` is the "nothing to write" case;
+       `Failed` carries the reason in m_agent_follow_reason (log + details), while the screen shows
+       the one sentence the player can act on. */
+    enum class AgentFollowUp { NotRun, AlreadyCurrent, Installed, Failed };
+    AgentFollowUp m_agent_follow_up{AgentFollowUp::NotRun};
+    std::string m_agent_follow_reason;
+    /* The installer's progress card is showing that follow-up step rather than the package's own
+       transfer: the same card, with the numbers that step actually has. */
+    bool m_install_follow_up{false};
+    /* Installs the agent when the run in hand leaves the console on a version the agent supports
+       (a base game or an update; an add-on or a data patch changes no version, and a version the
+       manifest does not name cannot be worked with at all).  Does nothing otherwise. */
+    void RunAgentFollowUp();
     /* Leaves the installer page: the package in hand belongs to the screen that was showing it,
        so it is dropped here and nowhere else (B is the only way out of the page). */
     void LeaveGameInstall();

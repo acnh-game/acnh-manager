@@ -166,7 +166,7 @@ constexpr Entry kStrings[] = {
     {"类型", "Type"},  /* ConfirmType */
     {"大小", "Size"},  /* ConfirmSize */
     {"目标存储", "Install to"},  /* ConfirmTarget */
-    {"装好后即可安装 agent", "The agent can be installed afterwards"},  /* ConfirmAgentNote */
+    {"装好后会自动安装 agent", "The agent is installed automatically afterwards"},  /* ConfirmAgentNote */
     {"本体", "Base game"},  /* TypeBase */
     {"更新", "Update"},  /* TypeUpdate */
     {"追加内容", "Add-on"},  /* TypeDlc */
@@ -188,7 +188,7 @@ constexpr Entry kStrings[] = {
     {"microSD", "microSD"},  /* StorageSdCard */
     {"系统", "System"},  /* StorageSystem */
     {"安装游戏更新", "Install the game update"},  /* HomeInstallUpdate */
-    {"升级完即可安装 agent", "The agent can be installed once it is updated"},  /* HomeInstallUpdateSub */
+    {"升级完会自动安装 agent", "The agent is installed automatically once it is updated"},  /* HomeInstallUpdateSub */
     {"上一级", "Up one level"},  /* InstallUpOneLevel */
     {"目录", "Directory"},  /* InstallDirectory */
     {"安装包", "Package"},  /* InstallPackage */
@@ -205,6 +205,11 @@ constexpr Entry kStrings[] = {
     {"机器上已经有更新的版本,没有改动", "A newer version is already installed; nothing changed"},  /* ResultNewerVersionPlain */
     {"agent 已经装好了", "The agent is already installed"},  /* ResultAgentAlreadyInstalled */
     {"L / R 切换页面", "L / R switch pages"},  /* FooterPagesHint */
+
+    /* The step that follows a game install (the player asked for the game, the agent is what makes
+       it useful): what it wrote, and the one case where it wrote nothing. */
+    {"agent 已一并安装", "The agent was installed as well"},  /* ResultAgentFollowUpInstalled */
+    {"agent 这次没能装上:回首页可以重新安装", "The agent was not installed this time - install it again from the home screen"},  /* ResultAgentFollowUpFailed */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

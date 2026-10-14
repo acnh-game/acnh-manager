@@ -743,7 +743,6 @@ std::string App::UpdateDetailText() const {
 }
 
 void App::RunInstall() {
-    const manifest::Manifest &active = ActiveManifest();
     if ((!m_have_manifest && !m_have_update_manifest) ||
         m_plan.action == install::PlanAction::Blocked || m_plan.game == nullptr) {
         m_result_ok = false;
@@ -757,6 +756,47 @@ void App::RunInstall() {
         m_page = Page::Result;
         return;
     }
+    /* The install runs on this thread, so the interface cannot animate while it works -- but it
+       can (and must) say what it is doing: one frame before the first byte moves, and one after
+       every file.  Without this the player stares at the confirmation page for as long as the
+       download takes, which reads as "the app hung" (that is the whole subject of
+       docs/architecture.md 9.3). */
+    BeginProgress(/*uninstall=*/false, static_cast<int>(m_plan.game->files.size()));
+    std::string error;
+    int files_written = 0;
+    const bool ok = InstallAgentNow(&files_written, &error, [this](const install::Progress &progress) {
+        UpdateProgress(progress);
+    });
+    m_result_ok = ok;
+    m_last_failed = !ok;
+    m_result_error = error;
+    m_result_files = files_written;
+    m_result_uninstall = false;
+    /* The reason only used to exist on screen: a failure reported by the user could not be
+       looked up in log.txt afterwards, which is exactly what happened while running the
+       installer fault-injection tests. */
+    Trace("install: ok=%d files=%d%s%s", ok ? 1 : 0, files_written,
+          error.empty() ? "" : " error=", error.c_str());
+    /* Development switch: capture what the fs session can still do, in the state that just
+       failed, instead of guessing from a later (healthy) run. */
+#if ACNH_DEV_AIDS
+    if (!ok && DevFlagPresent(*m_sd, "/switch/ACNH-Manager/dev-fsprobe")) {
+        probe::RunFsSessionProbe(*m_log, *m_sd, "after install failure");
+    }
+#endif
+    if (ok) {
+        /* The record now describes the version we just installed; the remote release is no
+           longer "newer than what is installed", so the next Collect() drops it (and with it the
+           update button). */
+        m_have_update_manifest = false;
+        Collect();
+    }
+    m_page = Page::Result;
+}
+
+bool App::InstallAgentNow(int *files_written, std::string *error,
+                          const std::function<void(const install::Progress &)> &on_progress) {
+    const manifest::Manifest &active = ActiveManifest();
     /* Payload matches the manifest's origin: the embedded manifest uses the embedded payload, a
        dev manifest uses the payload directory on the SD card, and a verified remote release is
        downloaded from the URLs it names (the engine verifies each file against the manifest
@@ -779,42 +819,82 @@ void App::RunInstall() {
         install::SetFsTraceSink(m_log);
     }
 #endif
-    /* The install runs on this thread, so the interface cannot animate while it works -- but it
-       can (and must) say what it is doing: one frame before the first byte moves, and one after
-       every file.  Without this the player stares at the confirmation page for as long as the
-       download takes, which reads as "the app hung" (that is the whole subject of
-       docs/architecture.md 9.3). */
-    BeginProgress(/*uninstall=*/false, static_cast<int>(m_plan.game->files.size()));
     const auto result = install::Install(*m_sd, active, *m_plan.game, *source, /*dry_run=*/false,
-                                        [this](const install::Progress &progress) {
-                                            UpdateProgress(progress);
-                                        });
+                                        on_progress);
     install::SetFsTraceSink(nullptr);
-    m_result_ok = result.ok;
-    m_last_failed = !result.ok;
-    m_result_error = result.error;
-    m_result_files = result.files_written;
-    m_result_uninstall = false;
-    /* The reason only used to exist on screen: a failure reported by the user could not be
-       looked up in log.txt afterwards, which is exactly what happened while running the
-       installer fault-injection tests. */
-    Trace("install: ok=%d files=%d%s%s", result.ok ? 1 : 0, result.files_written,
-          result.error.empty() ? "" : " error=", result.error.c_str());
-    /* Development switch: capture what the fs session can still do, in the state that just
-       failed, instead of guessing from a later (healthy) run. */
-#if ACNH_DEV_AIDS
-    if (!result.ok && DevFlagPresent(*m_sd, "/switch/ACNH-Manager/dev-fsprobe")) {
-        probe::RunFsSessionProbe(*m_log, *m_sd, "after install failure");
+    *files_written = result.files_written;
+    *error = result.error;
+    return result.ok;
+}
+
+void App::RunAgentFollowUp() {
+    m_agent_follow_up = AgentFollowUp::NotRun;
+    m_agent_follow_reason.clear();
+    if (m_game_install == nullptr) {
+        return;
     }
-#endif
-    if (result.ok) {
-        /* The record now describes the version we just installed; the remote release is no
-           longer "newer than what is installed", so the next Collect() drops it (and with it the
-           update button). */
-        m_have_update_manifest = false;
+    const install::PackageInfo &package = m_game_install->Package();
+    const install::InstallStatus &status = m_game_install->Status();
+    if (status.stage != install::InstallStage::Done &&
+        status.stage != install::InstallStage::Skipped) {
+        return;
+    }
+    /* What the console ends up on: the version this package brings, or the one it already had when
+       the package turned out to be pointless.  Only base games and updates bring a game version at
+       all -- an add-on or a data patch changes none, and a version the manifest does not name is
+       one the agent cannot work with, which the confirm page already said. */
+    const std::uint32_t effective = status.stage == install::InstallStage::Skipped
+                                        ? status.installed_version
+                                        : status.package_version;
+    if (!install::MetaTypeCarriesGameVersion(package.cnmt.type) ||
+        !AgentSupportedFor(package.cnmt.title_id, effective)) {
+        return;
+    }
+    /* The console answers differently now, and the plan is what says whether there is anything to
+       write: up to date means the agent for this version is already in place. */
+    Collect();
+    if (m_plan.action == install::PlanAction::UpToDate) {
+        m_agent_follow_up = AgentFollowUp::AlreadyCurrent;
+        Trace("install: agent follow-up: already up to date, nothing written");
+        return;
+    }
+    if (m_plan.action == install::PlanAction::Blocked || m_plan.game == nullptr) {
+        m_agent_follow_up = AgentFollowUp::Failed;
+        m_agent_follow_reason = m_plan.reason.empty() ? "no plan for the agent" : m_plan.reason;
+        m_result_ok = false;
+        m_last_failed = true;
+        m_result_error = m_agent_follow_reason;
+        Trace("install: agent follow-up: blocked: %s", m_agent_follow_reason.c_str());
         Collect();
+        return;
     }
-    m_page = Page::Result;
+    /* The card now shows this step: the package's own transfer is over. */
+    m_install_follow_up = true;
+    m_progress_step.clear();
+    m_progress_index = 0;
+    m_progress_total = static_cast<int>(m_plan.game->files.size());
+    m_install_screen = InstallScreen::Progress;
+    Render();
+    int files_written = 0;
+    std::string error;
+    const bool ok = InstallAgentNow(&files_written, &error, [this](const install::Progress &p) {
+        UpdateProgress(p);
+    });
+    m_install_follow_up = false;
+    m_result_ok = ok;
+    m_result_files = files_written;
+    m_result_uninstall = false;
+    m_agent_follow_up = ok ? AgentFollowUp::Installed : AgentFollowUp::Failed;
+    m_agent_follow_reason = ok ? std::string() : error;
+    m_result_error = error;
+    m_last_failed = !ok;
+    if (ok) {
+        /* The release we just wrote is the newest one there is, so the update button goes away. */
+        m_have_update_manifest = false;
+    }
+    Trace("install: agent follow-up %s files=%d%s%s", ok ? "installed" : "failed", files_written,
+          error.empty() ? "" : " error=", error.c_str());
+    Collect();
 }
 
 void App::RunUninstall() {
@@ -2782,6 +2862,9 @@ void App::OpenPickedPackage() {
     Trace("install: %s -> %s (%s)", m_picked_file.c_str(),
           m_install_status.stage == install::InstallStage::Skipped ? "skip" : "confirm",
           m_install_status.detail.c_str());
+    /* A package the console already has writes nothing -- but what it leaves behind is still a
+       version the agent may need, so the same follow-up runs here as after a real install. */
+    RunAgentFollowUp();
     m_install_screen = m_install_status.stage == install::InstallStage::Skipped
                            ? InstallScreen::Result
                            : InstallScreen::Confirm;
@@ -2843,9 +2926,13 @@ void App::RunGameInstall() {
         m_game_install->Abandon(&error);
     }
     m_install_status = m_game_install->Status();
-    m_install_screen = InstallScreen::Result;
     Trace("install: finished stage=%d%s%s", static_cast<int>(m_install_status.stage),
           m_install_error.empty() ? "" : " error=", m_install_error.c_str());
+    /* The package is on the console: if what it leaves behind is a version the agent supports,
+       the agent goes in now, in the same run (RunAgentFollowUp).  It draws the same progress card
+       for its own step, and the result screen below replaces it when it is done. */
+    RunAgentFollowUp();
+    m_install_screen = InstallScreen::Result;
     /* The package stays in hand for as long as the result page is up: that page names what was
        installed and, when the run failed, quotes the reason the installer gave.  Dropping it here
        is how a failed finish ended up labelled "this file is not an install package" on a package
@@ -2919,23 +3006,32 @@ void App::RenderInstallProgress(Surface surface) {
     FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
     FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
 
-    const bool finalizing = m_install_status.stage == install::InstallStage::Finalizing;
-    const char *stage = Tr(finalizing ? i18n::StringId::ProgressFinalize
-                                      : i18n::StringId::ProgressReceive);
+    /* The card serves two steps of one run: the package's own transfer (bytes, contents) and, right
+       after it, the agent's install (files).  Same shape and same colours, but honest numbers --
+       the agent step has no byte counts of its own, so its counter and bar follow the files it is
+       writing, and the GB line (which would read "0.00 / 0.00 GB") is not drawn at all. */
+    const bool agent_step = m_install_follow_up;
+    const bool finalizing = !agent_step && m_install_status.stage == install::InstallStage::Finalizing;
+    const char *stage = Tr(agent_step   ? i18n::StringId::ProgressInstalling
+                                      : (finalizing ? i18n::StringId::ProgressFinalize
+                                                    : i18n::StringId::ProgressReceive));
     const int stage_width = m_font.Measure(stage, kFontHeading);
     m_font.Draw(surface, card_x + card_width / 2 - stage_width / 2, card_top + 28, kFontHeading,
                 kText, stage);
 
     char counter[64];
     std::snprintf(counter, sizeof(counter), Tr(i18n::StringId::ProgressContents),
-                  m_install_status.done_contents, m_install_status.total_contents);
+                  agent_step ? m_progress_index : m_install_status.done_contents,
+                  agent_step ? m_progress_total : m_install_status.total_contents);
     const int counter_width = m_font.Measure(counter, kFontSmall);
     m_font.Draw(surface, card_x + card_width / 2 - counter_width / 2, card_top + 70, kFontSmall,
                 kSubtle, counter);
 
-    const int name_width = m_font.Measure(m_install_status.current_name.c_str(), kFontBody);
+    const std::string &current_name =
+        agent_step ? m_progress_step : m_install_status.current_name;
+    const int name_width = m_font.Measure(current_name.c_str(), kFontBody);
     m_font.Draw(surface, card_x + card_width / 2 - name_width / 2, card_top + 104, kFontBody,
-                kText, m_install_status.current_name.c_str());
+                kText, current_name.c_str());
 
     const int bar_x = card_x + 60;
     const int bar_y = card_top + 182;
@@ -2944,6 +3040,10 @@ void App::RenderInstallProgress(Surface surface) {
     FillRoundedRect(surface, bar_x, bar_y, bar_width, kBarHeight, kBarHeight / 2, kCardDisabled);
     std::uint64_t total = m_install_status.total_bytes;
     std::uint64_t done = m_install_status.done_bytes;
+    if (agent_step) {
+        total = static_cast<std::uint64_t>(m_progress_total > 0 ? m_progress_total : 0);
+        done = static_cast<std::uint64_t>(m_progress_index > 0 ? m_progress_index : 0);
+    }
     if (total > 0) {
         const double ratio = static_cast<double>(done) / static_cast<double>(total);
         const int filled = static_cast<int>(bar_width * (ratio > 1.0 ? 1.0 : ratio));
@@ -2956,13 +3056,15 @@ void App::RenderInstallProgress(Surface surface) {
                   total > 0 ? static_cast<int>(done * 100 / total) : 0);
     m_font.DrawBold(surface, bar_x + bar_width + 18, bar_y - 10, kFontHeading, kText, percent);
 
-    char detail[96];
-    std::snprintf(detail, sizeof(detail), "%.2f / %.2f GB",
-                  static_cast<double>(done) / (1024.0 * 1024.0 * 1024.0),
-                  static_cast<double>(total) / (1024.0 * 1024.0 * 1024.0));
-    const int detail_width = m_font.Measure(detail, kFontSmall);
-    m_font.Draw(surface, card_x + card_width / 2 - detail_width / 2, card_top + 222, kFontSmall,
-                kSubtle, detail);
+    if (!agent_step) {
+        char detail[96];
+        std::snprintf(detail, sizeof(detail), "%.2f / %.2f GB",
+                      static_cast<double>(done) / (1024.0 * 1024.0 * 1024.0),
+                      static_cast<double>(total) / (1024.0 * 1024.0 * 1024.0));
+        const int detail_width = m_font.Measure(detail, kFontSmall);
+        m_font.Draw(surface, card_x + card_width / 2 - detail_width / 2, card_top + 222, kFontSmall,
+                    kSubtle, detail);
+    }
     if (finalizing) {
         const char *note = Tr(i18n::StringId::ProgressFinalize);
         const int note_width = m_font.Measure(note, kFontSmall);
@@ -3384,12 +3486,26 @@ void App::RenderInstallResult(Surface surface) {
                                             ? status.installed_version
                                             : status.package_version;
         if (AgentSupportedFor(package.cnmt.title_id, effective)) {
-            /* "The agent can be installed now" is only true while it is not installed yet: after
-               the player has installed it, every later skip (the same package again, or an older
-               one) used to repeat the invitation, which reads as "your agent is missing". */
-            m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
-                        Tr(AgentInstalled() ? i18n::StringId::ResultAgentAlreadyInstalled
-                                            : i18n::StringId::ResultAgentReady));
+            /* The agent is normally in place by the time this screen is up: it was installed by
+               the step that followed the game (RunAgentFollowUp), which is the whole point of that
+               policy.  So this line reports what that step did -- and when it could not write
+               anything, it says so in the colour warnings use, because a game without its agent is
+               not the result the player asked for.  "The agent can be installed now" stays as the
+               wording for the case where the step was never reached: it is the one line that tells
+               the player what to do instead. */
+            if (m_agent_follow_up == AgentFollowUp::Installed) {
+                m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
+                            Tr(i18n::StringId::ResultAgentFollowUpInstalled));
+            } else if (m_agent_follow_up == AgentFollowUp::Failed) {
+                m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kWarn,
+                            Tr(i18n::StringId::ResultAgentFollowUpFailed), card_width - 80);
+            } else if (AgentInstalled()) {
+                m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
+                            Tr(i18n::StringId::ResultAgentAlreadyInstalled));
+            } else {
+                m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
+                            Tr(i18n::StringId::ResultAgentReady));
+            }
         } else if (TitleIsOurs(package.cnmt.title_id)) {
             /* The same line as the confirm page, formatted the same way: this string carries the
                versions the agent does handle, so it is a format, not a sentence. */
