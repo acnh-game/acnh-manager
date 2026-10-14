@@ -107,6 +107,10 @@ private:
 
     void Render();
     void RenderHeader(Surface surface);
+    /* The app's name and the one line under it, drawn no further right than `limit`: the header's
+       tab strip computes that limit, so a longer language or a longer tab label cannot make the
+       two overlap (measured in English: the subtitle reached under the "+" badge). */
+    void DrawBrand(Surface surface, int limit);
     void RenderFooter(Surface surface);
     /* Header tabs and the footer hint live on every page; added after the page's own controls
        so they never steal the entry focus (see app.cpp). */

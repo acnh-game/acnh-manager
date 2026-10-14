@@ -118,7 +118,7 @@ constexpr Entry kStrings[] = {
     {"查看有没有更高版本的 agent", "Checks whether a newer agent exists"},  /* SubCheckUpdate */
     {"装一份游戏本体", "Install a base game"},  /* SubInstallGame */
     {"删除已安装的文件", "Deletes the installed files"},  /* SubUninstall */
-    {"动森增强 Mod(agent) 管理器 · 当前支持 %s", "Manager for the Animal Crossing agent - supports %s"},  /* HeadSubtitle */
+    {"动森增强 Mod(agent) 管理器", "ACNH agent manager"},  /* HeadSubtitle */
     {"暂不可用", "Not available"},  /* BtnUnavailable */
     {"高级", "Advanced"},  /* SectionAdvanced */
     {"agent 版本", "Agent version"},  /* LabelEmbeddedAgent */

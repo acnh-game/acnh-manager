@@ -1308,24 +1308,38 @@ void App::Render() {
     }
 }
 
+void App::DrawBrand(Surface surface, int limit) {
+    const int width = limit - kMargin - 2;
+    if (width < 60) {
+        /* No room for either line: saying nothing is honest, drawing over the tabs is not. */
+        return;
+    }
+    /* The title's descenders (the 'g' in Manager) reach about 9 px below the baseline, so the
+       subtitle starts below them instead of touching them.  Both lines are fitted: an ellipsis in
+       the app's own name at one screen width is better than a name painted across the tabs. */
+    const std::string title = m_font.Fit(Tr(i18n::StringId::AppTitle), kFontTitle, width, 1);
+    m_font.Draw(surface, kMargin, 10, kFontTitle, kOnHeader, title.c_str());
+    /* One line, and no version in it: which games this build supports belongs on the screens that
+       talk about the game (the home status line, the details page), where it comes from the
+       manifest -- a header that names 3.0.3 has to be edited every time the manifest changes. */
+    const std::string subtitle =
+        m_font.Fit(Tr(i18n::StringId::HeadSubtitle), kFontSmall, width, 1);
+    m_font.Draw(surface, kMargin + 2, 66, kFontSmall, kHeaderSubtle, subtitle.c_str());
+}
+
 void App::RenderHeader(Surface surface) {
     FillRect(surface, 0, 0, surface.width, kHeaderHeight, kHeader);
-    /* The title's descenders (the 'g' in Manager) reach about 9 px below the baseline, so the
-       subtitle starts below them instead of touching them. */
-    m_font.Draw(surface, kMargin, 10, kFontTitle, kOnHeader, Tr(i18n::StringId::AppTitle));
-    /* Subtitle: what this program is, for the people who just installed it. */
-    m_font.Draw(surface, kMargin + 2, 66, kFontSmall, kHeaderSubtle,
-                i18n::Format(i18n::StringId::HeadSubtitle, "3.0.3"));
-    /* Tabs carry their own key, so "one button, one action" holds here too. */
     /* No tabs while the engine works: the progress page ignores input (see HandleKeys), and a
        drawn control that cannot be pressed is exactly what this project keeps fixing. */
     if (m_page == Page::Progress) {
+        DrawBrand(surface, surface.width);
         return;
     }
     /* The installer page is the app's one modal page: the four entries are hidden (not greyed
        out) and the room they took shows the two storage bars, so the player sees why the page
        cannot be left with L/R and how much room the install has. */
     if (m_page == Page::GameInstall) {
+        DrawBrand(surface, surface.width);
         RenderStorageBars(surface);
         return;
     }
@@ -1350,6 +1364,10 @@ void App::RenderHeader(Surface surface) {
         label_width[i] = m_font.Measure(Tr(tabs[i].label), kFontHeading);
     }
     const HeaderTabLayout layout = LayoutHeaderTabs(surface.width, label_width, kHeaderTabBadgePos);
+    /* The brand block is bounded by the tab strip's left edge: the subtitle is long in some
+       languages, and the strip's own left edge is the only thing that knows where "too far" is
+       (measured in English: the subtitle ran under the "+ Game Install / Update" badge). */
+    DrawBrand(surface, layout.hit[0].x - 24);
     for (int i = 0; i < kHeaderTabCount; ++i) {
         /* Which entry reads as "where I am": the guide while it is open, otherwise status
            everywhere except the details page. */
