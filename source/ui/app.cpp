@@ -1113,13 +1113,14 @@ void App::ActivateAction(int id) {
     switch (id) {
         case kActionPrimary:
             switch (m_home_kind) {
-                case HomeKind::GameMissing:
                 case HomeKind::UpToDate:
-                    Collect(); /* recheck / refresh */
+                    Collect(); /* nothing to install: refresh what the screen shows */
                     break;
+                case HomeKind::GameMissing:
                 case HomeKind::Unsupported:
                     /* The one useful thing to do here: offer the installer, because a package the
-                       player brings is how this state stops being true. */
+                       player brings is how both of these states stop being true -- and for a
+                       console with no game at all, installing one is the only way forward. */
                     OpenGameInstall();
                     break;
                 case HomeKind::NeedsInstall:
@@ -1948,8 +1949,11 @@ void App::RenderHome(Surface surface) {
             sub_id = i18n::StringId::SubRetry;
             break;
         case HomeKind::GameMissing:
-            label_id = i18n::StringId::BtnRecheck;
-            sub_id = i18n::StringId::SubRecheck;
+            /* No game at all: the one useful thing this screen can offer is installing one, which
+               is what the app is for.  "Check again" asked the player to find a copy elsewhere
+               first, which is exactly what a missing-game console cannot do. */
+            label_id = i18n::StringId::BtnInstallGame;
+            sub_id = i18n::StringId::SubInstallGame;
             break;
         case HomeKind::UpToDate:
             label_id = i18n::StringId::BtnUpToDate;

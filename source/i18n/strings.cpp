@@ -96,8 +96,8 @@ constexpr Entry kStrings[] = {
     {"还没有安装 agent", "The agent is not installed yet"},  /* StateNotInstalled */
     {"agent 已安装 · 有新版本", "The agent is installed - a newer version exists"},  /* StateUpdateAvailable */
     {"agent 已安装，可以使用", "The agent is installed and ready"},  /* StateInstalled */
-    {"请先在这台机器上安装游戏，回来按一下重新检测", "Install the game on this console first, then check again"},  /* StateGameMissingSub */
-    {"原因写在详情里", "The reason is in Details"},  /* StateUnsupportedSub */
+    {"没有检测到游戏本体 · 可用本应用安装一份", "No base game found - this app can install one"},  /* StateGameMissingSub */
+    {"本应用目前无法处理这个版本", "This build cannot handle the installed version"},  /* StateUnsupportedSub */
     {"游戏 %s · agent %s", "Game %s - agent %s"},  /* HomeVersions */
     {"游戏 %s · 本应用支持 %s", "Game %s - this build supports %s"},  /* HomeVersionsUnsupported */
     {"游戏 %s · 可安装 agent %s", "Game %s - agent %s ready to install"},  /* HomeVersionsAvailable */
@@ -108,7 +108,7 @@ constexpr Entry kStrings[] = {
     {"已是最新", "Already up to date"},  /* BtnUpToDate */
     {"重新安装", "Install again"},  /* BtnRepair */
     {"重试", "Try again"},  /* BtnRetry */
-    {"重新检测", "Check again"},  /* BtnRecheck */
+    {"安装游戏", "Install the game"},  /* BtnInstallGame */
     {"检查更新", "Check for updates"},  /* BtnCheckUpdate */
     {"卸载 agent", "Remove the agent"},  /* BtnUninstall */
     {"点一下即完成，之后重启游戏", "One tap, then restart the game"},  /* SubInstall */
@@ -116,7 +116,7 @@ constexpr Entry kStrings[] = {
     {"再试一次，失败原因在详情里", "Tries once more; the reason is in Details"},  /* SubRetry */
     {"已经装好了，不需要操作", "Nothing to do"},  /* SubUpToDate */
     {"查看有没有更高版本的 agent", "Checks whether a newer agent exists"},  /* SubCheckUpdate */
-    {"装好游戏后按一下即可", "Press after the game is installed"},  /* SubRecheck */
+    {"装一份游戏本体", "Install a base game"},  /* SubInstallGame */
     {"删除已安装的文件", "Deletes the installed files"},  /* SubUninstall */
     {"动森增强 Mod(agent) 管理器 · 当前支持 %s", "Manager for the Animal Crossing agent - supports %s"},  /* HeadSubtitle */
     {"暂不可用", "Not available"},  /* BtnUnavailable */

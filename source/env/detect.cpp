@@ -387,9 +387,17 @@ EnvironmentReport Collect(FsFileSystem &sd) {
            installed" is how a console that has 1.0.0 was told the game was missing (the details
            page said "version 2228224 != detected 0").
 
-           Two witnesses, either of which counts: the Application content meta above (read from
-           the storage that holds it) and the control data below, which the console only has for
-           a title that is really there. */
+           Presence comes from the Application content meta above -- with one exception, the
+           control data below, which is a *cache*: after an uninstall the console keeps serving
+           the title's NACP for a while, so it must not be able to say "the game is here" on its
+           own.  Measured: with the game uninstalled, `nsListApplicationContentMetaStatus`
+           answered "no such application" (0x410) and `ncm` "no content meta" (0xE05) while the
+           control-data call still succeeded with the old version -- and the home screen then
+           reported a *version* problem instead of "the game is not installed".
+
+           0x410 (0x00000410) is that "no such application" answer; anything else means the table
+           could not answer, and then the control data is a legitimate second witness. */
+        constexpr Result kNoSuchApplication = 0x00000410;
         const bool have_control_data = CollectControlData(&report, title_present);
         /* Which applications the console knows, and what each one holds.  An install that files a
            record under the wrong id leaves an extra entry here (the home menu draws it as an empty
@@ -429,7 +437,7 @@ EnvironmentReport Collect(FsFileSystem &sd) {
         if (R_SUCCEEDED(nsIsAnyApplicationRunning(&running))) {
             report.application_running = running;
         }
-        if (title_present || have_control_data) {
+        if (title_present || (have_control_data && rc != kNoSuchApplication)) {
             report.build.title_id = TitleIdHex(kAcnhTitleId);
         }
     } else {

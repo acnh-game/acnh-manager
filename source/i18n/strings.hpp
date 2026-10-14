@@ -28,6 +28,10 @@ enum class Language { ZhHans, English };
 /* FooterPagesHint names the two shoulder keys on every page whose header shows the tabs (the
    ring's pages).  A hint, not a control: it is plain text, with no key badge of its own. */
 
+/* BtnInstallGame / SubInstallGame are the missing-game screen's primary action: this app can
+   install a base game, so the button offers that instead of asking the player to find a copy
+   elsewhere and come back ("check again"), which a console with no game cannot do. */
+
 enum class StringId {
     AppTitle,
     TabStatus,
@@ -120,7 +124,7 @@ enum class StringId {
     BtnUpToDate,
     BtnRepair,
     BtnRetry,
-    BtnRecheck,
+    BtnInstallGame,
     BtnCheckUpdate,
     BtnUninstall,
     SubInstall,
@@ -128,7 +132,7 @@ enum class StringId {
     SubRetry,
     SubUpToDate,
     SubCheckUpdate,
-    SubRecheck,
+    SubInstallGame,
     SubUninstall,
     HeadSubtitle,
     BtnUnavailable,
