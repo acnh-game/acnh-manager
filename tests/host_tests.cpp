@@ -1305,8 +1305,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::ResultAgentAlreadyInstalled) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ResultAgentAlreadyInstalled); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::FooterPagesHint) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::FooterPagesHint); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -1496,6 +1496,7 @@ void TestHeaderTabs() {
     using acnh_manager::ui::HitTest;
     using acnh_manager::ui::kHeaderBarHeight;
     using acnh_manager::ui::kHeaderTabBadge;
+    using acnh_manager::ui::kHeaderTabBadgeGap;
     using acnh_manager::ui::kHeaderTabCount;
     using acnh_manager::ui::kHeaderTabTop;
     using acnh_manager::ui::LayoutHeaderTabs;
@@ -1530,20 +1531,26 @@ void TestHeaderTabs() {
     CHECK(wide_layout.badge_x[0] < layout.badge_x[0]);
     CHECK(wide_layout.hit[kHeaderTabCount - 1].x + wide_layout.hit[kHeaderTabCount - 1].w <= 1280);
 
-    /* An entry with no badge of its own (the middle of the ring -- no key goes straight there):
-       its slot collapses instead of leaving a hole, its label keeps its place, and the entry is
-       still hit-testable where it is drawn.  The mask is the header's real one: + installer, then
-       the ring's three pages, whose middle carries no badge. */
-    const bool no_badge[kHeaderTabCount] = {true, true, false, true};
-    const auto ring_layout = LayoutHeaderTabs(1280, label_width, no_badge);
+    /* The header's real badge arrangement: + installer, Ⓛ status, details (none), guide Ⓡ.  The
+       closing badge sits *after* its label, so the two shoulder keys bracket the group they move
+       through; the middle of the ring reserves nothing at all; and every entry -- including the
+       one whose badge is outside its label -- stays hit-testable across what it draws. */
+    const acnh_manager::ui::TabBadge arrangement[kHeaderTabCount] = {
+        acnh_manager::ui::TabBadge::Before, acnh_manager::ui::TabBadge::Before,
+        acnh_manager::ui::TabBadge::None, acnh_manager::ui::TabBadge::After};
+    const auto ring_layout = LayoutHeaderTabs(1280, label_width, arrangement);
     CHECK(ring_layout.badge_x[2] == ring_layout.label_x[2]);
     CHECK(ring_layout.label_x[2] == layout.label_x[2]);
-    CHECK(ring_layout.badge_x[0] > layout.badge_x[0]); /* the strip closes up to its right */
+    CHECK(ring_layout.badge_x[3] ==
+          ring_layout.label_x[3] + label_width[3] + kHeaderTabBadgeGap);
+    CHECK(ring_layout.label_x[0] > layout.label_x[0]); /* the strip closes up to its right end */
     std::vector<acnh_manager::ui::Action> ring_tabs;
     for (int i = 0; i < kHeaderTabCount; ++i) {
         ring_tabs.push_back({i + 1, ring_layout.hit[i], true});
     }
     CHECK(HitTest(ring_tabs, ring_layout.label_x[2] + label_width[2] / 2, 56) == 3);
+    /* The closing Ⓡ is inside its own entry's target, not outside it. */
+    CHECK(HitTest(ring_tabs, ring_layout.badge_x[3] + kHeaderTabBadge / 2, kHeaderTabTop + 20) == 4);
     for (int i = 0; i + 1 < kHeaderTabCount; ++i) {
         CHECK(ring_layout.hit[i].x + ring_layout.hit[i].w <= ring_layout.hit[i + 1].x);
     }

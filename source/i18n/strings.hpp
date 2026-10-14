@@ -25,6 +25,9 @@ enum class Language { ZhHans, English };
 /* ResultAgentAlreadyInstalled is the result page's "what now" line when there is nothing to
    install: the agent is already in place, so telling the player to install it would be wrong. */
 
+/* FooterPagesHint names the two shoulder keys on every page whose header shows the tabs (the
+   ring's pages).  A hint, not a control: it is plain text, with no key badge of its own. */
+
 enum class StringId {
     AppTitle,
     TabStatus,
@@ -212,6 +215,7 @@ enum class StringId {
     ProgressDoNotInterrupt,
     ResultNewerVersionPlain,
     ResultAgentAlreadyInstalled,
+    FooterPagesHint,
 };
 
 const char *Text(StringId id, Language language);

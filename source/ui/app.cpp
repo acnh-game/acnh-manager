@@ -129,10 +129,12 @@ constexpr int kActionInstallPickRow = 19; /* a row of the installer's file list 
 constexpr int kActionInstallStart = 20;   /* "start" on the confirm screen (A) */
 constexpr int kActionInstallBack = 21;    /* the installer's footer "Ⓑ 返回" hint (same as the key) */
 
-/* The four header entries and which of them wear a key badge (the layout needs the same mask
-   for the drawn pill and for the touch target -- see RenderHeader).  Same order as the tabs
-   there: + installer, Ⓛ status, details (none), Ⓡ guide. */
-constexpr bool kHeaderTabHasBadge[acnh_manager::ui::kHeaderTabCount] = {true, true, false, true};
+/* Where each header entry's key badge sits (the layout needs the same answer for the drawn pill
+   and for the touch target -- see RenderHeader).  Same order as the tabs there: + installer,
+   Ⓛ status, details (no badge), and the ring's closing Ⓡ after the guide. */
+constexpr acnh_manager::ui::TabBadge kHeaderTabBadgePos[acnh_manager::ui::kHeaderTabCount] = {
+    acnh_manager::ui::TabBadge::Before, acnh_manager::ui::TabBadge::Before,
+    acnh_manager::ui::TabBadge::None,   acnh_manager::ui::TabBadge::After};
 
 /* Player settings (language today).  Separate from state.json because uninstall deletes that. */
 constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
@@ -1346,7 +1348,7 @@ void App::RenderHeader(Surface surface) {
     for (int i = 0; i < kHeaderTabCount; ++i) {
         label_width[i] = m_font.Measure(Tr(tabs[i].label), kFontHeading);
     }
-    const HeaderTabLayout layout = LayoutHeaderTabs(surface.width, label_width, kHeaderTabHasBadge);
+    const HeaderTabLayout layout = LayoutHeaderTabs(surface.width, label_width, kHeaderTabBadgePos);
     for (int i = 0; i < kHeaderTabCount; ++i) {
         /* Which entry reads as "where I am": the guide while it is open, otherwise status
            everywhere except the details page. */
@@ -1363,7 +1365,7 @@ void App::RenderHeader(Surface surface) {
         const char *label = Tr(tabs[i].label);
         m_font.Draw(surface, layout.label_x[i], 36, kFontHeading,
                     active ? kOnHeader : kHeaderSubtle, label);
-        if (kHeaderTabHasBadge[i]) {
+        if (kHeaderTabBadgePos[i] != TabBadge::None) {
             FillRoundedRect(surface, layout.badge_x[i], kHeaderTabTop, kHeaderTabBadge,
                             kHeaderTabBadge, kHeaderTabBadge / 2,
                             active ? kOnHeader : kHeaderBadge);
@@ -1375,12 +1377,9 @@ void App::RenderHeader(Surface surface) {
                             tabs[i].key);
         }
         if (active) {
-            /* Under the label, wherever the label sits: with no badge the two x's are the same,
-               so the same expression covers both. */
-            const int underline_x = layout.badge_x[i] + (kHeaderTabHasBadge[i]
-                                                            ? kHeaderTabBadge + kHeaderTabBadgeGap
-                                                            : 0);
-            FillRect(surface, underline_x, kHeaderHeight - 14, label_width[i], 4, kOnHeader);
+            /* Under the label, wherever the label sits -- a badge may be in front of it, behind
+               it, or nowhere, and none of that moves the mark that says "you are here". */
+            FillRect(surface, layout.label_x[i], kHeaderHeight - 14, label_width[i], 4, kOnHeader);
         }
     }
 }
@@ -1408,7 +1407,7 @@ void App::AddChromeActions(int surface_width, int surface_height) {
     }
     /* The same mask the drawing uses: a tab that shows no badge still has to be tappable, and a
        tab that shows one has to be tappable *there*. */
-    const HeaderTabLayout layout = LayoutHeaderTabs(surface_width, label_width, kHeaderTabHasBadge);
+    const HeaderTabLayout layout = LayoutHeaderTabs(surface_width, label_width, kHeaderTabBadgePos);
     for (int i = 0; i < kHeaderTabCount; ++i) {
         m_actions.push_back({header_actions[i], layout.hit[i], true});
     }
@@ -1497,6 +1496,24 @@ void App::RenderFooter(Surface surface) {
     const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
     m_font.Draw(surface, surface.width - kMargin - stamp_width, hint.text_y, kFontSmall, kSubtle,
                 kBuildStamp);
+    /* And how to move between the pages the header lists: the tabs themselves show Ⓛ / Ⓡ on the
+       ends of that group, but only the footer has the room to say it in words.  Plain text, not a
+       control -- it names two keys, so there is no single action a tap could mean.  Not on the
+       installer page (its header hides the tabs and L / R are dead there) and not on the progress
+       page (no chrome at all). */
+    if (m_page != Page::GameInstall && m_page != Page::Progress) {
+        const char *pages_hint = Tr(i18n::StringId::FooterPagesHint);
+        const int hint_width = m_font.Measure(pages_hint, kFontSmall);
+        int x = kMargin;
+        if (!has_back_button) {
+            /* Clear of the Ⓑ hint when that one is there; at the margin when the page carries its
+               own back button and the footer is otherwise empty. */
+            x = hint.label_x + m_font.Measure(label, kFontSmall) + 30;
+        }
+        if (x + hint_width + stamp_width + 24 < surface.width) {
+            m_font.Draw(surface, x, hint.text_y, kFontSmall, kSubtle, pages_hint);
+        }
+    }
 }
 
 bool App::HasOwnBackButton() const {

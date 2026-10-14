@@ -1,6 +1,8 @@
 #pragma once
 
-/* Header tab geometry: "Ⓛ status" / "details" / "+ game install" / "Ⓡ guide".
+/* Header tab geometry, in the order it is drawn: "+ game install", "Ⓛ status", "details",
+   "guide Ⓡ" -- the installer first, then the ring of pages L / R move between, with the two
+   shoulder keys bracketing that group.
 
    The pill and its touch target have to come from the same numbers.  The first version of this
    header drew the tabs but never registered them as actions, so they could not be tapped at
@@ -46,10 +48,23 @@ inline int CyclePeerTab(int current, int direction) {
     return (base + step + kPeerTabCount) % kPeerTabCount;
 }
 
-/* Which tabs carry a key badge of their own: the ring's two ends wear Ⓛ / Ⓡ (the shoulder keys
-   that move through it), the installer wears its +, and the middle of the ring wears none --
-   there is no key that goes *to* it, which is the truth a badge has to tell. */
-inline constexpr bool kHeaderTabBadgeAll[kHeaderTabCount] = {true, true, true, true};
+/* Where an entry's key badge sits relative to its label.  The installer's + and the ring's
+   opening Ⓛ go *before* their label; the ring's closing Ⓡ goes *after* the last page, so the two
+   shoulder keys read as the brackets of the group they move through:
+
+       + 游戏安装/更新    Ⓛ 状态  详情  功能说明 Ⓡ
+
+   The middle of the ring carries none: no key goes straight to it, and a badge would promise one
+   that does not exist. */
+enum class TabBadge {
+    None,
+    Before,
+    After,
+};
+
+/* What a caller that says nothing about badges gets: one in front of every label. */
+inline constexpr TabBadge kHeaderTabBadgeBefore[kHeaderTabCount] = {
+    TabBadge::Before, TabBadge::Before, TabBadge::Before, TabBadge::Before};
 
 struct HeaderTabLayout {
     int badge_x[kHeaderTabCount];  /* left edge of the Ⓐ / Ⓛ / Ⓡ circle */
@@ -61,27 +76,37 @@ struct HeaderTabLayout {
    index is the right-most (details).  The caller passes the measured label widths because only
    the font knows them. */
 inline HeaderTabLayout LayoutHeaderTabs(int surface_width, const int label_width[kHeaderTabCount],
-                                        const bool with_badge[kHeaderTabCount] = kHeaderTabBadgeAll) {
+                                        const TabBadge badge[kHeaderTabCount] =
+                                            kHeaderTabBadgeBefore) {
     HeaderTabLayout layout{};
     int x = surface_width - kHeaderMargin;
     for (int i = kHeaderTabCount - 1; i >= 0; --i) {
+        /* Consume this entry from the right edge inwards.  What it spans is exactly what it
+           draws, and that span is its touch target -- one number, no "remember the badge width
+           here and the label width there" (which is how a closing badge ends up outside its own
+           target). */
+        const int entry_right = x;
+        if (badge[i] == TabBadge::After) {
+            x -= kHeaderTabBadge;
+            layout.badge_x[i] = x;
+            x -= kHeaderTabBadgeGap;
+        }
         x -= label_width[i];
         layout.label_x[i] = x;
-        if (with_badge[i]) {
+        if (badge[i] == TabBadge::Before) {
             x -= kHeaderTabBadge + kHeaderTabBadgeGap;
             layout.badge_x[i] = x;
-        } else {
-            /* No badge: the label keeps its place and the slot collapses, so the strip does not
-               show a hole where a key would be. */
+        } else if (badge[i] == TabBadge::None) {
+            /* No badge: nothing is reserved, so the strip does not show a hole where a key would
+               be.  (Its badge_x is the label's x, which keeps the drawing code's one expression
+               for "where the badge would be" honest.) */
             layout.badge_x[i] = layout.label_x[i];
         }
-        x -= kHeaderTabSpacing;
-    }
-    for (int i = 0; i < kHeaderTabCount; ++i) {
-        const int left = layout.badge_x[i] - kHeaderTabPadX;
-        const int right = layout.label_x[i] + label_width[i] + kHeaderTabPadX;
-        layout.hit[i] = Rect{left, kHeaderTabTop - kHeaderTabPadY, right - left,
+        const int entry_left = x;
+        layout.hit[i] = Rect{entry_left - kHeaderTabPadX, kHeaderTabTop - kHeaderTabPadY,
+                             (entry_right - entry_left) + 2 * kHeaderTabPadX,
                              kHeaderTabBadge + 2 * kHeaderTabPadY};
+        x -= kHeaderTabSpacing;
     }
     return layout;
 }
