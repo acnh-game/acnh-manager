@@ -17,6 +17,7 @@
 #include "version.hpp"
 #include "util/fs_path.hpp"
 #include "util/size_text.hpp"
+#include "util/swkbd.hpp"
 
 #ifndef ACNH_DEV_AIDS
 #define ACNH_DEV_AIDS 0
@@ -57,6 +58,7 @@ bool DevFlagPresent(FsFileSystem &sd, const char *path) {
     fsFileClose(&flag);
     return true;
 }
+
 #endif
 
 /* Family palette (same origin as the icon): teal accent, cream background, sand highlights. */
@@ -128,6 +130,7 @@ constexpr int kActionInstallUpload = 18;   /* the installer's "upload" card (A) 
 constexpr int kActionInstallPickRow = 19; /* a row of the installer's file list */
 constexpr int kActionInstallStart = 20;   /* "start" on the confirm screen (A) */
 constexpr int kActionInstallBack = 21;    /* the installer's footer "Ⓑ 返回" hint (same as the key) */
+constexpr int kActionInstallUrl = 22;     /* the address screen's "type it on the console" (A) */
 
 /* Where each header entry's key badge sits (the layout needs the same answer for the drawn pill
    and for the touch target -- see RenderHeader).  Same order as the tabs there: + installer,
@@ -1073,6 +1076,14 @@ void App::HandleKeys(u32 down) {
                 }
                 break;
             }
+            if (m_install_screen == InstallScreen::Url) {
+                /* A opens the system keyboard; B (handled above) leaves the screen, and from the
+                   source screen that leaves the installer. */
+                if ((down & HidNpadButton_A) != 0) {
+                    StartDownload();
+                }
+                break;
+            }
             if (m_install_screen == InstallScreen::Files) {
                 if ((down & HidNpadButton_Y) != 0) {
                     LeaveDirectory();
@@ -1225,7 +1236,14 @@ void App::ActivateAction(int id) {
         case kActionInstallPickRow: PickFocusedFile(); break;
         case kActionInstallStart: RunGameInstall(); break;
         case kActionInstallBack: InstallStepBack(); break;
-        case kActionInstallDownload: Trace("install: source = download"); break;
+        case kActionInstallDownload:
+            /* The address screen: nothing is downloaded until the player has typed an address,
+               because this app does not host or hand out any. */
+            m_install_origin = InstallScreen::Url;
+            m_install_error.clear();
+            m_install_screen = InstallScreen::Url;
+            break;
+        case kActionInstallUrl: StartDownload(); break;
         case kActionInstallUpload: Trace("install: source = upload"); break;
         case kActionUninstall:
             if (m_page == Page::Home && m_have_state) {
@@ -1521,6 +1539,25 @@ void App::AddChromeActions(int surface_width, int surface_height) {
     }
 }
 
+/* Two footer hints, side by side, each of them a control: what is drawn as pressable has to be
+   pressable.  Both screens that use it are "the card is information, the footer is the control". */
+void App::DrawFooterHintPair(Surface surface, int y, i18n::StringId first, int first_action,
+                             i18n::StringId second, int second_action) {
+    int x = kMargin;
+    const auto draw_hint = [&](const char *key, const char *label, Color face, Color ink,
+                               int action) {
+        FillRoundedRect(surface, x, y + 7, 30, 30, 15, face);
+        const int key_width = m_font.Measure(key, kFontSmall);
+        m_font.DrawBold(surface, x + (30 - key_width) / 2, y + 13, kFontSmall, ink, key);
+        m_font.Draw(surface, x + 42, y + 12, kFontSmall, kText, label);
+        const int label_width = m_font.Measure(label, kFontSmall);
+        m_actions.push_back({action, Rect{x - 6, y + 3, 48 + label_width + 12, 38}, true});
+        x += 42 + label_width + 34;
+    };
+    draw_hint("A", Tr(first), kHeader, kOnHeader, first_action);
+    draw_hint("B", Tr(second), kBorder, kText, second_action);
+}
+
 void App::RenderFooter(Surface surface) {
     const int y = surface.height - kFooterHeight;
     FillRect(surface, 0, y, surface.width, kFooterHeight, kCard);
@@ -1540,23 +1577,19 @@ void App::RenderFooter(Surface surface) {
         return;
     }
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Confirm) {
-        /* Two hints, side by side: "start" is only useful next to "leave", and drawing them at the
-           same spot (which the first version did) makes an unreadable pile.  Each hint *is* a
-           button here: what is drawn as a control has to be one, and this page's card is
-           information, not a control. */
-        int x = kMargin;
-        const auto draw_hint = [&](const char *key, const char *label, Color face, Color ink,
-                                   int action) {
-            FillRoundedRect(surface, x, y + 7, 30, 30, 15, face);
-            const int key_width = m_font.Measure(key, kFontSmall);
-            m_font.DrawBold(surface, x + (30 - key_width) / 2, y + 13, kFontSmall, ink, key);
-            m_font.Draw(surface, x + 42, y + 12, kFontSmall, kText, label);
-            const int label_width = m_font.Measure(label, kFontSmall);
-            m_actions.push_back({action, Rect{x - 6, y + 3, 48 + label_width + 12, 38}, true});
-            x += 42 + label_width + 34;
-        };
-        draw_hint("A", Tr(i18n::StringId::ConfirmStart), kHeader, kOnHeader, kActionInstallStart);
-        draw_hint("B", Tr(i18n::StringId::LabelBack), kBorder, kText, kActionInstallBack);
+        /* "Start" is only useful next to "leave", and drawing them at the same spot (which the
+           first version did) makes an unreadable pile. */
+        DrawFooterHintPair(surface, y, i18n::StringId::ConfirmStart, kActionInstallStart,
+                           i18n::StringId::LabelBack, kActionInstallBack);
+        const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
+        m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
+                    kBuildStamp);
+        return;
+    }
+    if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Url) {
+        /* The address screen: the keyboard is the one control, next to "leave". */
+        DrawFooterHintPair(surface, y, i18n::StringId::InstallTypeUrl, kActionInstallUrl,
+                           i18n::StringId::LabelBack, kActionInstallBack);
         const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
                     kBuildStamp);
@@ -2807,13 +2840,13 @@ void App::OpenPickedPackage() {
        here, so the player who picked the wrong file is one press from picking another. */
     m_install_origin = InstallScreen::Files;
     m_file_source.reset();
+    m_http_source.reset();
     m_game_install.reset();
     m_cover = ui::Bitmap{};
     if (m_sd == nullptr || m_picked_file.empty()) {
         m_install_error = "no file picked";
         return;
     }
-    install::InstallOptions options; /* the reference implementation's defaults (design section 5) */
     m_file_source = std::make_unique<install::LocalFileSource>();
     std::uint64_t size = 0;
     std::string error;
@@ -2826,21 +2859,32 @@ void App::OpenPickedPackage() {
         m_install_screen = InstallScreen::Result;
         return;
     }
-    m_game_install = std::make_unique<install::GameInstall>(*m_file_source, m_picked_file, size,
-                                                           options.target, options);
+    OpenPackage(*m_file_source, m_picked_file, size);
+}
+
+void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
+                      std::uint64_t size) {
+    m_install_status = install::InstallStatus{};
+    m_install_error.clear();
+    m_game_install.reset();
+    m_cover = ui::Bitmap{};
+    install::InstallOptions options; /* the reference implementation's defaults (design section 5) */
+    m_game_install =
+        std::make_unique<install::GameInstall>(reader, name, size, options.target, options);
+    std::string error;
     if (!m_game_install->Prepare(&error)) {
         m_install_error = error;
         std::string cleanup_error;
         m_game_install->CleanupAfterFailure(&cleanup_error);
         m_game_install.reset();
-        m_file_source.reset();
         /* The raw text is the installer's diagnostic (English, technical) and belongs in
            log.txt; the screen gets a line the player can act on.  A running game is not a dead
            end -- closing it and picking the same file again is one step -- so that case goes
-           back to the picker instead of to a result page that only offers "back". */
-        Trace("install: %s is not installable: %s", m_picked_file.c_str(), error.c_str());
+           back to the screen the run started on instead of to a result page that only offers
+           "back". */
+        Trace("install: %s is not installable: %s", name.c_str(), error.c_str());
         if (error == "game-running") {
-            m_install_screen = InstallScreen::Files;
+            m_install_screen = m_install_origin;
             return;
         }
         m_install_error = error.find("no installable content") != std::string::npos
@@ -2859,7 +2903,7 @@ void App::OpenPickedPackage() {
             Trace("install: the cover image could not be decoded (%zu bytes)", jpeg.size());
         }
     }
-    Trace("install: %s -> %s (%s)", m_picked_file.c_str(),
+    Trace("install: %s -> %s (%s)", name.c_str(),
           m_install_status.stage == install::InstallStage::Skipped ? "skip" : "confirm",
           m_install_status.detail.c_str());
     /* A package the console already has writes nothing -- but what it leaves behind is still a
@@ -2870,6 +2914,40 @@ void App::OpenPickedPackage() {
                            : InstallScreen::Confirm;
 }
 
+
+/* The download source: the address comes from the system keyboard, is probed for Range support
+   (which is also where the container's size comes from) and then opens exactly like a file from
+   the card.  The two refusals the design names stop *here*, on the address screen: "no network" is
+   fixed in the console's settings and a missing Range is fixed by another address, so neither is a
+   dead end, and the screen offers the keyboard again. */
+void App::StartDownload() {
+    std::string address;
+    std::string error;
+    /* The field starts with the scheme, or with the address that was just refused: "connect to a
+       network first" is a one-step fix, and making the player type the whole address again after it
+       would be the kind of thing this app is not allowed to do. */
+    const std::string initial = m_download_url.empty() ? std::string("http://") : m_download_url;
+    if (!util::AskForLine(initial, Tr(i18n::StringId::InstallOpenAddress), &address, &error)) {
+        Trace("install: no address was entered (%s)", error.c_str());
+        return;
+    }
+    m_install_error.clear();
+    m_download_url = address;
+    m_http_source = std::make_unique<install::HttpSource>();
+    std::uint64_t size = 0;
+    if (!m_http_source->Open(address, &size, &error)) {
+        m_http_source.reset();
+        /* "no-network" and "range-unsupported" are codes the address screen has wording for; the
+           log gets whatever curl said. */
+        m_install_error = error;
+        Trace("install: %s cannot be downloaded: %s", address.c_str(), error.c_str());
+        return;
+    }
+    Trace("install: download %s (range probe ok, container %llu bytes)", address.c_str(),
+          static_cast<unsigned long long>(size));
+    m_install_origin = InstallScreen::Url;
+    OpenPackage(*m_http_source, address, size);
+}
 
 /* Runs the whole transfer on this thread.  The engine's steps are bounded (4 MB each), so the
    screen can be redrawn while it works; redrawing every step would spend more time in the
@@ -2960,6 +3038,7 @@ void App::LeaveInstallScreen() {
     }
     m_game_install.reset();
     m_file_source.reset();
+    m_http_source.reset();
     m_cover = ui::Bitmap{};
     m_install_error.clear();
 }
@@ -2975,6 +3054,14 @@ void App::InstallStepBack() {
             break;
         case InstallScreen::Files:
             /* The list keeps its position; picking another file is one press away. */
+            m_install_screen = InstallScreen::Choose;
+            break;
+        case InstallScreen::Url:
+            /* The address screen is where the download run starts, so its "back" is the source
+               screen -- and from there the next B leaves the installer. */
+            m_http_source.reset();
+            m_download_url.clear();
+            m_install_error.clear();
             m_install_screen = InstallScreen::Choose;
             break;
         case InstallScreen::Choose:
@@ -3128,11 +3215,16 @@ void App::RenderGameInstall(Surface surface) {
         RenderInstallConfirm(surface);
         return;
     }
+    if (m_install_screen == InstallScreen::Url) {
+        RenderInstallUrl(surface);
+        return;
+    }
     switch (m_install_screen) {
         case InstallScreen::Progress: RenderInstallProgress(surface); return;
         case InstallScreen::Result: RenderInstallResult(surface); return;
         case InstallScreen::Choose:
         case InstallScreen::Files:
+        case InstallScreen::Url:
         case InstallScreen::Confirm: break;
     }
 
@@ -3259,6 +3351,43 @@ void App::RenderInstallFiles(Surface surface) {
         if (item.selectable) {
             m_actions.push_back({kActionInstallPickRow, hit, true});
         }
+    }
+}
+
+/* The download screen: one instruction, one control (the system keyboard), and the reason when an
+   address was refused.  Nothing here invents an address -- the design is explicit that this app
+   does not host or recommend one -- so the screen is the player's own address, typed or pasted. */
+void App::RenderInstallUrl(Surface surface) {
+    m_actions.clear();
+    const int card_x = 200;
+    const int card_top = kHeaderHeight + 74;
+    const int card_width = surface.width - card_x * 2;
+    const int card_height = 260;
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    m_font.Draw(surface, card_x + 36, card_top + 30, kFontHeading, kText,
+                Tr(i18n::StringId::InstallDownload));
+    m_font.Draw(surface, card_x + 36, card_top + 76, kFontBody, kSubtle,
+                Tr(i18n::StringId::InstallDownloadSub), card_width - 72);
+    m_font.Draw(surface, card_x + 36, card_top + 118, kFontSmall, kSubtle,
+                Tr(i18n::StringId::InstallTypeUrl));
+    /* The address that was tried, so a typo is visible without opening the keyboard again. */
+    if (!m_download_url.empty()) {
+        m_font.Draw(surface, card_x + 36, card_top + 150, kFontSmall, kText,
+                    m_font.Fit(m_download_url, kFontSmall, card_width - 72, 1).c_str());
+    }
+    if (!m_install_error.empty()) {
+        /* Two of these have wording of their own ("connect first", "this address cannot resume");
+           anything else is the downloader's own sentence, which is the honest thing to show. */
+        const char *reason = m_install_error.c_str();
+        if (m_install_error == "no-network") {
+            reason = Tr(i18n::StringId::InstallNoNetwork);
+        } else if (m_install_error == "range-unsupported") {
+            reason = Tr(i18n::StringId::InstallRangeUnsupported);
+        }
+        m_font.Draw(surface, card_x + 36, card_top + 190, kFontSmall, kWarn, reason,
+                    card_width - 72);
     }
 }
 

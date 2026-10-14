@@ -30,6 +30,7 @@
 #include <memory>
 
 #include "install/game_install.hpp"
+#include "install/source_http_client.hpp"
 #include "install/source_local_file.hpp"
 #include "ui/touch.hpp"
 
@@ -200,7 +201,7 @@ private:
     Page m_game_install_return{Page::Home};
     /* The installer has its own little screens: today "pick a source" and "pick a file"; the
        confirm / progress / result screens join them next. */
-    enum class InstallScreen { Choose, Files, Confirm, Progress, Result };
+    enum class InstallScreen { Choose, Files, Url, Confirm, Progress, Result };
     InstallScreen m_install_screen{InstallScreen::Choose};
     ui::ListView m_file_list;
     std::string m_file_dir{"/"};
@@ -208,11 +209,24 @@ private:
        install; everything else is listed dimmed so the player sees why it is not offered. */
     void RefreshFileList();
     void RenderInstallFiles(Surface surface);
+    /* The download source's own screen: the address to type, and the reason it was refused when
+       the address or the network did not hold up. */
+    void RenderInstallUrl(Surface surface);
+    /* Two footer hints side by side, each of them a control: what is drawn as pressable has to be
+       pressable.  The confirm screen and the address screen both use it. */
+    void DrawFooterHintPair(Surface surface, int y, i18n::StringId first, int first_action,
+                            i18n::StringId second, int second_action);
     void LeaveDirectory();
     void PickFocusedFile();
     /* Opens the picked package and decides what to show next: the confirm screen, or the result
        screen when the package turns out to be pointless (already installed / newer installed). */
     void OpenPickedPackage();
+    /* The part of opening a package that does not care where its bytes come from: the CNMT/NACP
+       read, the confirm screen, or the result screen when the package turns out to be pointless.
+       The local file and the download address both land here. */
+    void OpenPackage(install::ContainerReader &reader, const std::string &name, std::uint64_t size);
+    /* Asks for an address (system keyboard), probes it and opens the package it names. */
+    void StartDownload();
     void RunGameInstall();
     /* The agent's own install, on this thread: the payload that matches the manifest's origin,
        the engine, and the per-file progress.  It owns no screen and decides no result -- the home
@@ -265,6 +279,12 @@ private:
        (the file list for a card install, the input screen for a URL or an upload). */
     InstallScreen m_install_origin{InstallScreen::Choose};
     std::unique_ptr<install::LocalFileSource> m_file_source;
+    /* The download source, kept alive for as long as the run in hand needs to read from it (the
+       engine holds a reference, not a copy). */
+    std::unique_ptr<install::HttpSource> m_http_source;
+    /* The address the run in hand was started from, shown back on the address screen so a typo is
+       visible without opening the keyboard again. */
+    std::string m_download_url;
     std::unique_ptr<install::GameInstall> m_game_install;
     install::InstallStatus m_install_status;
     std::string m_install_error;
