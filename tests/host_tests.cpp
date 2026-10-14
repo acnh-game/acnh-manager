@@ -1755,7 +1755,8 @@ void TestBuildMetaRecordBlob() {
     using acnh_manager::install::MetaType;
     using acnh_manager::install::PackageInfo;
 
-    /* A patch with two contents and a 24-byte extended header (the layout of a real update). */
+    /* A patch with two real contents, one delta fragment the package does not carry, and a 24-byte
+       extended header (the layout of a real update, which lists deltas it does not ship). */
     PackageInfo package;
     ContainerEntry meta;
     meta.name = "3c38f213ac463876a7cb515ae54d7599.cnmt.nca";
@@ -1770,6 +1771,7 @@ void TestBuildMetaRecordBlob() {
     package.cnmt.contents = {
         {"24ff98b9e4329ed7732a0bab58bc9e7a", ContentType::Program, 4229336576},
         {"f4adcc8d788455d78dd9d93899793b65", ContentType::Control, 1512448},
+        {"e3b921d4c028415bb98faef1b89f1b1d", ContentType::DeltaFragment, 133955584},
     };
 
     /* The CNMT payload as the device reads it: header at 0x0E, extended header, then one 0x38-byte
@@ -1777,8 +1779,8 @@ void TestBuildMetaRecordBlob() {
     std::vector<std::uint8_t> payload(0x20 + 24, 0);
     payload[0x0C] = 0x81; /* Patch */
     payload[0x0E] = 24;   /* extended header size */
-    payload[0x10] = 2;    /* content count */
-    for (std::size_t i = 0; i < 2; ++i) {
+    payload[0x10] = 3;    /* content count: the two contents plus the delta fragment */
+    for (std::size_t i = 0; i < 3; ++i) {
         const std::size_t entry = 0x20 + 24 + i * 0x38;
         payload.resize(entry + 0x38, 0);
         const std::string &id = package.cnmt.contents[i].content_id;
@@ -1791,18 +1793,22 @@ void TestBuildMetaRecordBlob() {
             payload[entry + 0x20 + 16 + b] = static_cast<std::uint8_t>((size >> (8 * b)) & 0xFF);
         }
         payload[entry + 0x20 + 20] = static_cast<std::uint8_t>((size >> 32) & 0xFF);
-        /* Content type as the CNMT carries it: 1 = Program, 3 = Control (NcmContentType). */
-        payload[entry + 0x20 + 22] = i == 0 ? 1 : 3;
+        /* Content type as the CNMT carries it: 1 = Program, 3 = Control, 6 = DeltaFragment. */
+        payload[entry + 0x20 + 22] = i == 0 ? 1 : (i == 1 ? 3 : 6);
     }
     package.meta_blob = payload;
 
     std::vector<std::uint8_t> blob;
     std::string error;
     CHECK(BuildMetaRecordBlob(package, &blob, &error));
-    /* 8 header + 24 extended + 3 content infos (the meta content counts) + no meta infos. */
+    /* 8 header + 24 extended + 3 content infos + no meta infos: the meta content and the two
+       contents the package carries.  The delta fragment is *listed by the CNMT and not shipped*,
+       so the record must not list it either -- a record that does is a title whose contents are
+       "missing" and which the system refuses to launch. */
     CHECK(blob.size() == 8 + 24 + 3 * 0x18);
     CHECK(blob[0] == 24 && blob[1] == 0);      /* extended header size */
-    CHECK(blob[2] == 3 && blob[3] == 0);       /* one more content than the CNMT lists */
+    /* The meta content plus the two shipped contents -- *not* the CNMT's three. */
+    CHECK(blob[2] == 3 && blob[3] == 0);
     CHECK(blob[4] == 0 && blob[5] == 0);       /* no content-meta infos */
     CHECK(blob[6] == 0 && blob[7] == 0);       /* attributes, storage */
     /* The meta content comes first, with the type the service expects for it (0 = Meta). */
@@ -1816,6 +1822,15 @@ void TestBuildMetaRecordBlob() {
     CHECK(blob[8 + 24 + 0x30 + 22] == 3);
     /* The hashes are not part of the record: each entry is exactly 24 bytes. */
     CHECK(blob[8 + 24 + 0x18 + 16] == static_cast<std::uint8_t>(4229336576 & 0xFF));
+    /* And the delta fragment's id is nowhere in the record at all. */
+    const std::uint8_t delta_id[4] = {0xE3, 0xB9, 0x21, 0xD4};
+    bool delta_listed = false;
+    for (std::size_t i = 0; i + sizeof(delta_id) <= blob.size(); ++i) {
+        if (std::memcmp(&blob[i], delta_id, sizeof(delta_id)) == 0) {
+            delta_listed = true;
+        }
+    }
+    CHECK(!delta_listed);
 
     /* A truncated CNMT is refused rather than half-copied. */
     PackageInfo broken = package;

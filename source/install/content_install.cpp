@@ -345,6 +345,9 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
                                                                          &key, 0);
             bool has_control = false;
             bool has_sized = false;
+            bool all_present = true;
+            NcmContentStorage cs{};
+            const bool cs_open = R_SUCCEEDED(ncmOpenContentStorage(&cs, storage));
             for (s32 i = 0; i < count && i < 64; ++i) {
                 u64 size = 0;
                 ncmContentInfoSizeToU64(&infos[i], &size);
@@ -354,19 +357,38 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
                 if (infos[i].content_type == 3) { /* NcmContentType_Control */
                     has_control = true;
                 }
+                /* A record that names a content the storage does not have is a title the console
+                   cannot launch -- the state an install leaves behind when the record lists
+                   contents it never wrote (the delta fragments, before this was fixed).  Asking
+                   per content is what lets the next install recognise that state and repair it
+                   instead of reporting "already installed": everything that *is* present is
+                   skipped by the transfer, so the repair is cheap. */
+                if (cs_open && all_present) {
+                    NcmContentId content_id = infos[i].content_id;
+                    bool present = false;
+                    if (R_FAILED(ncmContentStorageHas(&cs, &present, &content_id)) || !present) {
+                        all_present = false;
+                    }
+                }
+            }
+            if (cs_open) {
+                ncmContentStorageClose(&cs);
             }
             {
                 char note[160];
                 std::snprintf(note, sizeof(note),
-                              "usable? storage=%u rc=0x%x contents=%d sized=%d control=%d",
+                              "usable? storage=%u rc=0x%x contents=%d sized=%d control=%d present=%d",
                               static_cast<unsigned>(storage), static_cast<unsigned>(list_rc),
-                              static_cast<int>(count), has_sized ? 1 : 0, has_control ? 1 : 0);
+                              static_cast<int>(count), has_sized ? 1 : 0, has_control ? 1 : 0,
+                              all_present ? 1 : 0);
                 m_finish_trace.push_back(note);
             }
             /* A list the service cannot really read comes back as entries full of zeroes (the
                offsets it computed run past the payload), which is what a record written in the
-               wrong shape produces; a content with no size is not a content. */
-            if (R_SUCCEEDED(list_rc) && count > 0 && has_sized && (!needs_control || has_control)) {
+               wrong shape produces; a content with no size is not a content; and a content the
+               storage does not have is a title that will not start. */
+            if (R_SUCCEEDED(list_rc) && count > 0 && has_sized && all_present &&
+                (!needs_control || has_control)) {
                 *usable = true;
                 ncmContentMetaDatabaseClose(&db);
                 return true;

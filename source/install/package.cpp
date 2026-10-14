@@ -125,7 +125,11 @@ bool BuildMetaRecordBlob(const PackageInfo &package, std::vector<std::uint8_t> *
                  static_cast<std::size_t>(content_meta_count) * kMetaInfoSize);
     /* The header the console stores, with this package's meta content counted as a content. */
     WriteU16(&blob, extended_header_size);
-    WriteU16(&blob, static_cast<std::uint16_t>(content_count + 1));
+    /* The count has to be the number of entries written below, and that is *not* the CNMT's own
+       content_count: the delta fragments are dropped (see the loop), so the header is patched
+       after them rather than before.  Reserve its place here. */
+    const std::size_t count_offset = blob.size();
+    WriteU16(&blob, 0);
     WriteU16(&blob, content_meta_count);
     blob.push_back(attributes);
     blob.push_back(storage_id);
@@ -137,12 +141,28 @@ bool BuildMetaRecordBlob(const PackageInfo &package, std::vector<std::uint8_t> *
         return false;
     }
     AppendContentInfo(&blob, meta_id, meta->size, 0); /* 0 = NcmContentType_Meta */
+    std::uint16_t written_contents = 0;
     for (std::uint16_t i = 0; i < content_count; ++i) {
         const std::size_t entry =
             extended + static_cast<std::size_t>(i) * kCnmtContentEntrySize;
+        /* The delta fragments are *listed* by the CNMT but not shipped inside the package (we do
+           not fetch them, and neither does the reference implementation), so they must not be
+           listed by the record either: the record is the console's answer to "which contents make
+           up this version", and every entry in it has to exist in the storage.  Listing them
+           anyway is what made an update whose deltas were gone (after DBI deleted the console's
+           other packages) impossible to launch: the record claimed 33 contents, three were there,
+           and the system refused the title.  The reference skips exactly these entries when it
+           builds the same blob (`yati.cpp`: `if (info.content_type == NcmContentType_DeltaFragment)
+           continue;`, then `content_count = infos.size() + 1`). */
+        if (payload[entry + 0x20 + 0x16] == 0x06) { /* NcmContentType_DeltaFragment */
+            continue;
+        }
         blob.insert(blob.end(), payload.begin() + entry + 0x20,
                     payload.begin() + entry + 0x20 + kContentInfoSize);
+        ++written_contents;
     }
+    blob[count_offset] = static_cast<std::uint8_t>((written_contents + 1) & 0xFF);
+    blob[count_offset + 1] = static_cast<std::uint8_t>(((written_contents + 1) >> 8) & 0xFF);
     blob.insert(blob.end(), payload.begin() + entries_end, payload.begin() + metas_end);
     *out = std::move(blob);
     return true;
