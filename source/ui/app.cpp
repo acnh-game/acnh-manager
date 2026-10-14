@@ -3006,14 +3006,24 @@ void App::RenderGameInstall(Surface surface) {
                         m_focus == entries[i].action ? kCardDisabled : kCard);
         DrawKeyBadge(surface, m_font, rect.x + 46, rect.y + rect.h / 2, 22, entries[i].key, kHeader,
                      kOnHeader);
-        const char *label = Tr(entries[i].label);
-        const int label_width = m_font.Measure(label, kFontHeading + 8);
-        m_font.Draw(surface, rect.x + rect.w / 2 - label_width / 2, rect.y + rect.h / 2 - 40,
-                    kFontHeading + 8, kText, label);
-        const char *sub = Tr(entries[i].sub);
-        const int sub_width = m_font.Measure(sub, kFontSmall);
-        m_font.Draw(surface, rect.x + rect.w / 2 - sub_width / 2, rect.y + rect.h / 2 + 8,
-                    kFontSmall, kSubtle, sub);
+        /* The labels live to the right of the badge and are fitted to what is left of the card.
+           Centring them on the card (which ignored the badge) worked only while the labels were
+           the short Chinese ones: in English "Download and install" ran under the Ⓧ and out of
+           both card edges.  The sub-label gets two lines to wrap onto, the title one. */
+        const int text_x = rect.x + 46 + 22 + 18;
+        const int text_width = rect.x + rect.w - 24 - text_x;
+        const std::string label =
+            m_font.Fit(Tr(entries[i].label), kFontHeading + 8, text_width, 2);
+        const std::string sub = m_font.Fit(Tr(entries[i].sub), kFontSmall, text_width, 2);
+        const int label_height = m_font.LineCount(label, kFontHeading + 8, text_width) *
+                                 m_font.LineHeight(kFontHeading + 8);
+        const int sub_height =
+            m_font.LineCount(sub, kFontSmall, text_width) * m_font.LineHeight(kFontSmall);
+        const int gap = 10;
+        const int block_top = rect.y + (rect.h - (label_height + gap + sub_height)) / 2;
+        m_font.Draw(surface, text_x, block_top, kFontHeading + 8, kText, label.c_str(), text_width);
+        m_font.Draw(surface, text_x, block_top + label_height + gap, kFontSmall, kSubtle,
+                    sub.c_str(), text_width);
         m_actions.push_back({entries[i].action, rect, true});
     }
     m_focus = m_actions.empty() ? -1 : 0;
