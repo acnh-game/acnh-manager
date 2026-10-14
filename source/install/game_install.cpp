@@ -126,6 +126,7 @@ bool GameInstall::Prepare(std::string *error) {
         meta_content.size = meta_entry->size;
         meta_content.content_id = meta_entry->name.substr(0, 32);
         meta_content.kind = ContentKind::Meta;
+        m_meta_content = meta_content; /* the register step needs it: the task cannot carry it */
         Placeholder placeholder;
         if (!m_installer.InstallContentForRead(m_reader, meta_content, &placeholder, error)) {
             m_status.stage = InstallStage::Failed;
@@ -576,10 +577,25 @@ bool GameInstall::Finish(std::string *error) {
         return false;
     }
     m_status.stage = InstallStage::Finalizing;
-    if (!m_installer.Register(m_task, error)) {
+    /* The meta content is registered here too: it is the one content the task cannot list (the
+       CNMT does not name itself), and a record that names a content the storage does not have is a
+       title the console refuses to launch.  The placeholder may already be gone if the read-out's
+       fallback registered it, which Register tolerates. */
+    const std::string meta_placeholder_id = m_meta_placeholder.placeholder_id;
+    TaskContent meta_for_register = m_meta_content;
+    meta_for_register.placeholder_id = meta_placeholder_id;
+    meta_for_register.written = meta_for_register.size;
+    if (!m_installer.Register(m_task, meta_placeholder_id.empty() ? nullptr : &meta_for_register,
+                              error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
+    }
+    /* Flush the register phase's own trace here: the finish phase clears the trace when it starts
+       (its lines describe the steps below), so without this the one line that says whether the meta
+       content -- the content nobody else registers -- actually landed would never reach log.txt. */
+    for (const auto &line : m_installer.FinishTrace()) {
+        Note("install: register %s", line.c_str());
     }
     ContentInstaller::FinishInputs inputs;
     inputs.title_id = m_package.cnmt.title_id;

@@ -114,6 +114,9 @@ public:
        phase must not fetch it again. */
     Placeholder m_meta_placeholder;
     Placeholder m_control_placeholder;
+    /* The package's own meta content, kept so the register step can hand it to the installer: the
+       CNMT does not list itself, so the task never carries it (see ContentInstaller::Register). */
+    TaskContent m_meta_content;
     /* Contents that were installed only so we could read out of them (meta for the CNMT, control
        for the NACP): filled before the transfer phase, and cleaned up if the run fails. */
     std::vector<Placeholder> m_read_placeholders;

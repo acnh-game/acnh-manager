@@ -346,6 +346,10 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
             bool has_control = false;
             bool has_sized = false;
             bool all_present = true;
+            /* Every content the storage does not have, for the trace: "one is missing" and "all
+               of them are" point at very different causes. */
+            std::string missing;
+            int missing_count = 0;
             NcmContentStorage cs{};
             const bool cs_open = R_SUCCEEDED(ncmOpenContentStorage(&cs, storage));
             for (s32 i = 0; i < count && i < 64; ++i) {
@@ -363,11 +367,18 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
                    per content is what lets the next install recognise that state and repair it
                    instead of reporting "already installed": everything that *is* present is
                    skipped by the transfer, so the repair is cheap. */
-                if (cs_open && all_present) {
+                if (cs_open) {
                     NcmContentId content_id = infos[i].content_id;
                     bool present = false;
                     if (R_FAILED(ncmContentStorageHas(&cs, &present, &content_id)) || !present) {
                         all_present = false;
+                        if (missing_count < 4) {
+                            if (!missing.empty()) {
+                                missing += ",";
+                            }
+                            missing += ToHex(&content_id, sizeof(content_id));
+                        }
+                        ++missing_count;
                     }
                 }
             }
@@ -382,6 +393,12 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
                               static_cast<int>(count), has_sized ? 1 : 0, has_control ? 1 : 0,
                               all_present ? 1 : 0);
                 m_finish_trace.push_back(note);
+                if (!all_present) {
+                    m_finish_trace.push_back(
+                        "usable? missing " + std::to_string(missing_count) + " of " +
+                        std::to_string(static_cast<int>(count)) + ": " + missing +
+                        (cs_open ? "" : " (the content storage would not open)"));
+                }
             }
             /* A list the service cannot really read comes back as entries full of zeroes (the
                offsets it computed run past the payload), which is what a record written in the
@@ -520,11 +537,23 @@ bool ContentInstaller::Write(const InstallTask &task, const RangeRequest &range,
     return true;
 }
 
-bool ContentInstaller::Register(const InstallTask &task, std::string *error) {
+bool ContentInstaller::Register(const InstallTask &task, const TaskContent *meta,
+                                std::string *error) {
     if (!EnsureOpen(error)) {
         return false;
     }
+    /* One loop for both: the meta content needs exactly the same treatment as the task's
+       contents, and giving it its own copy of this logic is how the two drift apart. */
+    std::vector<const TaskContent *> ordered;
+    ordered.reserve(task.contents.size() + 1);
+    if (meta != nullptr) {
+        ordered.push_back(meta);
+    }
     for (const auto &content : task.contents) {
+        ordered.push_back(&content);
+    }
+    for (const TaskContent *entry : ordered) {
+        const TaskContent &content = *entry;
         if (content.skipped) {
             continue;
         }
@@ -560,6 +589,12 @@ bool ContentInstaller::Register(const InstallTask &task, std::string *error) {
             }
             *error = Describe("registering a content", rc);
             return false;
+        }
+        if (entry == meta) {
+            /* The one content whose registration is easy to forget (it is not in the task), so its
+               outcome is in the trace: a record that names it while the storage does not have it
+               is a title that will not launch. */
+            m_finish_trace.push_back("meta content registered " + content.content_id);
         }
     }
     return true;

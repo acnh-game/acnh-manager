@@ -55,8 +55,16 @@ public:
     bool Write(const InstallTask &task, const RangeRequest &range, const std::uint8_t *data,
                std::size_t size, std::string *error);
 
-    /* Registers every content that is fully written, in task order. */
-    bool Register(const InstallTask &task, std::string *error);
+    /* Registers every content that is fully written: the package's own meta content first, then
+       the task's contents in order.
+
+       `meta` exists because the task cannot carry it: the CNMT does not list itself, so the meta
+       content would otherwise never be registered -- and a record that names a content the storage
+       does not have is a title the console refuses to launch (measured: a fresh install left it in
+       a placeholder and the game would not start).  The reference implementation registers it with
+       the rest (`RegisterNcasAndPushRecord` registers the CNMT NCA first).  Pass nullptr when the
+       read-out's fallback already registered it to mount it, or for an add-on, which has none. */
+    bool Register(const InstallTask &task, const TaskContent *meta, std::string *error);
 
     /* True when an application whose program id belongs to `title_id_hex` is running right now
        (suspended in the background counts: the finish step deletes the older version's contents,
