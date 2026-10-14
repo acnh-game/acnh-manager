@@ -254,6 +254,9 @@ private:
     void RenderInstallConfirm(Surface surface);
     void RenderInstallProgress(Surface surface);
     void RenderInstallResult(Surface surface);
+    /* "集合啦！动物森友会 3.0.3(更新)" -- the run in hand named in one line; the confirm, progress
+       and result cards all show it, so what is being installed never has to be guessed at. */
+    std::string PackageSummary() const;
     /* The cover of the game the package belongs to, decoded once when the package is opened and
        drawn on the card's right-hand side.  Returns the width the card's text may still use. */
     int DrawPackageCover(Surface surface, int card_x, int card_top, int card_w, int card_h);

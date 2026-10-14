@@ -2995,6 +2995,34 @@ bool App::AgentInstalled() const {
            m_home_kind != HomeKind::GameMissing;
 }
 
+/* "集合啦！动物森友会 3.0.3(更新)" -- what the run in hand is, in one line.  The confirm page, the
+   progress page and the result page all name it the same way, because a player who looks away
+   during a four-gigabyte transfer has to be able to tell what is being written without going back. */
+std::string App::PackageSummary() const {
+    if (m_game_install == nullptr) {
+        return std::string();
+    }
+    const install::PackageInfo &package = m_game_install->Package();
+    i18n::StringId kind = i18n::StringId::TypeUpdate;
+    switch (package.cnmt.type) {
+        case install::MetaType::Application:
+            kind = i18n::StringId::TypeBase;
+            break;
+        case install::MetaType::AddOnContent:
+            kind = i18n::StringId::TypeDlc;
+            break;
+        default:
+            break; /* a patch, a data patch, or a kind the manifest does not name */
+    }
+    std::string summary = m_install_status.game_name.empty() ? package.cnmt.title_id
+                                                             : m_install_status.game_name;
+    if (!m_install_status.game_version.empty()) {
+        summary += " " + m_install_status.game_version;
+    }
+    summary += "(" + std::string(Tr(kind)) + ")";
+    return summary;
+}
+
 /* The progress screen: how far along by *bytes*, because one content in a real update is several
    GB and the others are kilobytes -- "3 of 5 contents" would sit at 20% until the very end. */
 void App::RenderInstallProgress(Surface surface) {
@@ -3005,6 +3033,11 @@ void App::RenderInstallProgress(Surface surface) {
     const int card_height = 330;
     FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
     FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+    /* The same cover the confirm page drew, for the same reason: a transfer that takes minutes
+       must not leave the player guessing which game this is.  It also takes the room it needs out
+       of the card first, so no line here can run under it. */
+    const int text_width = DrawPackageCover(surface, card_x, card_top, card_width, card_height);
+    const int text_x = card_x + 36;
 
     /* The card serves two steps of one run: the package's own transfer (bytes, contents) and, right
        after it, the agent's install (files).  Same shape and same colours, but honest numbers --
@@ -3015,27 +3048,39 @@ void App::RenderInstallProgress(Surface surface) {
     const char *stage = Tr(agent_step   ? i18n::StringId::ProgressInstalling
                                       : (finalizing ? i18n::StringId::ProgressFinalize
                                                     : i18n::StringId::ProgressReceive));
-    const int stage_width = m_font.Measure(stage, kFontHeading);
-    m_font.Draw(surface, card_x + card_width / 2 - stage_width / 2, card_top + 28, kFontHeading,
-                kText, stage);
+
+    /* What is being installed, in the words the confirm page used -- the one line the old card was
+       missing: "3 of 5 contents" said nothing about *what* those contents are for. */
+    m_font.Draw(surface, text_x, card_top + 26, kFontBody, kText,
+                m_font.Fit(PackageSummary(), kFontBody, text_width, 1).c_str());
+    m_font.DrawBold(surface, text_x, card_top + 62, kFontHeading, kText, stage);
 
     char counter[64];
-    std::snprintf(counter, sizeof(counter), Tr(i18n::StringId::ProgressContents),
-                  agent_step ? m_progress_index : m_install_status.done_contents,
-                  agent_step ? m_progress_total : m_install_status.total_contents);
-    const int counter_width = m_font.Measure(counter, kFontSmall);
-    m_font.Draw(surface, card_x + card_width / 2 - counter_width / 2, card_top + 70, kFontSmall,
-                kSubtle, counter);
+    /* "Content N of M" names the one being written, so the package step counts the current one --
+       `done_contents` counts *finished* contents, which printed "0 of 1" for the whole of a
+       single-content package (an add-on), reading like nothing had started.  The engine's own
+       counter for the agent step is already the file in hand. */
+    const int counter_done =
+        agent_step ? m_progress_index
+                   : (m_install_status.total_contents > 0
+                          ? std::min(m_install_status.done_contents + 1,
+                                     m_install_status.total_contents)
+                          : 0);
+    const int counter_total = agent_step ? m_progress_total : m_install_status.total_contents;
+    std::snprintf(counter, sizeof(counter), Tr(i18n::StringId::ProgressContents), counter_done,
+                  counter_total);
+    m_font.Draw(surface, text_x, card_top + 106, kFontSmall, kSubtle, counter);
 
     const std::string &current_name =
         agent_step ? m_progress_step : m_install_status.current_name;
-    const int name_width = m_font.Measure(current_name.c_str(), kFontBody);
-    m_font.Draw(surface, card_x + card_width / 2 - name_width / 2, card_top + 104, kFontBody,
-                kText, current_name.c_str());
+    m_font.Draw(surface, text_x, card_top + 138, kFontBody, kText,
+                m_font.Fit(current_name, kFontBody, text_width, 1).c_str());
 
-    const int bar_x = card_x + 60;
-    const int bar_y = card_top + 182;
-    const int bar_width = card_width - 200;
+    /* The bar keeps to the text's column: the percent sits to the right of it, still clear of the
+       cover. */
+    const int bar_x = text_x;
+    const int bar_y = card_top + 194;
+    const int bar_width = text_width - 130;
     constexpr int kBarHeight = 16;
     FillRoundedRect(surface, bar_x, bar_y, bar_width, kBarHeight, kBarHeight / 2, kCardDisabled);
     std::uint64_t total = m_install_status.total_bytes;
@@ -3061,15 +3106,12 @@ void App::RenderInstallProgress(Surface surface) {
         std::snprintf(detail, sizeof(detail), "%.2f / %.2f GB",
                       static_cast<double>(done) / (1024.0 * 1024.0 * 1024.0),
                       static_cast<double>(total) / (1024.0 * 1024.0 * 1024.0));
-        const int detail_width = m_font.Measure(detail, kFontSmall);
-        m_font.Draw(surface, card_x + card_width / 2 - detail_width / 2, card_top + 222, kFontSmall,
-                    kSubtle, detail);
+        m_font.Draw(surface, text_x, card_top + 236, kFontSmall, kSubtle, detail);
     }
     if (finalizing) {
-        const char *note = Tr(i18n::StringId::ProgressFinalize);
-        const int note_width = m_font.Measure(note, kFontSmall);
-        m_font.Draw(surface, card_x + card_width / 2 - note_width / 2, card_top + 256, kFontSmall,
-                    kWarn, note);
+        /* Says the one thing the numbers cannot: this part cannot be cancelled. */
+        m_font.Draw(surface, text_x, card_top + 268, kFontSmall, kWarn,
+                    Tr(i18n::StringId::ProgressFinalize));
     }
 }
 
@@ -3385,6 +3427,9 @@ void App::RenderInstallResult(Surface surface) {
     const int card_height = 330;
     FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
     FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+    /* The picture the confirm page showed, so the player who walked away during the transfer sees
+       the same game here as the one they started -- and, like there, it claims its room first. */
+    const int text_width = DrawPackageCover(surface, card_x, card_top, card_width, card_height);
 
     /* Only `Done` is "installed".  Any other stage reaching this screen means the run stopped
        somewhere -- and calling that "installed" is how a failed finish looked like a success while
@@ -3410,26 +3455,10 @@ void App::RenderInstallResult(Surface surface) {
     }
     m_font.DrawBold(surface, card_x + 40, card_top + 34, kFontTitle, colour, Tr(title));
 
-    /* What this is: name, version, kind -- one line, the way a player reads a package. */
-    const std::string name = m_install_status.game_name.empty() ? package.cnmt.title_id
-                                                               : m_install_status.game_name;
-    const char *kind = install::MetaTypeLabel(package.cnmt.type);
-    i18n::StringId kind_label = i18n::StringId::TypeUpdate;
-    if (package.cnmt.type == install::MetaType::Application) {
-        kind_label = i18n::StringId::TypeBase;
-    } else if (package.cnmt.type == install::MetaType::AddOnContent) {
-        kind_label = i18n::StringId::TypeDlc;
-    }
-    (void)kind;
-    char what[256];
-    if (status.game_version.empty()) {
-        std::snprintf(what, sizeof(what), "%s(%s)", name.c_str(), Tr(kind_label));
-    } else {
-        std::snprintf(what, sizeof(what), "%s %s(%s)", name.c_str(),
-                      status.game_version.c_str(), Tr(kind_label));
-    }
+    /* What this is: name, version, kind -- the same line the progress card carried. */
+    const std::string what = PackageSummary();
     m_font.Draw(surface, card_x + 40, card_top + 118, kFontBody + 4, kText,
-                m_font.Fit(what, kFontBody + 4, card_width - 80, 1).c_str());
+                m_font.Fit(what, kFontBody + 4, text_width, 1).c_str());
 
     /* What happened. */
     char happened[256];
@@ -3472,9 +3501,15 @@ void App::RenderInstallResult(Surface surface) {
         }
     }
     /* Wrapped to the card: a diagnostic like "writing into the placeholder failed (0x307202) at
-       offset ..." ran off the screen edge when it was drawn as one line. */
+       offset ..." ran off the screen edge when it was drawn as one line.  The "what now" line
+       below then follows however many lines that took (never higher than it used to sit): the
+       text column got narrower when the cover arrived, so a long diagnostic can need one line
+       more than it did. */
     m_font.Draw(surface, card_x + 40, card_top + 176, kFontBody, kSubtle, happened,
-                card_width - 80);
+                text_width);
+    const int happened_lines = std::max(1, m_font.LineCount(happened, kFontBody, text_width));
+    const int now_y = std::max(card_top + 236,
+                               card_top + 176 + happened_lines * m_font.LineHeight(kFontBody) + 10);
 
     /* What now: only about the agent, and only when it is true.  An add-on or a data patch is not
        a version question at all -- it leaves the game's version where it was -- so this run has
@@ -3494,16 +3529,16 @@ void App::RenderInstallResult(Surface surface) {
                wording for the case where the step was never reached: it is the one line that tells
                the player what to do instead. */
             if (m_agent_follow_up == AgentFollowUp::Installed) {
-                m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
+                m_font.Draw(surface, card_x + 40, now_y, kFontBody, kGood,
                             Tr(i18n::StringId::ResultAgentFollowUpInstalled));
             } else if (m_agent_follow_up == AgentFollowUp::Failed) {
-                m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kWarn,
-                            Tr(i18n::StringId::ResultAgentFollowUpFailed), card_width - 80);
+                m_font.Draw(surface, card_x + 40, now_y, kFontBody, kWarn,
+                            Tr(i18n::StringId::ResultAgentFollowUpFailed), text_width);
             } else if (AgentInstalled()) {
-                m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
+                m_font.Draw(surface, card_x + 40, now_y, kFontBody, kGood,
                             Tr(i18n::StringId::ResultAgentAlreadyInstalled));
             } else {
-                m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kGood,
+                m_font.Draw(surface, card_x + 40, now_y, kFontBody, kGood,
                             Tr(i18n::StringId::ResultAgentReady));
             }
         } else if (TitleIsOurs(package.cnmt.title_id)) {
@@ -3512,8 +3547,7 @@ void App::RenderInstallResult(Surface surface) {
             char note[160];
             std::snprintf(note, sizeof(note), Tr(i18n::StringId::InstallAgentUnsupported),
                           AgentSupportedVersionsFor(package.cnmt.title_id).c_str());
-            m_font.Draw(surface, card_x + 40, card_top + 236, kFontBody, kWarn, note,
-                        card_width - 80);
+            m_font.Draw(surface, card_x + 40, now_y, kFontBody, kWarn, note, text_width);
         }
     }
     if (status.modified) {
