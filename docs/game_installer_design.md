@@ -21,7 +21,7 @@
 |---|---|
 | 内容来源 | 三种:**本机 SD 文件**、**HTTP 下载**(主机作 client)、**HTTP 上传**(主机作 server) |
 | 我们托管什么 | **什么都不托管**:不发布游戏包、清单里没有下载地址 |
-| 支持格式 | **NSP / NSZ / XCI / XCZ**;允许装游戏本体(XCI 需要翻转 NCA 头的 distribution type)、更新包、DLC |
+| 支持格式 | **NSP / NSZ / XCI / XCZ**;允许装游戏本体(XCI 需要翻转 NCA 头的 distribution type)、更新包、DLC。**NSZ/XCZ 里大的 NCA 是 NCZ 流**(NCA 头原样 + 分节表 + 一段 zstd 流,分节数据是"已解密"的),按 `install/ncz.*` 还原成 NCA 之后再写占位:分节里带 key/counter,`crypto_type >= AES-CTR` 的节要用 AES-CTR 加回去(规则与判据逐条照参考实现的 NCZ 读侧) |
 | 校验与安装选项 | **逐项跟随参考实现的默认值**(`include/app.hpp`):装到 SD、已装则跳过、不允许降级、**默认跳过 NCA 哈希与 NCA 头验签**、不忽略 distribution bit(即会改造它)、票据相关默认值见第 5 节 |
 | 与 agent 的关系 | **一次动作做两件事**:装完本体/更新、且落地的版本受支持时,自动把 agent 装上(第 14 节第 32 条);追加内容、数据补丁、不受支持的版本都不触发 |
 | MSP(mod 包) | **不做**(理由与影响见第 7 节) |
@@ -573,6 +573,9 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
 | `source/install/content_install.*` | ncm/ns/es 调用:建占位 → 写入 → `Register` → 元数据库 → 导票据 → **删同 title 旧版本**(跳过本次复用的内容)→ 推 record;失败一律回滚自己建的占位;**"空间检查"与"跳过已有内容"共用同一个 `Has(content)` 判断**(同一目标存储),两者不允许各算一套 | 设备 |
 | `source/install/source_http_client.*` | libcurl 流式下载 + Range 续传 | 设备 |
 | `source/install/source_local_file.*` | SD 文件来源(含文件浏览器数据源) | 设备(逻辑可主机测) |
+| `source/install/ncz.*` | NSZ/XCZ 里一个压缩内容的表(NCA 头原样、分节表、可选块表、负载起点)与 AES counter 的组合;**已实现**:表解析、分节查找、counter 组合,以及"整段流解码"的边界(主机测试钉住) | 主机(已覆盖) |
+| `source/install/source_http_client.*` | 下载来源:先做 `Range: bytes=0-0` 探测(**必须 206 + `Content-Range`**,容器总大小也来自这里;不支持就拒绝),之后每次读发一个精确 Range 请求(同一连接复用),断点续传因此是"按偏移读"的天然结果。**已实现**(真机网络受限于路由器的客户端隔离,见 `docs/device-acceptance.md`) | 设备 |
+| `source/util/swkbd.*` | 系统软键盘薄封装:取一行文本(下载地址),预填 scheme / 上次被拒的地址 | 设备 |
 | `source/install/title_name.*` | 包里的名字该用哪一种语言显示:App 界面语言的写法放主行,主机系统语言的写法不同时做第二行(第 8 节、第 14 节第 31 条) | 主机(已覆盖) |
 | `source/install/icon_file.*` | 封面取控制内容里的哪一张图:按 App 界面语言挑 `icon_<语言>.dat`,退到 `icon_AmericanEnglish.dat`,再退到任意一张(第 8 节) | 主机(已覆盖) |
 | `source/util/swkbd.*` | 系统软键盘薄封装(参考实现同形状):取 URL、最近 URL 历史 | 设备 |
@@ -601,6 +604,7 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
 | 存储数字格式化 | 字节 → `85.6 GB`;边界:0、恰好 1 GiB、极大值;以及"可用 / 总"整行的组装;读取失败 → 占位串而非 0 |
 | 游戏名取哪一种语言 | App 与主机给的名字一致 → 只有主行;不一致 → 主行 + 第二行;包里没有 App 的语言 → 退回主机给的名字;两边都没有 → 包里第一个非空写法;完全没有名字 → 空(屏上退回 title id) |
 | 封面取哪一张图 | 控制内容里本语言的那张 → 同类语言的另一张 → `icon_AmericanEnglish.dat` → 任意一张 `icon_*.dat`(取名字最小的);一张都没有 → 空(调用方再问系统);名字形状不对的文件(如 `icons.dat`)不算图标 |
+| NSZ/XCZ 的分节表 | 魔数与节数解析;节表、可选块表(版本/类型/块大小指数/块数/块偏移)解析;负载起点 = 表之后;NCA 大小 = 各节末端;分节查找(覆盖 / 节间空隙 / 首尾之外);counter = 节自带高 64 位 + 绝对块号(大端);以及"表越界 / 节落在 NCA 头里 / 节数为 0 或过大"一律拒绝 |
 | 安装选项默认值 | 第 5 节那套默认值与参考实现 `include/app.hpp` 一致;非法组合(例如"跳过基础部分"同时"仅安装票据")有明确规则 |
 | 薄层的判定逻辑 | `task id` / 期望 offset 不匹配 → 409;带旧 task id 的请求被拒;`/status.json` 字段组装(不依赖 socket 的部分) |
 

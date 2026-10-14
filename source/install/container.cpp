@@ -10,7 +10,11 @@ namespace {
 
 constexpr std::uint32_t kPfs0Magic = 0x30534650u; /* "PFS0" */
 constexpr std::uint32_t kHfs0Magic = 0x30534648u; /* "HFS0" */
-constexpr std::uint32_t kHeadMagic = 0x48454144u; /* "HEAD" */
+/* "HEAD", read the way ReadU32 reads: little-endian.  The first version carried the big-endian
+   spelling (0x48454144) and the host tests' fixture was written with the same wrong constant, so
+   every real cartridge dump was refused with "unknown container" while the tests stayed green --
+   found on hardware with the first XCI anyone tried (docs/device-acceptance.md). */
+constexpr std::uint32_t kHeadMagic = 0x44414548u; /* "HEAD" */
 
 constexpr std::uint64_t kXciRootOffset = 0xF000;
 constexpr std::uint64_t kXciRootOffsetWithKeyArea = 0xF000 + 0x1000;
@@ -20,10 +24,15 @@ constexpr std::uint32_t kMaxFiles = 0x10000;
 constexpr std::uint32_t kMaxStringTable = 16u * 1024u * 1024u;
 
 constexpr std::size_t kHeaderSize = 0x10;
-/* Both formats use the same 0x18-byte entry: u64 data offset, u64 size, u32 name offset and a
-   last u32 that is padding in PFS0 and the hashed-region size in HFS0.  The parser reads the
-   fields by offset (the structs would need packing) and never looks at the last word. */
-constexpr std::size_t kEntrySize = 0x18;
+/* The two formats do **not** share an entry size, which the first version of this file assumed:
+   PFS0's entry is 0x18 bytes (u64 data offset, u64 size, u32 name offset, u32 padding), while
+   HFS0's is 0x40 (the same four fields, then u64 reserved and a 0x20-byte hash of the entry's
+   hashed region).  Reading a cartridge dump with the 0x18 stride walked into the middle of the
+   first entry and the second, so every XCI was refused -- while the host tests stayed green,
+   because their fixture wrote the same wrong stride (found on hardware, see
+   docs/device-acceptance.md). */
+constexpr std::size_t kPfs0EntrySize = 0x18;
+constexpr std::size_t kHfs0EntrySize = 0x40;
 
 std::uint32_t ReadU32(const std::uint8_t *p) {
     return static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8) |
@@ -80,7 +89,7 @@ bool EntryFits(std::uint64_t container_size, const ContainerEntry &entry) {
         return true; /* the source does not know the size (a stream), so this cannot be checked */
     }
     std::uint64_t end = 0;
-    return AddNoOverflow(entry.offset, entry.size, &end) && end <= container_size;
+    return AddNoOverflow(entry.offset, entry.packed_size, &end) && end <= container_size;
 }
 
 /* Shared tail of both formats: turn the raw table into entries, then split them into the
@@ -97,12 +106,18 @@ bool CollectEntries(const std::vector<std::string> &names,
         ContainerEntry entry;
         entry.name = name;
         entry.offset = data_offset + sizes[i].first;
+        /* The bytes the entry occupies.  For a compressed content this is the `.ncz` stream; the
+           NCA it rebuilds is larger, and that size is filled in when the NCZ tables are read. */
         entry.size = sizes[i].second;
+        entry.packed_size = sizes[i].second;
         if (!EntryFits(container_size, entry)) {
             *error = "an entry lies outside the container (broken header)";
             return false;
         }
-        if (EndsWith(name, ".nca")) {
+        if (EndsWith(name, ".ncz")) {
+            entry.compressed = true;
+            out->contents.push_back(entry);
+        } else if (EndsWith(name, ".nca")) {
             out->contents.push_back(entry);
         } else {
             out->extra.push_back(entry);
@@ -130,7 +145,7 @@ bool ParsePfs0(ContainerReader &reader, std::uint64_t container_size, ContainerI
     const std::uint64_t table_offset = kHeaderSize;
     std::uint64_t strings_offset = 0;
     std::uint64_t data_offset = 0;
-    if (!AddNoOverflow(table_offset, static_cast<std::uint64_t>(total_files) * kEntrySize,
+    if (!AddNoOverflow(table_offset, static_cast<std::uint64_t>(total_files) * kPfs0EntrySize,
                        &strings_offset) ||
         !AddNoOverflow(strings_offset, string_table_size, &data_offset)) {
         *error = "header offsets overflow";
@@ -141,7 +156,7 @@ bool ParsePfs0(ContainerReader &reader, std::uint64_t container_size, ContainerI
         return false;
     }
 
-    std::vector<std::uint8_t> table(static_cast<std::size_t>(total_files) * kEntrySize);
+    std::vector<std::uint8_t> table(static_cast<std::size_t>(total_files) * kPfs0EntrySize);
     if (!ReadExact(reader, table_offset, table.size(), table.data())) {
         *error = "cannot read the file table";
         return false;
@@ -158,7 +173,7 @@ bool ParsePfs0(ContainerReader &reader, std::uint64_t container_size, ContainerI
     names.reserve(total_files);
     sizes.reserve(total_files);
     for (std::uint32_t i = 0; i < total_files; ++i) {
-        const std::uint8_t *row = table.data() + static_cast<std::size_t>(i) * kEntrySize;
+        const std::uint8_t *row = table.data() + static_cast<std::size_t>(i) * kPfs0EntrySize;
         const std::uint32_t name_offset = ReadU32(row + 16);
         if (name_offset >= strings.size()) {
             *error = "name offset out of range (broken header)";
@@ -212,7 +227,7 @@ bool ParseHfs0(ContainerReader &reader, std::uint64_t offset, std::uint64_t cont
     std::uint64_t strings_offset = 0;
     std::uint64_t entries_offset = 0;
     if (!AddNoOverflow(offset, kHeaderSize, &table_offset) ||
-        !AddNoOverflow(table_offset, static_cast<std::uint64_t>(total_files) * kEntrySize,
+        !AddNoOverflow(table_offset, static_cast<std::uint64_t>(total_files) * kHfs0EntrySize,
                        &strings_offset) ||
         !AddNoOverflow(strings_offset, string_table_size, &entries_offset)) {
         *error = "XCI partition offsets overflow";
@@ -223,7 +238,7 @@ bool ParseHfs0(ContainerReader &reader, std::uint64_t offset, std::uint64_t cont
         return false;
     }
 
-    std::vector<std::uint8_t> table(static_cast<std::size_t>(total_files) * kEntrySize);
+    std::vector<std::uint8_t> table(static_cast<std::size_t>(total_files) * kHfs0EntrySize);
     if (!ReadExact(reader, table_offset, table.size(), table.data())) {
         *error = "cannot read the XCI partition table";
         return false;
@@ -238,7 +253,7 @@ bool ParseHfs0(ContainerReader &reader, std::uint64_t offset, std::uint64_t cont
     names->clear();
     sizes->clear();
     for (std::uint32_t i = 0; i < total_files; ++i) {
-        const std::uint8_t *row = table.data() + static_cast<std::size_t>(i) * kEntrySize;
+        const std::uint8_t *row = table.data() + static_cast<std::size_t>(i) * kHfs0EntrySize;
         const std::uint32_t name_offset = ReadU32(row + 16);
         if (name_offset >= strings.size()) {
             *error = "XCI partition name offset out of range";

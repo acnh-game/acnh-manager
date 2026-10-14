@@ -24,8 +24,12 @@ bool EndsWith(std::string_view text, std::string_view suffix) {
 /* The .nca file of a content, by the name the container gives it. */
 const ContainerEntry *FindContentEntry(const ContainerInfo &container, const std::string &id) {
     for (const auto &entry : container.contents) {
-        if (entry.name.compare(0, id.size(), id) == 0 && EndsWith(entry.name, ".nca") &&
-            entry.name.find('.') == id.size()) {
+        /* Both names stand for the same content: `<id>.nca` (plain) and `<id>.ncz` (an NCZ stream,
+           which is what an NSZ/XCZ carries for the NCAs that compress).  The extra shapes the
+           meta content uses (`<id>.cnmt.nca`) pass the same test, because their first dot is the
+           one after the id. */
+        if (entry.name.compare(0, id.size(), id) == 0 && entry.name.find('.') == id.size() &&
+            (EndsWith(entry.name, ".nca") || EndsWith(entry.name, ".ncz"))) {
             return &entry;
         }
     }
@@ -235,6 +239,8 @@ bool FillTaskContents(const PackageInfo &package, InstallTask *task, std::string
         item.name = entry->name;
         item.offset = entry->offset;
         item.size = entry->size;
+        item.packed_size = entry->packed_size;
+        item.compressed = entry->compressed;
         item.content_id = content.content_id;
         switch (content.type) {
             case ContentType::Meta: item.kind = ContentKind::Meta; break;

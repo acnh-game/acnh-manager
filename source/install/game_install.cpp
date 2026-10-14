@@ -106,46 +106,89 @@ bool GameInstall::Prepare(std::string *error) {
         m_status.error = *error;
         return false;
     }
+    /* An NSZ/XCZ carries its large NCAs as NCZ streams, so the size an entry stands for is not the
+       bytes on the card.  Read each stream's tables now: everything after this point (the
+       placeholder size, the progress numbers, the decoders) works with the NCA's own size. */
+    if (m_package.container.compressed) {
+        for (auto &entry : m_package.container.contents) {
+            if (!entry.compressed) {
+                continue;
+            }
+            NczInfo info;
+            if (!ReadNczInfo(entry, &info, error)) {
+                m_status.stage = InstallStage::Failed;
+                m_status.error = *error;
+                return false;
+            }
+            entry.size = info.nca_size;
+            m_ncz_info[entry.name.substr(0, 32)] = std::move(info);
+        }
+    }
     /* The CNMT and the NACP live *inside* their contents, and how those contents are encrypted is
        the system's business: write the meta content first, ask ncm where its placeholder lives,
        mount that path as a content-meta file system and read the file out.  This is the reference
        implementation's sequence, and it is the only one that needs no key material of ours. */
-    const ContainerEntry *meta_entry = nullptr;
+    /* Which meta this run is about.  An NSP/NSZ carries exactly one; a cartridge dump that was
+       made from a game plus its update and DLCs ("1G+1U+2D") carries one per piece, and taking
+       whichever came first is how a real dump ended up offering to install a DLC's 0.0 GB -- the
+       base game is the one that has to land, so a container with several metas is probed and the
+       Application wins.  (The CNMT is inside the encrypted meta content, so the only way to ask
+       its type is to read it the same way the chosen one is read.) */
+    std::vector<const ContainerEntry *> meta_entries;
     for (const auto &entry : m_package.container.contents) {
-        if (entry.name.size() > 32 && entry.name.compare(32, 9, ".cnmt.nca") == 0) {
-            meta_entry = &entry;
-            break;
+        /* ".cnmt." at the id boundary: the meta content is a plain NCA in an NSP and may be an NCZ
+           stream in an NSZ, and both readings of the name mean the same file. */
+        if (entry.name.size() > 32 && entry.name.compare(32, 6, ".cnmt.") == 0) {
+            meta_entries.push_back(&entry);
         }
     }
-    if (meta_entry == nullptr) {
+    if (meta_entries.empty()) {
         *error = "this package has no meta content";
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
     }
-    /* The mount is keyed by the title id, which is a field of the meta content's own header. */
+    const ContainerEntry *meta_entry = meta_entries.front();
+    if (meta_entries.size() > 1) {
+        std::uint64_t chosen_type = static_cast<std::uint64_t>(-1);
+        for (const ContainerEntry *candidate : meta_entries) {
+            Placeholder probe_placeholder;
+            std::uint64_t probe_title_id = 0;
+            std::vector<std::uint8_t> probe_blob;
+            std::string probe_error;
+            if (!ReadMetaContent(*candidate, &probe_placeholder, &probe_title_id, &probe_blob,
+                                 &probe_error)) {
+                Note("install: meta %s could not be read for selection: %s", candidate->name.c_str(),
+                     probe_error.c_str());
+                continue;
+            }
+            CnmtInfo probe_cnmt;
+            const bool parsed = ParseCnmt(probe_blob.data(), probe_blob.size(), &probe_cnmt,
+                                          &probe_error);
+            Note("install: meta candidate %s type=%s", candidate->name.c_str(),
+                 parsed ? MetaTypeLabel(probe_cnmt.type) : "unparsed");
+            if (parsed && probe_cnmt.type == MetaType::Application) {
+                meta_entry = candidate;
+                chosen_type = static_cast<std::uint64_t>(probe_cnmt.type);
+            }
+            std::string drop_error;
+            m_installer.DropPlaceholders({probe_placeholder}, &drop_error);
+            if (chosen_type != static_cast<std::uint64_t>(-1)) {
+                break; /* the base game is the one this run installs */
+            }
+        }
+        if (chosen_type == static_cast<std::uint64_t>(-1)) {
+            Note("install: none of the %zu metas is an application; installing the first",
+                 meta_entries.size());
+        }
+    }
+    Placeholder meta_placeholder;
     std::uint64_t title_id = 0;
-    {
-        std::vector<std::uint8_t> encrypted(kNcaHeaderSize);
-        std::vector<std::uint8_t> decrypted(kNcaHeaderSize);
-        if (!m_reader.Read(meta_entry->offset, encrypted.size(), encrypted.data())) {
-            *error = "cannot read the meta content's header";
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-        if (!DecryptNcaHeader(encrypted.data(), decrypted.data(), error)) {
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-        NcaHeaderInfo header;
-        if (!ParseNcaHeader(decrypted.data(), decrypted.size(), &header, error)) {
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-        title_id = std::strtoull(header.program_id.c_str(), nullptr, 16);
+    std::vector<std::uint8_t> meta_blob;
+    if (!ReadMetaContent(*meta_entry, &meta_placeholder, &title_id, &meta_blob, error)) {
+        m_status.stage = InstallStage::Failed;
+        m_status.error = *error;
+        return false;
     }
     {
         TaskContent meta_content;
@@ -154,60 +197,16 @@ bool GameInstall::Prepare(std::string *error) {
         meta_content.size = meta_entry->size;
         meta_content.content_id = meta_entry->name.substr(0, 32);
         meta_content.kind = ContentKind::Meta;
+        meta_content.placeholder_id = meta_placeholder.placeholder_id;
         m_meta_content = meta_content; /* the register step needs it: the task cannot carry it */
-        Placeholder placeholder;
-        if (!m_installer.InstallContentForRead(m_reader, meta_content, &placeholder, error)) {
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-        m_meta_placeholder = placeholder;
-        std::string meta_path;
-        if (!m_installer.PlaceholderFilePath(placeholder, &meta_path, error)) {
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-        std::vector<std::uint8_t> blob;
-        std::string first_error;
-        if (!m_installer.ReadFromContent(meta_path, title_id, FsFileSystemType_ContentMeta, "", &blob,
-                                         &first_error)) {
-            /* The reference implementation mounts the placeholder path directly; when the system
-               refuses it, the documented fallback is to register the content first and mount the
-               *content* path instead.  Both errors are logged so the next run says which one
-               happened. */
-            meta_content.placeholder_id = placeholder.placeholder_id;
-            std::string register_error;
-            std::string content_path;
-            if (m_installer.RegisterContent(meta_content, &register_error) &&
-                m_installer.ContentPath(meta_content.content_id, &content_path, &register_error)) {
-                std::string second_error;
-                if (!m_installer.ReadFromContent(content_path, title_id,
-                                                 FsFileSystemType_ContentMeta, "", &blob,
-                                                 &second_error)) {
-                    /* Both attempts failed: the caller's log line has to carry everything a
-                       reader needs (the path ncm handed out and each failure), because that is
-                       what the next debugging round has to work from. */
-                    *error = "cannot read the CNMT (placeholder " + meta_path + ": " + first_error +
-                             "; content " + content_path + ": " + second_error + ")";
-                    m_status.stage = InstallStage::Failed;
-                    m_status.error = *error;
-                    return false;
-                }
-            } else {
-                *error = register_error;
-                m_status.stage = InstallStage::Failed;
-                m_status.error = *error;
-                return false;
-            }
-        }
-        if (!ParseCnmt(blob.data(), blob.size(), &m_package.cnmt, error)) {
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-        m_package.meta_blob = blob;
+        m_meta_placeholder = meta_placeholder;
     }
+    if (!ParseCnmt(meta_blob.data(), meta_blob.size(), &m_package.cnmt, error)) {
+        m_status.stage = InstallStage::Failed;
+        m_status.error = *error;
+        return false;
+    }
+    m_package.meta_blob = std::move(meta_blob);
     /* The log line is composed *before* the NACP step, because that step appends to it: building
        it afterwards silently dropped the NACP outcome, which is exactly the information needed
        when the name does not appear. */
@@ -260,7 +259,9 @@ bool GameInstall::Prepare(std::string *error) {
            mount fail. */
         std::uint64_t control_title_id = title_id;
         for (const auto &entry : m_package.container.contents) {
-            if (entry.name.size() <= 32 || entry.name.compare(entry.name.size() - 4, 4, ".nca") != 0) {
+            if (entry.name.size() <= 32 ||
+                (entry.name.compare(entry.name.size() - 4, 4, ".nca") != 0 &&
+                 entry.name.compare(entry.name.size() - 4, 4, ".ncz") != 0)) {
                 continue;
             }
             if (entry.size < kNcaHeaderSize) {
@@ -554,6 +555,35 @@ bool GameInstall::Begin(std::string *error) {
         m_status.error = *error;
         return false;
     }
+    /* One decoder per compressed content.  The tables were read while the package was being read;
+       the stream itself starts here, and it is fed strictly in order (see NczStream). */
+    /* resize, not assign: a vector of unique_ptr cannot be filled with a copied value. */
+    m_ncz.clear();
+    m_ncz.resize(m_task.contents.size());
+    for (std::size_t i = 0; i < m_task.contents.size(); ++i) {
+        const TaskContent &content = m_task.contents[i];
+        if (!content.compressed) {
+            continue;
+        }
+        const auto known = m_ncz_info.find(content.content_id);
+        if (known == m_ncz_info.end()) {
+            *error = "the compressed content has no tables to decode it with";
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+        auto stream = std::make_unique<NczStream>();
+        stream->info = known->second;
+        stream->container_offset = content.offset;
+        stream->dstream = ZSTD_createDStream();
+        if (stream->dstream == nullptr || ZSTD_isError(ZSTD_initDStream(stream->dstream))) {
+            *error = "cannot start the decoder for the compressed content";
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+        m_ncz[i] = std::move(stream);
+    }
     /* The placeholder ids go into the task before the first byte: that is what makes a crash
        resumable into the same placeholder instead of a new one. */
     for (const auto &entry : m_placeholders) {
@@ -567,14 +597,243 @@ bool GameInstall::Begin(std::string *error) {
     return true;
 }
 
-bool GameInstall::WriteRange(const RangeRequest &range, std::uint64_t size, std::string *error) {
+GameInstall::NczStream::~NczStream() {
+    if (dstream != nullptr) {
+        ZSTD_freeDStream(dstream);
+    }
+}
+
+bool GameInstall::ReadMetaContent(const ContainerEntry &entry, Placeholder *out_placeholder,
+                                  std::uint64_t *out_title_id, std::vector<std::uint8_t> *out_blob,
+                                  std::string *error) {
+    /* The mount is keyed by the title id, which is a field of the meta content's own header. */
+    std::uint64_t title_id = 0;
+    {
+        std::vector<std::uint8_t> encrypted(kNcaHeaderSize);
+        std::vector<std::uint8_t> decrypted(kNcaHeaderSize);
+        if (!m_reader.Read(entry.offset, encrypted.size(), encrypted.data())) {
+            *error = "cannot read the meta content's header";
+            return false;
+        }
+        if (!DecryptNcaHeader(encrypted.data(), decrypted.data(), error)) {
+            return false;
+        }
+        NcaHeaderInfo header;
+        if (!ParseNcaHeader(decrypted.data(), decrypted.size(), &header, error)) {
+            return false;
+        }
+        title_id = std::strtoull(header.program_id.c_str(), nullptr, 16);
+    }
+    TaskContent content;
+    content.name = entry.name;
+    content.offset = entry.offset;
+    content.size = entry.size;
+    content.content_id = entry.name.substr(0, 32);
+    content.kind = ContentKind::Meta;
+    Placeholder placeholder;
+    if (!m_installer.InstallContentForRead(m_reader, content, &placeholder, error)) {
+        return false;
+    }
+    std::string path;
+    if (!m_installer.PlaceholderFilePath(placeholder, &path, error)) {
+        std::string ignored;
+        m_installer.DropPlaceholders({placeholder}, &ignored);
+        return false;
+    }
+    std::vector<std::uint8_t> blob;
+    std::string first_error;
+    if (!m_installer.ReadFromContent(path, title_id, FsFileSystemType_ContentMeta, "", &blob,
+                                     &first_error)) {
+        /* The reference implementation mounts the placeholder path directly; when the system
+           refuses it, the documented fallback is to register the content first and mount the
+           *content* path instead.  Both errors are reported so the next run says which one
+           happened. */
+        content.placeholder_id = placeholder.placeholder_id;
+        std::string register_error;
+        std::string content_path;
+        if (m_installer.RegisterContent(content, &register_error) &&
+            m_installer.ContentPath(content.content_id, &content_path, &register_error)) {
+            std::string second_error;
+            if (!m_installer.ReadFromContent(content_path, title_id, FsFileSystemType_ContentMeta, "",
+                                             &blob, &second_error)) {
+                /* Both attempts failed: the caller's log line has to carry everything a reader
+                   needs (the path ncm handed out and each failure), because that is what the next
+                   debugging round has to work from. */
+                *error = "cannot read the CNMT (placeholder " + path + ": " + first_error +
+                         "; content " + content_path + ": " + second_error + ")";
+                return false;
+            }
+        } else {
+            *error = register_error;
+            return false;
+        }
+    }
+    *out_placeholder = placeholder;
+    *out_title_id = title_id;
+    *out_blob = std::move(blob);
+    return true;
+}
+
+bool GameInstall::ReadNczInfo(const ContainerEntry &entry, NczInfo *out, std::string *error) {
+    /* The fixed part first: it carries the section count, which is what sizes everything else. */
+    std::vector<std::uint8_t> head(kNczHeaderSize + 16);
+    if (!m_reader.Read(entry.offset, head.size(), head.data())) {
+        *error = "cannot read the compressed content's header";
+        return false;
+    }
+    NczHeaderInfo header;
+    if (!ParseNczHeader(head.data(), head.size(), &header, error)) {
+        return false;
+    }
+    /* Then the tables.  Their size is known apart from a block table's, and a block is at least
+       16 KiB, so a probe sized from the entry is enough for every file that exists -- and the
+       parser refuses what it cannot see the end of rather than reading past it. */
+    constexpr std::uint64_t kMinBlockSize = 1u << 14;
+    constexpr std::uint64_t kProbeCap = 1u << 20;
+    std::uint64_t probe = header.section_count * kNczSectionSize + 24 +
+                          (entry.packed_size / kMinBlockSize + 1) * 4;
+    if (probe > kProbeCap) {
+        probe = kProbeCap;
+    }
+    if (probe > entry.packed_size - kNczHeaderSize - 16) {
+        probe = entry.packed_size - kNczHeaderSize - 16;
+    }
+    std::vector<std::uint8_t> tables(static_cast<std::size_t>(probe));
+    if (!m_reader.Read(entry.offset + header.tables_offset, tables.size(), tables.data())) {
+        *error = "cannot read the compressed content's tables";
+        return false;
+    }
+    return ParseNczTables(tables.data(), tables.size(), header, entry.packed_size, out, error);
+}
+
+bool GameInstall::DecodeUntil(NczStream &stream, std::uint64_t nca_size, std::uint64_t need_until,
+                              std::string *error) {
+    constexpr std::size_t kChunk = 512 * 1024;
+    if (stream.source_exhausted && stream.decoded_end < need_until) {
+        *error = "the compressed content ended before the whole NCA was decoded";
+        return false;
+    }
+    if (m_decode_buffer.size() < kChunk) {
+        m_decode_buffer.resize(kChunk);
+    }
+    while (stream.decoded_end < need_until) {
+        if (stream.input_pos >= stream.input.size() && !stream.source_exhausted) {
+            const std::uint64_t left = stream.info.payload_size - stream.payload_read;
+            if (left == 0) {
+                stream.source_exhausted = true;
+                continue;
+            }
+            const std::size_t chunk = static_cast<std::size_t>(left < kChunk ? left : kChunk);
+            stream.input.resize(chunk);
+            stream.input_pos = 0;
+            /* The payload's offsets are inside the `.ncz`, so the entry's own offset has to be
+               added here: reading without it fed the container's own header bytes to zstd, which
+               failed with "could not be decoded" on the first real package (measured). */
+            if (!m_reader.Read(stream.container_offset + stream.info.payload_offset +
+                                   stream.payload_read,
+                               chunk, stream.input.data())) {
+                *error = "the source stopped early (connection lost or file truncated)";
+                return false;
+            }
+            stream.payload_read += chunk;
+        }
+        ZSTD_inBuffer in{stream.input.data() + stream.input_pos,
+                         stream.input.size() - stream.input_pos, 0};
+        ZSTD_outBuffer out{m_decode_buffer.data(), m_decode_buffer.size(), 0};
+        const std::size_t result = ZSTD_decompressStream(stream.dstream, &out, &in);
+        if (ZSTD_isError(result)) {
+            *error = "the compressed content could not be decoded";
+            return false;
+        }
+        stream.input_pos += in.pos;
+        if (out.pos > 0) {
+            /* The bytes are encrypted again as they are decoded, before anything can hand them
+               out: the ranges that were stored decrypted have to reach the placeholder in the
+               shape the console expects. */
+            const std::uint64_t base = stream.decoded_end;
+            auto *bytes = m_decode_buffer.data();
+            for (const NczSection &section : stream.info.sections) {
+                if (!section.Encrypted()) {
+                    continue;
+                }
+                const std::uint64_t lo = std::max(section.offset, base);
+                const std::uint64_t hi = std::min(section.End(), base + out.pos);
+                if (lo >= hi) {
+                    continue;
+                }
+                const std::uint64_t aligned = lo & ~std::uint64_t{0xF};
+                const std::array<std::uint8_t, 16> counter = NczSectionCounter(section, aligned);
+                AesCtrRange(section.key.data(), counter.data(), lo, bytes + (lo - base),
+                            static_cast<std::size_t>(hi - lo));
+            }
+            stream.decoded.insert(stream.decoded.end(), bytes, bytes + out.pos);
+            stream.decoded_end += out.pos;
+        } else if (stream.source_exhausted && stream.input_pos >= stream.input.size()) {
+            *error = "the compressed content ended before the whole NCA was decoded";
+            return false;
+        }
+    }
+    /* A stream that decodes past the NCA it claims is a broken file, not a bigger install. */
+    if (stream.decoded_end > nca_size) {
+        *error = "the compressed content decodes to more than the NCA it claims";
+        return false;
+    }
+    return true;
+}
+
+bool GameInstall::ReadCompressed(const TaskContent &content, NczStream &stream,
+                                 std::uint64_t content_offset, std::size_t size, std::uint8_t *out,
+                                 std::string *error) {
+    std::size_t done = 0;
+    while (done < size) {
+        const std::uint64_t at = content_offset + done;
+        if (at < kNczHeaderSize) {
+            /* The NCA header is stored verbatim -- no decoding, and an XCI's distribution bit is
+               rewritten here like it is for a plain NCA. */
+            const std::size_t take = std::min<std::size_t>(
+                size - done, static_cast<std::size_t>(kNczHeaderSize - at));
+            if (!m_reader.Read(content.offset + at, take, out + done)) {
+                *error = "the source stopped early (connection lost or file truncated)";
+                return false;
+            }
+            done += take;
+            continue;
+        }
+        if (!DecodeUntil(stream, content.size, at + 1, error)) {
+            return false;
+        }
+        if (stream.decoded_base > at) {
+            *error = "the compressed content was asked for bytes already handed out";
+            return false;
+        }
+        const std::uint64_t available = stream.decoded_end - at;
+        const std::size_t take =
+            static_cast<std::size_t>(std::min<std::uint64_t>(size - done, available));
+        if (take == 0) {
+            *error = "the compressed content ended before the whole NCA was decoded";
+            return false;
+        }
+        const std::size_t start = static_cast<std::size_t>(at - stream.decoded_base);
+        std::memcpy(out + done, stream.decoded.data() + start, take);
+        /* Drop what the caller took: the buffer then stays the size of one read, not of the whole
+           content. */
+        stream.decoded.erase(stream.decoded.begin(),
+                             stream.decoded.begin() + static_cast<std::ptrdiff_t>(start + take));
+        stream.decoded_base = at + take;
+        done += take;
+    }
+    return true;
+}
+
+bool GameInstall::WriteRange(const RangeRequest &range, std::uint64_t content_offset,
+                             std::uint64_t size, std::string *error) {
     /* A first block that carries the very start of an NCA is where an XCI's distribution bit has
        to be rewritten: the console only launches gamecard content from the card, so a dump
        installed to SD/NAND needs the header to say "system".  The header is encrypted, so it is
        decrypted, changed and encrypted again, and the stale signature is accepted by the default
        skip options -- exactly what the reference implementation does. */
     bool header_touched = false;
-    if (range.offset < kNcaHeaderSize && m_options.ignore_distribution_bit == false) {
+    if (content_offset < kNcaHeaderSize && m_options.ignore_distribution_bit == false) {
         std::uint8_t decrypted[kNcaHeaderSize];
         std::uint8_t reencrypted[kNcaHeaderSize];
         if (!DecryptNcaHeader(m_buffer, decrypted, error)) {
@@ -613,13 +872,31 @@ bool GameInstall::Step(std::string *error) {
         *error = "the requested range is larger than the transfer buffer";
         return false;
     }
-    if (!m_reader.Read(range.offset, static_cast<std::size_t>(range.size), m_buffer)) {
+    const TaskContent &content = m_task.contents[range.index];
+    /* Where this range starts inside the content: for a plain content the range's own offset is
+       the container's, for an NCZ stream the decoded position is the only one that means anything
+       (and it is also what the placeholder write and the header rewrite need). */
+    const std::uint64_t content_offset = content.written;
+    std::size_t read_size = static_cast<std::size_t>(range.size);
+    if (content.compressed) {
+        if (m_ncz[range.index] == nullptr) {
+            *error = "a compressed content arrived without its decoder";
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+        if (!ReadCompressed(content, *m_ncz[range.index], content_offset, read_size, m_buffer, error)) {
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+    } else if (!m_reader.Read(range.offset, read_size, m_buffer)) {
         *error = "the source stopped early (connection lost or file truncated)";
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
     }
-    if (!WriteRange(range, range.size, error)) {
+    if (!WriteRange(range, content_offset, read_size, error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;

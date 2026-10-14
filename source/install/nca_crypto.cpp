@@ -1,5 +1,6 @@
 #include "install/nca_crypto.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 namespace acnh_manager::install {
@@ -75,6 +76,32 @@ bool DecryptNcaHeader(const void *in, void *out, std::string *error) {
 
 bool EncryptNcaHeader(const void *in, void *out, std::string *error) {
     return Transform(in, out, true, error);
+}
+
+void AesCtrRange(const void *key, const void *counter, std::uint64_t nca_offset, void *data,
+                 std::size_t size) {
+    if (data == nullptr || size == 0) {
+        return;
+    }
+    Aes128CtrContext ctx;
+    aes128CtrContextCreate(&ctx, key, counter);
+    auto *bytes = static_cast<std::uint8_t *>(data);
+    const std::size_t skip = static_cast<std::size_t>(nca_offset & 0xF);
+    if (skip != 0) {
+        /* The range starts inside a block: take that block's keystream, use its tail, and let the
+           context carry on from the next block. */
+        unsigned char block[16] = {0};
+        aes128CtrCrypt(&ctx, block, block, sizeof(block));
+        const std::size_t first = std::min<std::size_t>(size, sizeof(block) - skip);
+        for (std::size_t i = 0; i < first; ++i) {
+            bytes[i] ^= block[skip + i];
+        }
+        bytes += first;
+        size -= first;
+    }
+    if (size != 0) {
+        aes128CtrCrypt(&ctx, bytes, bytes, size);
+    }
 }
 
 }  // namespace acnh_manager::install

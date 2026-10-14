@@ -64,7 +64,13 @@ enum class ContentKind {
 struct TaskContent {
     std::string name;       /* inside the container, as the package spells it */
     std::uint64_t offset{0}; /* absolute offset in the container */
-    std::uint64_t size{0};   /* stored (compressed, for NSZ) size -- what has to be transferred */
+    /* What the console ends up with: the NCA's own size.  For a plain NCA that is also what gets
+       transferred; for an NSZ/XCZ content it is what the NCZ stream decodes to (see `compressed`). */
+    std::uint64_t size{0};
+    /* The bytes the entry occupies in the container.  Same as `size` unless `compressed`. */
+    std::uint64_t packed_size{0};
+    /* An NCZ stream (NSZ/XCZ): the bytes have to be decoded before they can be written. */
+    bool compressed{false};
     std::uint64_t written{0}; /* bytes already in this content's placeholder */
     std::string content_id;     /* 32 hex digits, empty until the CNMT has been read */
     std::string placeholder_id; /* 16 hex digits: where the bytes go, recorded for resumes */

@@ -26,6 +26,7 @@
 #include "install/options.hpp"
 #include "install/package.hpp"
 #include "install/icon_file.hpp"
+#include "install/ncz.hpp"
 #include "install/title_name.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
@@ -80,7 +81,12 @@ std::size_t WriteHfs0(std::vector<std::uint8_t> &bytes, std::size_t offset, std:
         strings += file.first;
         strings.push_back('\0');
     }
-    const std::size_t table_size = 0x18 * files.size();
+    /* The two shapes this writer stands in for do not share an entry size: PFS0's is 0x18, HFS0's
+       is 0x40 (it carries a reserved word and a 0x20-byte hash after the four common fields).
+       Writing 0x18 entries into the cartridge-dump fixture is what kept the parser's own wrong
+       stride invisible to these tests -- so the size follows the magic now. */
+    const std::size_t entry_size = magic == kHfs0Magic ? 0x40 : 0x18;
+    const std::size_t table_size = entry_size * files.size();
     const std::size_t data_offset = offset + 0x10 + table_size + strings.size();
 
     PutU32(bytes, offset, magic);
@@ -88,9 +94,9 @@ std::size_t WriteHfs0(std::vector<std::uint8_t> &bytes, std::size_t offset, std:
     PutU32(bytes, offset + 8, static_cast<std::uint32_t>(strings.size()));
     std::uint64_t relative = 0;
     for (std::size_t i = 0; i < files.size(); ++i) {
-        PutU64(bytes, offset + 0x10 + i * 0x18, relative);
-        PutU64(bytes, offset + 0x18 + i * 0x18, files[i].second);
-        PutU32(bytes, offset + 0x20 + i * 0x18, name_offsets[i]);
+        PutU64(bytes, offset + 0x10 + i * entry_size, relative);
+        PutU64(bytes, offset + 0x18 + i * entry_size, files[i].second);
+        PutU32(bytes, offset + 0x20 + i * entry_size, name_offsets[i]);
         relative += files[i].second;
     }
     std::memcpy(bytes.data() + offset + 0x10 + table_size, strings.data(), strings.size());
@@ -131,13 +137,17 @@ std::vector<std::uint8_t> MakeXci(
         secure_payload += file.second;
         secure_strings += file.first.size() + 1;
     }
-    const std::size_t secure_size = 0x10 + 0x18 * secure_files.size() + secure_strings +
+    /* Both tables are HFS0: 0x40 bytes per entry (see WriteHfs0). */
+    const std::size_t secure_size = 0x10 + 0x40 * secure_files.size() + secure_strings +
                                     secure_payload;
     /* Root partition: header + two entries + the strings "secure\0" and "logo\0". */
-    const std::size_t root_size = 0x10 + 0x18 * 2 + 7 + 5;
+    const std::size_t root_size = 0x10 + 0x40 * 2 + 7 + 5;
     std::vector<std::uint8_t> bytes(0xF000 + root_size + secure_size, 0);
 
-    PutU32(bytes, 0x100, 0x48454144); /* "HEAD" */
+    /* "HEAD" the way a real dump stores it: the four bytes, so the little-endian read the parser
+       does has to see 0x44414548.  Writing the big-endian spelling here (which is what this line
+       used to do) is how the parser's own mistake stayed invisible to the tests. */
+    PutU32(bytes, 0x100, 0x44414548);
     const std::size_t root_data =
         WriteHfs0(bytes, 0xF000, kHfs0Magic,
                   {{"secure", static_cast<std::uint32_t>(secure_size)},
@@ -1038,12 +1048,12 @@ void TestInstallTask() {
     task.container_size = 4'700'000'000ULL;
     task.stage = TaskStage::Fetching;
     task.contents = {
-        {"00000000000000000000000000000000.cnmt.nca", 0x1000, 0x800, 0, "0000", "", ContentKind::Meta,
-         false},
-        {"e10617820db06889e1638499478da0de.nca", 0x2000, 4'600'000'000ULL, 0,
-         "e10617820db06889e1638499478da0de", "", ContentKind::Program, false},
-        {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.nca", 0x5000, 0x400, 0, "aaaa", "", ContentKind::Legal,
-         true},
+        {"00000000000000000000000000000000.cnmt.nca", 0x1000, 0x800, 0x800, false, 0, "0000", "",
+         ContentKind::Meta, false},
+        {"e10617820db06889e1638499478da0de.nca", 0x2000, 4'600'000'000ULL, 4'600'000'000ULL, false,
+         0, "e10617820db06889e1638499478da0de", "", ContentKind::Program, false},
+        {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.nca", 0x5000, 0x400, 0x400, false, 0, "aaaa", "",
+         ContentKind::Legal, true},
     };
 
     /* Progress is in bytes and skips the skipped content; the counter still counts it. */
@@ -1675,6 +1685,138 @@ void TestHomeState() {
     CHECK(Classify(missing_game) == HomeKind::GameMissing);
 }
 
+/* The tables inside one compressed content of an NSZ / XCZ (install/ncz.hpp).  The shape and the
+   arithmetic come from the reference implementation's NCZ reader and from a real package: 110
+   sections, contiguous, covering 0x4000..the end of the NCA, every one of them AES-CTR -- so the
+   fixture below is that shape in miniature. */
+void TestNczTables() {
+    using acnh_manager::install::FindNczSection;
+    using acnh_manager::install::kNczBlockMagic;
+    using acnh_manager::install::kNczCryptoAesCtr;
+    using acnh_manager::install::kNczCryptoNone;
+    using acnh_manager::install::kNczHeaderSize;
+    using acnh_manager::install::kNczSectionMagic;
+    using acnh_manager::install::kNczSectionSize;
+    using acnh_manager::install::NczHeaderInfo;
+    using acnh_manager::install::NczInfo;
+    using acnh_manager::install::NczSection;
+    using acnh_manager::install::NczSectionCounter;
+    using acnh_manager::install::ParseNczHeader;
+    using acnh_manager::install::ParseNczTables;
+
+    const std::uint64_t tables = kNczHeaderSize + 16;
+    const std::size_t payload = 32;
+    std::vector<std::uint8_t> file(static_cast<std::size_t>(tables + 3 * kNczSectionSize) + payload,
+                                   0);
+    PutU64(file, kNczHeaderSize, kNczSectionMagic);
+    PutU64(file, kNczHeaderSize + 8, 3);
+    /* Section 0: the NCA's first file-system section, stored decrypted with a key and a counter. */
+    PutU64(file, tables + 0, 0x4000);
+    PutU64(file, tables + 8, 0x1000);
+    PutU64(file, tables + 16, kNczCryptoAesCtr);
+    for (std::size_t i = 0; i < 16; ++i) {
+        file[tables + 32 + i] = static_cast<std::uint8_t>(0xA0 + i);
+    }
+    /* The counter's high half, as the real file carries it (0x0000000200000002). */
+    file[tables + 48 + 3] = 0x02;
+    file[tables + 48 + 7] = 0x02;
+    /* Section 1: stored as it is -- nothing to re-encrypt -- and leaving a gap after section 0,
+       which is the padding a real NCA's sections can have between them. */
+    PutU64(file, tables + 64, 0x6000);
+    PutU64(file, tables + 72, 0x800);
+    PutU64(file, tables + 80, kNczCryptoNone);
+    /* Section 2: AES-CTR again, so the search has to look past the plain one. */
+    PutU64(file, tables + 128, 0x6800);
+    PutU64(file, tables + 136, 0x400);
+    PutU64(file, tables + 144, kNczCryptoAesCtr);
+    for (std::size_t i = 0; i < 16; ++i) {
+        file[tables + 160 + i] = 0x11;
+    }
+    std::memcpy(&file[tables + 176], &file[tables + 48], 16);
+
+    std::string error;
+    NczHeaderInfo header;
+    CHECK(ParseNczHeader(file.data(), file.size(), &header, &error));
+    CHECK(header.section_count == 3);
+    CHECK(header.tables_offset == tables);
+
+    NczInfo info;
+    CHECK(ParseNczTables(file.data() + tables, file.size() - tables, header, file.size(), &info,
+                         &error));
+    CHECK(info.sections.size() == 3);
+    CHECK(!info.block_table);
+    CHECK(info.payload_offset == tables + 3 * kNczSectionSize);
+    CHECK(info.payload_size == payload);
+    /* The NCA is the header plus everything the sections cover. */
+    CHECK(info.nca_size == 0x6C00);
+    CHECK(info.sections[0].Encrypted());
+    CHECK(!info.sections[1].Encrypted());
+    CHECK(info.sections[0].key[0] == 0xA0);
+
+    /* Section lookup: covered, before the first, inside the gap, past the last. */
+    const NczSection *first = FindNczSection(info, 0x4000);
+    CHECK(first != nullptr && first->offset == 0x4000);
+    CHECK(FindNczSection(info, 0x3FFF) == nullptr);
+    CHECK(FindNczSection(info, 0x4800) == first);
+    const NczSection *gap = FindNczSection(info, 0x5000);
+    CHECK(gap == nullptr); /* the padding between sections 0 and 1 */
+    CHECK(FindNczSection(info, 0x67FF) != nullptr);
+    CHECK(FindNczSection(info, 0x6800) != nullptr);
+    CHECK(FindNczSection(info, 0x6C00) == nullptr);
+
+    /* The counter: the section's own high half, then the absolute block index, big-endian. */
+    const std::array<std::uint8_t, 16> counter = NczSectionCounter(*first, 0x5000);
+    for (std::size_t i = 0; i < 8; ++i) {
+        CHECK(counter[i] == first->counter[i]);
+    }
+    CHECK(counter[10] == 0x00 && counter[11] == 0x00 && counter[12] == 0x00);
+    CHECK(counter[13] == 0x00 && counter[14] == 0x05 && counter[15] == 0x00); /* 0x5000 / 16 */
+    const std::array<std::uint8_t, 16> at_zero = NczSectionCounter(*first, 0);
+    CHECK(at_zero[14] == 0x00 && at_zero[15] == 0x00);
+
+    /* The newer layout: the same tables, then a block header and one size per block. */
+    std::vector<std::uint8_t> blocked = file;
+    const std::uint64_t block_header = tables + 3 * kNczSectionSize;
+    blocked.resize(static_cast<std::size_t>(block_header) + 24 + 2 * 4 + payload, 0);
+    PutU64(blocked, block_header, kNczBlockMagic);
+    blocked[block_header + 8] = 2;                   /* version */
+    blocked[block_header + 9] = 1;                   /* type */
+    blocked[block_header + 11] = 16;                 /* block size exponent: 64 KiB */
+    PutU32(blocked, block_header + 12, 2);           /* two blocks */
+    PutU32(blocked, block_header + 24, 8);           /* first block: 8 bytes */
+    PutU32(blocked, block_header + 28, payload - 8); /* second: the rest */
+    NczInfo blocked_info;
+    CHECK(ParseNczTables(blocked.data() + tables, blocked.size() - tables, header, blocked.size(),
+                         &blocked_info, &error));
+    CHECK(blocked_info.block_table);
+    CHECK(blocked_info.block_size == 0x10000);
+    CHECK(blocked_info.block_offsets.size() == 2);
+    CHECK(blocked_info.block_offsets[0] == block_header + 32);
+    CHECK(blocked_info.block_offsets[1] == block_header + 32 + 8);
+    CHECK(blocked_info.payload_offset == block_header + 32);
+    CHECK(blocked_info.payload_size == payload);
+    CHECK(blocked_info.nca_size == info.nca_size);
+
+    /* Refusals: no section table, an impossible count, a table that runs past what was read, and a
+       section that lies inside the NCA header region. */
+    std::vector<std::uint8_t> bad = file;
+    PutU64(bad, kNczHeaderSize, 0x1122334455667788ULL);
+    CHECK(!ParseNczHeader(bad.data(), bad.size(), &header, &error));
+    bad = file;
+    PutU64(bad, kNczHeaderSize + 8, 0);
+    CHECK(!ParseNczHeader(bad.data(), bad.size(), &header, &error));
+    bad = file;
+    PutU64(bad, kNczHeaderSize + 8, 100000);
+    CHECK(!ParseNczHeader(bad.data(), bad.size(), &header, &error));
+    CHECK(!ParseNczHeader(file.data(), kNczHeaderSize, &header, &error));
+    CHECK(ParseNczHeader(file.data(), file.size(), &header, &error));
+    bad = file;
+    PutU64(bad, tables + 0, 0x2000);
+    CHECK(!ParseNczTables(bad.data() + tables, bad.size() - tables, header, bad.size(), &info,
+                          &error));
+    CHECK(!ParseNczTables(file.data() + tables, 64, header, file.size(), &info, &error));
+}
+
 /* Which picture file inside a control content the confirm card shows.  The card used to have no
    picture whenever the game was not installed (the console then has no control data to hand out,
    and its cached one can be cleared by an install), so the package's own icon is what the choice
@@ -1990,6 +2132,7 @@ int main() {
     TestSettings();
     TestTitleNames();
     TestIconFile();
+    TestNczTables();
     TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

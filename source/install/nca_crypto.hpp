@@ -14,6 +14,7 @@
 #include <switch.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace acnh_manager::install {
@@ -29,5 +30,16 @@ bool DecryptNcaHeader(const void *in, void *out, std::string *error);
    the header's own signature is then stale -- which the default `skip_rsa_*` options accept,
    exactly as the reference implementation does. */
 bool EncryptNcaHeader(const void *in, void *out, std::string *error);
+
+/* AES-128-CTR over one range of an NCA's file-system section, for the ranges an NSZ/XCZ stored
+   **decrypted** (install/ncz.hpp): the stream cipher is its own inverse, so this is the same call
+   the reader uses to put the bytes back the way the console expects them.
+
+   `counter` is the 16-byte block counter that belongs to `nca_offset & ~0xF` (see
+   NczSectionCounter); a range that does not start on a block boundary is handled here, by taking
+   the keystream of that first partial block and dropping the bytes before the range.  The key and
+   counter come from the file itself and are never logged. */
+void AesCtrRange(const void *key, const void *counter, std::uint64_t nca_offset, void *data,
+                 std::size_t size);
 
 }  // namespace acnh_manager::install

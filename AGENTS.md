@@ -181,10 +181,12 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   `install_task.*`(按字节的进度、取数区间、`install-task.json`)、`nca.*`(CNMT 与 NCA 头解析、
   distribution 位改写)、`package.*`(容器+CNMT+票据 → "这是什么",以及跳过判定)、`options.hpp`(默认值)、
   `title_name.*`(包里的名字用哪一种语言显示:App 界面语言优先,主机系统语言的写法另起一行)、
-  `icon_file.*`(封面取控制内容里的哪一张图:同样按 App 界面语言挑,退到英文图与任意一张);
+  `icon_file.*`(封面取控制内容里的哪一张图:同样按 App 界面语言挑,退到英文图与任意一张)、
+  `ncz.*`(NSZ/XCZ 里一个压缩内容的表:分节、可选块表、负载起点,以及分节再加密用的 counter);
   **设备侧**:`nca_crypto.*`(spl 现算 NCA 头密钥、头解/加密)、`content_install.*`(ncm 占位/写入/
   Register/收尾/回滚、存储余量)、`nx_services.*`(libnx 没有的 `es`/`ns` 裸 IPC)、
-  `source_local_file.*`(SD 文件来源);后续的 `source_http_*` / `http_server.*` / `ui/*` 同样落在这里;
+  `source_local_file.*`(SD 文件来源)、`source_http_client.*`(下载来源:Range 探测 + 精确 Range 读)、
+  `util/swkbd.*`(系统软键盘);后续的 `http_server.*` / 上传来源 / `ui/*` 同样落在这里;
   `source/payload/`:内嵌发布通道(读 `data/` 里 bin2s 生成的符号,含验签用的公钥);
   `source/ui/`:界面层;`source/net/`:联网检查(`http.*` 唯一传输、`signature.*` 验签、
   `update.*` 取清单+验签+解析、`update_policy.hpp` 决定"这份远端清单能不能当安装来源"、

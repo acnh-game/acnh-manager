@@ -36,7 +36,11 @@ enum class ContainerKind {
 struct ContainerEntry {
     std::string name; /* as stored, lowercased: "e10617820db06889e1638499478da0de.nca" */
     std::uint64_t offset{0};
-    std::uint64_t size{0};
+    std::uint64_t size{0};        /* the NCA this entry stands for (see `compressed`) */
+    std::uint64_t packed_size{0}; /* what the entry occupies inside the container */
+    /* NSZ / XCZ: this entry is an NCZ stream (a `.ncz` name), so `size` is the NCA it rebuilds --
+       which is larger than the bytes on the card.  Reading it means decoding; see install/ncz.hpp. */
+    bool compressed{false};
 };
 
 struct ContainerInfo {

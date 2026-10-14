@@ -16,6 +16,7 @@ SOURCES := host_tests.cpp \
            ../source/install/install_task.cpp \
            ../source/install/nca.cpp \
            ../source/install/package.cpp \
+           ../source/install/ncz.cpp \
            ../source/install/icon_file.cpp \
            ../source/install/title_name.cpp \
            ../source/util/qr_code.cpp \
