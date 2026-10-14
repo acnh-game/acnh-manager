@@ -183,6 +183,9 @@ fsop:   window=0x329C697E80..0x329C698181 region_end=0x329C698000 last_page type
 `2 × FS_MAX_PATH` 的局部缓冲);缓冲本身就是数组时(局部变量或结构体成员),数组也**必须 ≥
 `FS_MAX_PATH`**,并用 `static_assert` 钉住尺寸。引擎、环境探测、主程序、日志与开发开关检查现在都
 照此办理;新增对 SD 的访问时同样如此 —— 不要把调用者的指针直接递下去。
+1.1.0 里就漏了两次:本机文件来源的 `fsFsOpenFile`(路径是选择器拼出来的 `std::string`)与
+"读挂载内容里的一个文件"那条(`"/" + 目录项名字`),真机实测同一循环 47 次打开 5 次 `0xD401`
+(约 10%,表现为"偶尔一次,退回去重进又好了"),补上 `util::FsPath` 后同样循环 60 次为 0。
 
 **平台自己就是这么做的**:在带符号的官方 SDK NSO 里核对过
 `nn::fs::detail::FileSystemServiceObjectAdapter::DoCreateFile` —— 它把路径拷进自己的一块

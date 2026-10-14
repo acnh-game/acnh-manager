@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "util/fs_path.hpp"
+
 namespace acnh_manager::install {
 namespace {
 
@@ -22,7 +24,14 @@ bool LocalFileSource::Open(FsFileSystem *fs, const std::string &path, std::uint6
         *error = "no file was chosen";
         return false;
     }
-    const Result rc = fsFsOpenFile(fs, path.c_str(), FsOpenMode_Read, &m_file);
+    /* Through util::FsPath, never the caller's string: the path the picker builds by
+       concatenation can land at the end of its heap region, and then the FS_MAX_PATH window `fs`
+       maps for the path reaches past the mapping and the kernel answers InvalidMemoryState
+       (0xD401).  Measured on hardware: 47 picks in one session, 5 of them failed that way, and
+       the same pick succeeds again a moment later -- which is exactly what "just go back and try
+       again" looked like.  See util/fs_path.hpp for the mapping dump behind the rule. */
+    const util::FsPath safe_path(path);
+    const Result rc = fsFsOpenFile(fs, safe_path.c_str(), FsOpenMode_Read, &m_file);
     if (R_FAILED(rc)) {
         *error = Describe("opening the package", rc);
         return false;

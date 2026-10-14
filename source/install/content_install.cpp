@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "install/nca.hpp"
+#include "util/fs_path.hpp"
 
 namespace acnh_manager::install {
 namespace {
@@ -718,7 +719,10 @@ bool ContentInstaller::ReadFromContent(const std::string &path, std::uint64_t ti
         target = std::string("/") + entry.name;
     }
     FsFile file{};
-    rc = fsFsOpenFile(&fs, target.c_str(), FsOpenMode_Read, &file);
+    /* The path is built by concatenation a few lines up ("/" + the name inside the content), so
+       it lives on the heap and owes its own FS_MAX_PATH window -- see util::FsPath. */
+    const util::FsPath safe_target(target);
+    rc = fsFsOpenFile(&fs, safe_target.c_str(), FsOpenMode_Read, &file);
     if (R_FAILED(rc)) {
         fsFsClose(&fs);
         *error = Describe("opening the file inside the content", rc);

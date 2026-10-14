@@ -102,7 +102,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   缓冲位置。做法:路径先复制进 `util::FsPath`(`source/util/fs_path.hpp`);缓冲是数组时(局部变量
   或结构体成员,如 `Log::Sink::path`),数组本身也必须 ≥ `FS_MAX_PATH`,并用 `static_assert` 钉住
   尺寸。引擎、环境探测、主程序、日志与开发开关检查都照此办理(真机根因与追踪数据见
-  `docs/architecture.md` 第 4.2 节);唯一例外是演示用的 `probe.cpp`,它故意把裸指针交给 `fs*`。
+  `docs/architecture.md` 第 4.2 节)——**新加的调用点同样必须**(1.1.0 的本机文件来源与"读挂载
+  内容里的一个文件"两条都漏了这条,真机上 47 次打开里 5 次 `0xD401`,按同一循环重跑 60 次为 0);
+  唯一例外是演示用的 `probe.cpp`,它故意把裸指针交给 `fs*`。
 - **发布清单必须签名**:`tools/sign-manifest.py --key ~/.acnh/acnh-manager-signing-key.pem`
   (私钥放本地密钥目录 `~/.acnh/`,600,不入库,要备份)把根目录 `agent-manifest.json`
   签成 `agent-manifest.json.sig`(名字就是"清单文件名 + `.sig`",App 按这个规则去取),两个文件一起提交。
