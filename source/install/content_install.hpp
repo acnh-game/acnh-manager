@@ -21,6 +21,7 @@
 #include "install/ncz.hpp"
 #include "install/nx_services.hpp"
 #include "install/options.hpp"
+#include "install/package.hpp"
 
 namespace acnh_manager::install {
 
@@ -193,8 +194,11 @@ public:
             std::uint64_t record_title_id{0};
         };
         std::vector<ExtraMeta> extra_metas;
-        std::vector<std::uint8_t> ticket;
-        std::vector<std::uint8_t> certificate;
+        /* The package's ticket pairs, in the order the container lists them: each one is imported
+           as it is, because a content encrypted with a title key can only be read once the console
+           has its ticket.  Empty when the package carries none (a cartridge dump, or a base game
+           whose ticket the console already has). */
+        std::vector<PackageTicket> tickets;
     };
 
     /* The point of no return: everything is in the placeholders, so from here the console is
@@ -215,6 +219,20 @@ public:
 
 private:
     bool EnsureOpen(std::string *error);
+
+    /* Rewrites the distribution bit of a gamecard content in place (a decrypted-header edit, then
+       encrypted again, with the now-stale signature accepted by the default skip options).  Both
+       write paths call it: the transfer for every content it moves, and this class's own read-out
+       for the meta content, which never goes through the transfer at all.  A short buffer (a
+       content smaller than a header) and a non-gamecard header are both left alone. */
+    bool RewriteDistributionBit(std::uint8_t *header, std::size_t size, std::string *error);
+
+    /* Every content a stored record lists.  The service reports how many entries it wrote, not how
+       many there are, so the count comes from the record's own header first: a fixed-size buffer
+       silently drops the rest of a record that has more contents than it holds, and for the cleanup
+       step that means leaving the previous version's contents on the card. */
+    static bool ListRecordContents(NcmContentMetaDatabase &db, const NcmContentMetaKey &key,
+                                   std::vector<NcmContentInfo> *out, std::string *error);
 
     TargetStorage m_target;
     InstallOptions m_options;

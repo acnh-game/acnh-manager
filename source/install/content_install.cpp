@@ -358,10 +358,9 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
         NcmContentMetaKey key{};
         const Result key_rc = ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &key, id);
         if (R_SUCCEEDED(key_rc) && key.version == version) {
-            NcmContentInfo infos[64]{};
-            s32 count = 0;
-            const Result list_rc = ncmContentMetaDatabaseListContentInfo(&db, &count, infos, 64,
-                                                                         &key, 0);
+            std::vector<NcmContentInfo> infos;
+            std::string list_error;
+            const bool listed = ListRecordContents(db, key, &infos, &list_error);
             bool has_control = false;
             bool has_sized = false;
             bool all_present = true;
@@ -371,7 +370,7 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
             int missing_count = 0;
             NcmContentStorage cs{};
             const bool cs_open = R_SUCCEEDED(ncmOpenContentStorage(&cs, storage));
-            for (s32 i = 0; i < count && i < 64; ++i) {
+            for (std::size_t i = 0; i < infos.size(); ++i) {
                 u64 size = 0;
                 ncmContentInfoSizeToU64(&infos[i], &size);
                 if (size > 0) {
@@ -407,15 +406,19 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
             {
                 char note[160];
                 std::snprintf(note, sizeof(note),
-                              "usable? storage=%u rc=0x%x contents=%d sized=%d control=%d present=%d",
-                              static_cast<unsigned>(storage), static_cast<unsigned>(list_rc),
-                              static_cast<int>(count), has_sized ? 1 : 0, has_control ? 1 : 0,
+                              "usable? storage=%u listed=%d contents=%zu sized=%d control=%d present=%d",
+                              static_cast<unsigned>(storage), listed ? 1 : 0, infos.size(),
+                              has_sized ? 1 : 0, has_control ? 1 : 0,
                               all_present ? 1 : 0);
                 m_finish_trace.push_back(note);
+                if (!listed) {
+                    m_finish_trace.push_back("usable? the record's contents cannot be listed: " +
+                                             list_error);
+                }
                 if (!all_present) {
                     m_finish_trace.push_back(
                         "usable? missing " + std::to_string(missing_count) + " of " +
-                        std::to_string(static_cast<int>(count)) + ": " + missing +
+                        std::to_string(infos.size()) + ": " + missing +
                         (cs_open ? "" : " (the content storage would not open)"));
                 }
             }
@@ -423,7 +426,7 @@ bool ContentInstaller::RecordIsUsable(const std::string &title_id_hex, std::uint
                offsets it computed run past the payload), which is what a record written in the
                wrong shape produces; a content with no size is not a content; and a content the
                storage does not have is a title that will not start. */
-            if (R_SUCCEEDED(list_rc) && count > 0 && has_sized && all_present &&
+            if (listed && !infos.empty() && has_sized && all_present &&
                 (!needs_control || has_control)) {
                 *usable = true;
                 ncmContentMetaDatabaseClose(&db);
@@ -647,6 +650,67 @@ bool ContentInstaller::DropPlaceholders(const std::vector<Placeholder> &placehol
     return ok;
 }
 
+bool ContentInstaller::RewriteDistributionBit(std::uint8_t *header, std::size_t size,
+                                              std::string *error) {
+    /* The console only launches gamecard content from the card, so a dump installed to SD/NAND has
+       to say "system" in its header.  The edit is done on the decrypted header and the bytes are
+       encrypted again; the header's own signature is then stale, which the default `skip_rsa_*`
+       options accept -- exactly what the reference implementation does for every content it
+       installs, the meta content included. */
+    if (size < kNcaHeaderSize || m_options.ignore_distribution_bit) {
+        return true;
+    }
+    std::vector<std::uint8_t> decrypted(kNcaHeaderSize);
+    std::vector<std::uint8_t> reencrypted(kNcaHeaderSize);
+    if (!DecryptNcaHeader(header, decrypted.data(), error)) {
+        return false;
+    }
+    NcaHeaderInfo info;
+    if (!ParseNcaHeader(decrypted.data(), decrypted.size(), &info, error)) {
+        /* Not an NCA3 header: nothing to rewrite.  Tolerated here for the same reason the transfer
+           tolerates it -- a content whose header cannot be parsed is caught when its size is worked
+           out, and refusing it here would fail an install that is otherwise fine. */
+        return true;
+    }
+    if (!info.is_gamecard()) {
+        return true;
+    }
+    SetDistributionToSystem(decrypted.data());
+    if (!EncryptNcaHeader(decrypted.data(), reencrypted.data(), error)) {
+        return false;
+    }
+    std::memcpy(header, reencrypted.data(), kNcaHeaderSize);
+    return true;
+}
+
+bool ContentInstaller::ListRecordContents(NcmContentMetaDatabase &db, const NcmContentMetaKey &key,
+                                          std::vector<NcmContentInfo> *out, std::string *error) {
+    out->clear();
+    NcmContentMetaHeader header{};
+    u64 written_size = 0;
+    if (R_FAILED(ncmContentMetaDatabaseGet(&db, &key, &written_size, &header, sizeof(header)))) {
+        *error = "cannot read a stored record's header";
+        return false;
+    }
+    if (header.content_count == 0) {
+        return true;
+    }
+    std::vector<NcmContentInfo> infos(header.content_count);
+    s32 count = 0;
+    const Result rc = ncmContentMetaDatabaseListContentInfo(
+        &db, &count, infos.data(), static_cast<s32>(infos.size()), &key, 0);
+    if (R_FAILED(rc)) {
+        *error = Describe("listing a record's contents", rc);
+        return false;
+    }
+    if (count < 0) {
+        count = 0;
+    }
+    infos.resize(static_cast<std::size_t>(count));
+    *out = std::move(infos);
+    return true;
+}
+
 bool ContentInstaller::InstallContentForRead(ContainerReader &reader, const TaskContent &content,
                                              const NczInfo *ncz, Placeholder *out,
                                              std::string *error) {
@@ -678,6 +742,34 @@ bool ContentInstaller::InstallContentForRead(ContainerReader &reader, const Task
     std::vector<std::uint8_t> buffer(4 * 1024 * 1024);
     std::uint64_t written = 0;
     if (ncz == nullptr) {
+        /* The first chunk is read on its own so a gamecard content can have its distribution bit
+           rewritten before anything is written: the header is the only part of the file that is
+           edited, and it has to reach the placeholder already in its final shape. */
+        const std::uint64_t first =
+            std::min<std::uint64_t>(std::min<std::uint64_t>(buffer.size(), content.size),
+                                    static_cast<std::uint64_t>(kNcaHeaderSize));
+        if (first > 0) {
+            if (!reader.Read(content.offset, static_cast<std::size_t>(first), buffer.data())) {
+                *error = "the source stopped early while reading " + content.name;
+                ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+                return false;
+            }
+            std::string rewrite_error;
+            if (!RewriteDistributionBit(buffer.data(), static_cast<std::size_t>(first),
+                                        &rewrite_error)) {
+                *error = rewrite_error;
+                ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+                return false;
+            }
+            rc = ncmContentStorageWritePlaceHolder(&m_storage, &placeholder, 0, buffer.data(),
+                                                   static_cast<std::size_t>(first));
+            if (R_FAILED(rc)) {
+                *error = Describe("writing into the placeholder", rc);
+                ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+                return false;
+            }
+            written = first;
+        }
         while (written < content.size) {
             const std::uint64_t chunk =
                 std::min<std::uint64_t>(buffer.size(), content.size - written);
@@ -721,6 +813,16 @@ bool ContentInstaller::InstallContentForRead(ContainerReader &reader, const Task
             *error = "the source stopped early while reading " + content.name;
             ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
             return false;
+        }
+        /* The header region is stored verbatim at the front of the `.ncz`, so a gamecard content's
+           distribution bit is rewritten here exactly like it is for a plain one. */
+        {
+            std::string rewrite_error;
+            if (!RewriteDistributionBit(plain.data(), plain.size(), &rewrite_error)) {
+                *error = rewrite_error;
+                ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+                return false;
+            }
         }
         if (!write_at(plain.data(), plain.size())) {
             ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
@@ -943,15 +1045,28 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
             ? inputs.record_title_id
             : std::strtoull(inputs.title_id.c_str(), nullptr, 16);
 
-    /* 1. Ticket.  A package without one (a base game only) is legal, so an empty blob is not an
-          error; the import failure itself is reported, never swallowed (design section 9). */
-    if (!m_options.skip_ticket && !inputs.ticket.empty()) {
-        if (!m_services.ImportTicket(inputs.ticket.data(), inputs.ticket.size(),
-                                     inputs.certificate.data(), inputs.certificate.size(), error)) {
-            return false;
+    /* 1. Tickets.  A package without one (a base game, or a cartridge dump) is legal, so an empty
+          list is not an error; the import failure itself is reported, never swallowed (design
+          section 9).  Every pair is imported, not just the first: a container can carry one per
+          title it holds, and a content whose ticket is missing stays undecryptable for the
+          console.  The reference implementation imports exactly the pairs the package's contents
+          ask for; importing all of them costs nothing and cannot leave one out. */
+    int tickets_imported = 0;
+    if (!m_options.skip_ticket) {
+        for (const PackageTicket &pair : inputs.tickets) {
+            if (!m_services.ImportTicket(pair.ticket.data(), pair.ticket.size(),
+                                         pair.certificate.data(), pair.certificate.size(), error)) {
+                return false;
+            }
+            ++tickets_imported;
         }
     }
-    m_finish_trace.push_back("ticket " + std::string(inputs.ticket.empty() ? "absent" : "imported"));
+    {
+        char note[96];
+        std::snprintf(note, sizeof(note), "tickets %d of %zu imported",
+                      tickets_imported, inputs.tickets.size());
+        m_finish_trace.push_back(note);
+    }
 
     /* Steps 2 and 3 for one meta: the older version of *this* title is deleted, the record is
        written and the application record is pushed.  A container can carry several metas (a
@@ -1001,12 +1116,11 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
                        service's own parser: the stored record is not a CNMT file, and reading it
                        as one returns nothing (the layout difference is exactly what made the
                        console unable to draw a title after an install). */
-                    NcmContentInfo infos[64]{};
-                    s32 count = 0;
-                    if (R_SUCCEEDED(ncmContentMetaDatabaseListContentInfo(&m_meta, &count, infos, 64,
-                                                                         &old, 0))) {
-                        for (s32 c = 0; c < count && c < 64; ++c) {
-                            NcmContentId id = infos[c].content_id;
+                    std::vector<NcmContentInfo> infos;
+                    std::string list_error;
+                    if (ListRecordContents(m_meta, old, &infos, &list_error)) {
+                        for (const NcmContentInfo &info : infos) {
+                            NcmContentId id = info.content_id;
                             const std::string content_hex = ToHex(id.c, 16);
                             if (std::find(inputs.content_ids.begin(), inputs.content_ids.end(),
                                           content_hex) != inputs.content_ids.end()) {
@@ -1014,6 +1128,10 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
                             }
                             ncmContentStorageDelete(&m_storage, &id);
                         }
+                    } else {
+                        m_finish_trace.push_back("old-version cleanup could not list " +
+                                                 ToHex(&old.id, sizeof(old.id)) + ": " +
+                                                 list_error);
                     }
                     ncmContentMetaDatabaseRemove(&m_meta, &old);
                 }

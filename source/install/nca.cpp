@@ -16,6 +16,7 @@ constexpr std::size_t kNcaOffsetOldKeyGeneration = 0x206;
 constexpr std::size_t kNcaOffsetDistribution = 0x204;
 constexpr std::size_t kNcaOffsetContentType = 0x205;
 constexpr std::size_t kNcaOffsetSize = 0x208;
+constexpr std::size_t kNcaOffsetRightsId = 0x230; /* 16 bytes; all zero when there is none */
 
 constexpr std::size_t kCnmtHeaderSize = 0x20;
 constexpr std::size_t kCnmtContentEntrySize = 0x38; /* 0x20 hash + 0x18 content info */
@@ -127,12 +128,13 @@ bool ParseCnmt(const std::uint8_t *data, std::size_t size, CnmtInfo *out, std::s
     }
     switch (out->type) {
         case MetaType::Application:
-            if (extended_header_size >= 8) {
-                /* patch id (unused here) then the required system version */
+            /* {u64 patch id, u32 required system version, u32 required application version} */
+            if (extended_header_size >= 12) {
                 out->required_system_version = ReadU32(data + kCnmtHeaderSize + 8);
             }
             break;
         case MetaType::Patch:
+            /* {u64 application id, u32 required system version, u32 extended data size, u8[8]} */
             if (extended_header_size >= 8) {
                 out->application_id = HexTitleId(data + kCnmtHeaderSize, 8);
             }
@@ -141,12 +143,17 @@ bool ParseCnmt(const std::uint8_t *data, std::size_t size, CnmtInfo *out, std::s
             }
             break;
         case MetaType::AddOnContent:
-        case MetaType::DataPatch:
+            /* {u64 application id, u32 required *application* version, ...}: an add-on asks for a
+               game version, not for a firmware one, so this is not a required system version. */
             if (extended_header_size >= 8) {
                 out->application_id = HexTitleId(data + kCnmtHeaderSize, 8);
             }
-            if (extended_header_size >= 12) {
-                out->required_system_version = ReadU32(data + kCnmtHeaderSize + 8);
+            break;
+        case MetaType::DataPatch:
+            /* {u64 data id, u64 application id, u32 required application version, ...}: the id
+               this data patch belongs to sits *after* the data id, unlike the other types. */
+            if (extended_header_size >= 16) {
+                out->application_id = HexTitleId(data + kCnmtHeaderSize + 8, 8);
             }
             break;
         default:
@@ -249,6 +256,15 @@ bool ParseNcaHeader(const std::uint8_t *data, std::size_t size, NcaHeaderInfo *o
     const std::uint8_t old_generation = data[kNcaOffsetOldKeyGeneration];
     const std::uint8_t generation = data[kNcaOffsetKeyGeneration];
     out->key_generation = generation > old_generation ? generation : old_generation;
+    /* The rights id decides whether the title key comes from a ticket.  An id of all zeros means
+       "standard crypto", which is the common case for cartridge dumps; a real one means the
+       package must carry the ticket for it (and that the ticket has to be imported, which is a
+       finish step of its own). */
+    bool any = false;
+    for (std::size_t i = 0; i < 16; ++i) {
+        any = any || data[kNcaOffsetRightsId + i] != 0;
+    }
+    out->rights_id = any ? HexId(data + kNcaOffsetRightsId, 16) : std::string();
     return true;
 }
 

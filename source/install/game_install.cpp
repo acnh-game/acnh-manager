@@ -114,17 +114,61 @@ bool GameInstall::Prepare(std::string *error) {
        and its size in the table is the *packed* one -- treating it as an NCA would write a short
        placeholder and a title that cannot launch. */
     for (auto &entry : m_package.container.contents) {
-        if (!entry.compressed) {
+        /* The entry's own NCA header: the authority on how big the content is and on the title key
+           it needs.  A compressed entry keeps that header verbatim at the front of its stream, so
+           it reads the same way as a plain one. */
+        NcaHeaderInfo header;
+        std::string header_error;
+        const bool has_header = ReadContentHeader(entry, &header, &header_error);
+        if (has_header && !header.rights_id.empty()) {
+            m_rights_ids.push_back(header.rights_id);
+        }
+        if (entry.compressed) {
+            NczInfo info;
+            if (!ReadNczInfo(entry, &info, error)) {
+                m_status.stage = InstallStage::Failed;
+                m_status.error = *error;
+                return false;
+            }
+            entry.size = info.nca_size;
+            m_ncz_info[entry.name.substr(0, 32)] = std::move(info);
             continue;
         }
-        NczInfo info;
-        if (!ReadNczInfo(entry, &info, error)) {
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
+        /* A plain NCA: its header states how big it is, and that is the size the console stores.
+           The container entry is what the file occupies, which can be padded (an HFS0 entry is
+           aligned to 0x200), and installing the padding as part of the content would leave a
+           content the record does not describe.  The reference implementation sets the placeholder
+           size from this number (`write_size = header.size`) and writes exactly it; the two agree
+           on every package checked so far (an update NSP, a cartridge dump and a compressed
+           cartridge image all have `header.size == entry.size` per content), so this is a
+           safeguard with a log line rather than a behaviour change. */
+        if (has_header) {
+            if (header.size > 0 && header.size != entry.size) {
+                Note("install: %s is %llu bytes in the container, %llu as an NCA",
+                     entry.name.c_str(), static_cast<unsigned long long>(entry.size),
+                     static_cast<unsigned long long>(header.size));
+                entry.size = header.size;
+            }
+        } else {
+            Note("install: %s has no readable NCA header: %s", entry.name.c_str(),
+                 header_error.c_str());
         }
-        entry.size = info.nca_size;
-        m_ncz_info[entry.name.substr(0, 32)] = std::move(info);
+    }
+    /* A content encrypted with a title key can only be read once a ticket for it is installed, and
+       the package carries that ticket (the finish step imports it).  A package that asks for one it
+       does not carry is worth a line here: the install can still work -- the console usually has
+       the ticket of a title it owns, and a cartridge dump needs none at all -- and when it does
+       not, this line is the answer.  (The reference implementation refuses such a package
+       outright; staying permissive is deliberate, see docs/game_installer_design.md.) */
+    for (const std::string &rights_id : m_rights_ids) {
+        bool covered = false;
+        for (const PackageTicket &pair : m_package.tickets) {
+            covered = covered || pair.rights_id == rights_id;
+        }
+        if (!covered) {
+            Note("install: a content needs title key %s and the package carries no ticket for it",
+                 rights_id.c_str());
+        }
     }
     /* The CNMT and the NACP live *inside* their contents, and how those contents are encrypted is
        the system's business: write the meta content first, ask ncm where its placeholder lives,
@@ -566,7 +610,8 @@ bool GameInstall::Prepare(std::string *error) {
         has_this_version = false;
     }
     const SkipDecision decision =
-        DecideSkip(m_options, m_package.cnmt.version, installed_version, has_this_version);
+        DecideSkip(m_options, m_package.cnmt.type, m_package.cnmt.version, installed_version,
+                   has_this_version);
     if (decision != SkipDecision::Install) {
         m_status.stage = InstallStage::Skipped;
         m_status.skip_message =
@@ -807,25 +852,36 @@ bool GameInstall::ReadNczInfo(const ContainerEntry &entry, NczInfo *out, std::st
        otherwise get a short placeholder, which the console answers with "cannot start the
        software" -- the same class of failure as the record naming a content nobody installed. */
     {
-        std::vector<std::uint8_t> encrypted(kNcaHeaderSize);
-        std::vector<std::uint8_t> decrypted(kNcaHeaderSize);
+        NcaHeaderInfo nca_header;
         std::string header_error;
-        if (m_reader.Read(entry.offset, encrypted.size(), encrypted.data()) &&
-            DecryptNcaHeader(encrypted.data(), decrypted.data(), &header_error)) {
-            NcaHeaderInfo nca_header;
-            if (ParseNcaHeader(decrypted.data(), decrypted.size(), &nca_header, &header_error)) {
-                if (nca_header.size > out->nca_size) {
-                    Note("install: %s decodes to %llu bytes (sections end at %llu)",
-                         entry.name.c_str(),
-                         static_cast<unsigned long long>(nca_header.size),
-                         static_cast<unsigned long long>(out->nca_size));
-                    out->nca_size = nca_header.size;
-                }
-            } else {
-                Note("install: %s has no readable NCA header: %s", entry.name.c_str(),
-                     header_error.c_str());
+        if (ReadContentHeader(entry, &nca_header, &header_error)) {
+            if (nca_header.size > out->nca_size) {
+                Note("install: %s decodes to %llu bytes (sections end at %llu)",
+                     entry.name.c_str(), static_cast<unsigned long long>(nca_header.size),
+                     static_cast<unsigned long long>(out->nca_size));
+                out->nca_size = nca_header.size;
             }
+        } else {
+            Note("install: %s has no readable NCA header: %s", entry.name.c_str(),
+                 header_error.c_str());
         }
+    }
+    return true;
+}
+
+bool GameInstall::ReadContentHeader(const ContainerEntry &entry, NcaHeaderInfo *out,
+                                    std::string *error) {
+    std::vector<std::uint8_t> encrypted(kNcaHeaderSize);
+    std::vector<std::uint8_t> decrypted(kNcaHeaderSize);
+    if (!m_reader.Read(entry.offset, encrypted.size(), encrypted.data())) {
+        *error = "cannot read the content's header";
+        return false;
+    }
+    if (!DecryptNcaHeader(encrypted.data(), decrypted.data(), error)) {
+        return false;
+    }
+    if (!ParseNcaHeader(decrypted.data(), decrypted.size(), out, error)) {
+        return false;
     }
     return true;
 }
@@ -985,6 +1041,7 @@ bool GameInstall::Finish(std::string *error) {
        see BuildMetaRecordBlob.  Without this the console stores a record whose content list it
        cannot read, which is how a title ends up with no control data. */
     if (!BuildMetaRecordBlob(m_primary->blob, m_primary->entry->name, m_package.container,
+                             m_options.lower_system_version,
                              &inputs.meta_blob, error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
@@ -1040,16 +1097,15 @@ bool GameInstall::Finish(std::string *error) {
         extra.meta_type = static_cast<std::uint8_t>(meta.cnmt.type);
         const std::uint64_t extra_title_id = std::strtoull(meta.cnmt.title_id.c_str(), nullptr, 16);
         extra.record_title_id = ApplicationIdOf(extra_title_id, meta.cnmt.type);
-        if (!BuildMetaRecordBlob(meta.blob, meta.entry->name, m_package.container, &extra.meta_blob,
-                                 error)) {
+        if (!BuildMetaRecordBlob(meta.blob, meta.entry->name, m_package.container,
+                                 m_options.lower_system_version, &extra.meta_blob, error)) {
             m_status.stage = InstallStage::Failed;
             m_status.error = *error;
             return false;
         }
         inputs.extra_metas.push_back(std::move(extra));
     }
-    inputs.ticket = m_package.ticket;
-    inputs.certificate = m_package.certificate;
+    inputs.tickets = m_package.tickets;
     if (!m_installer.Finish(inputs, error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;

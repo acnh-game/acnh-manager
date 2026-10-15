@@ -931,3 +931,43 @@ contents=3`、`e0s=5679267840`、`control content: ok`,只有解码那一步失�
    也就是 5.6 GB 里大约 1 MiB 处),进度条按**解压后**体积推进;
 3. `log.txt` 里不应再出现 `the compressed content …` 一类失败行;
 4. 装完能启动,控制台显示的版本与生效版本一致;同一个文件用 sphaira 再装一次作为对比项。
+
+## 四格式对照参考实现的一轮审查(2026-10-15,代码层,离线可验)
+
+背景:四种格式(NSP / NSZ / XCI / XCZ)此前都有过"参考实现能装能跑、我们不能"的记录,而参考实现
+(sphaira)就在本工作区里。这一轮把四种格式的路径逐段对照它的安装/收尾序列(`yati.cpp`、
+`container/nsp.cpp`、`container/xci.cpp`、`nx/nca.hpp`、`nx/ncz.*`),并把可疑处拿到真实样本上核实。
+
+**样本实测(用一次性探针读每个内容的 NCA 头,与本仓库工具同源)**:四种格式的**每个内容**都满足
+`header.size == entry.size`(容器条目没有 padding),所以"内容大小用哪个"在现有样本上是同值;
+`[UPD][v3.0.3][01006F8002326800].nsp` 与 `[UPD][v1.4.1][0100000000010800].nsz` 的 **program 内容带
+rights id**(标题密钥加密,靠随包的 `.tik`/`.cert` 解),其余内容是标准加密;`luigi.xci` 全部
+`rights_id = 0` 且多数内容 `distribution = 1`(卡带,靠 distribution 位改写才能从 SD/NV 启动);
+`Super Mario Party Jamboree.xcz` 的 program 内容 `rights_id = 0`、`distribution = 1`,与前一份
+`.xcz` 的规格一致。
+
+据此修了四处、并纠正一条跳过语义(规则与理由见设计文档第 36 条):
+
+| 差异 | 后果(修之前) | 现在 |
+|---|---|---|
+| 记录里的"所需系统版本"没清零 | 面向更新固件的包装得上、**启动被系统拒绝**("需要系统更新") | 按参考实现默认清零(application / patch) |
+| 只读第一份 `.tik`/`.cert` | 容器带多份票时,后面的标题密钥拿不到 → 装完启动失败 | 按 rights id 成对收全、全部导入,缺证书直接拒绝 |
+| 内容大小取自容器条目 | 条目带 padding 时会写入"记录没描述的内容" | 以 NCA 头为准(不一致时按头走并写日志) |
+| meta 内容不改 distribution 位 | 与参考实现装出的字节不同(今天仍能挂载,实测) | 两条写路径共用同一个头改写 |
+| "已有更高版本就跳过"对四种类型都生效 | 本体内容被删、更新记录还在时,装本体被跳过,**标题永远修不回来** | 只对**更新包**生效(与参考实现一致);本体/DLC 照装,启动版本仍取最高 |
+
+有意保留的一处差异:`convert_to_common_ticket`(票转公共票)不做 —— 它要读 `/switch/prod.keys`
+重新签名票据,而本 App 的定位是"不需要密钥文件";官方渠道的包带的是公共票,原样导入即可用
+(ACNH 的更新包就是这么装的)。带**个人票**的包(自制 dump 常见)会装完但起不来,日志里的
+`tickets N of M imported` 与 `a content needs title key …` 是判别依据。
+
+**留给用户的真机验收**(代码层已改完并 `make -C tests` 全过、两种构建零警告;这轮改动落在
+记录与收尾步骤上,最值得复验的是"装完能启动"这条):
+
+1. 卡上 `/.NSP/Super Mario Party Jamboree …xcz`:安装 → 启动(块表解码那一处刚修,这是主项);
+2. 卡上 `/.NSP/luigi.xci`:安装 → 启动(XCI 的 distribution 位改写现在也覆盖 meta 内容);
+3. 卡上 `/.NSP/Super Mario Odyssey/…nsz`:安装 → 启动(NSZ 回归);
+4. `src/upd/[UPD][v2.0.0]…nsp` 与 `[UPD][v3.0.3]…nsp`(NSP + 票 + rights id 这条路):
+   3.0.3 装完能启动,2.0.0 应显示"已有更高版本,已跳过";
+5. 看一眼 `log.txt` 里这几行是否符合预期:`install: meta …`(逐份)、`tickets N of M imported`、
+   `install: finish …`(记录与启动版本),以及不再出现 `install: … decodes to …` 之外的新警告。

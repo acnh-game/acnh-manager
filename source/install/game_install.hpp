@@ -161,6 +161,11 @@ private:
        and reports the NCA it rebuilds.  Called once per compressed content while the package is
        being read. */
     bool ReadNczInfo(const ContainerEntry &entry, NczInfo *out, std::string *error);
+    /* Reads one content's own header (the 0xC00 bytes the console decrypts with its header key).
+       The header is the authority on how big the NCA is and on which title key it needs, and both
+       are facts the rest of the run uses: the placeholder size, the record's content sizes, and
+       whether a ticket has to be imported.  False when the content has no readable NCA header. */
+    bool ReadContentHeader(const ContainerEntry &entry, NcaHeaderInfo *out, std::string *error);
     /* Reads one meta content out of the container: the meta NCA into a placeholder, the CNMT out
        of it, and the title id its header carries (the mount is keyed by it).  `out_placeholder`
        owns the placeholder, so the caller either keeps it (the meta the run is about) or drops it
@@ -194,6 +199,11 @@ private:
     /* The NCZ tables of every compressed content, by content id (read in Prepare, when the size an
        entry stands for is still being worked out). */
     std::map<std::string, NczInfo> m_ncz_info;
+    /* The title keys the package's contents ask for, gathered while the headers are read: a content
+       with one is encrypted with that key and needs the package's ticket to be imported (the
+       reference implementation refuses such a package when the ticket is missing; we log it and
+       carry on, because a cartridge dump carries no ticket and still installs). */
+    std::vector<std::string> m_rights_ids;
     /* One decoder per task content, in the task's own order (null for plain contents). */
     std::vector<std::unique_ptr<NczDecoder>> m_ncz;
     ContentInstaller m_installer;

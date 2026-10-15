@@ -91,6 +91,7 @@ void AppendContentInfo(std::vector<std::uint8_t> *out, const std::uint8_t *id,
 
 bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
                          const std::string &meta_content_name, const ContainerInfo &container,
+                         bool lower_required_system_version,
                          std::vector<std::uint8_t> *out, std::string *error) {
     out->clear();
     const std::vector<std::uint8_t> &payload = cnmt_payload;
@@ -103,6 +104,7 @@ bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
     const std::uint16_t content_meta_count = ReadU16(payload.data() + kCnmtHeaderOffset + 4);
     const std::uint8_t attributes = payload[kCnmtHeaderOffset + 6];
     const std::uint8_t storage_id = payload[kCnmtHeaderOffset + 7];
+    const std::uint8_t meta_type = payload[kCnmtHeaderOffset - 2];
     const std::size_t extended = kCnmtHeaderSize + extended_header_size;
     const std::size_t entries_end =
         extended + static_cast<std::size_t>(content_count) * kCnmtContentEntrySize;
@@ -139,6 +141,25 @@ bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
     blob.push_back(attributes);
     blob.push_back(storage_id);
     blob.insert(blob.end(), payload.begin() + kCnmtHeaderSize, payload.begin() + extended);
+    /* The firmware version the title asks for sits 8 bytes into the extended header of an
+       application or a patch ({u64 id, u32 required_system_version, ...}), and the reference
+       implementation zeroes it by default (`lower_system_version`).  Installing a package built for
+       newer firmware otherwise leaves a record the console reads as "a system update is required"
+       and refuses to launch, while the same package installs and runs with the field cleared --
+       which is why this has to match.  It only touches what the console stores, not the contents. */
+    constexpr std::uint8_t kMetaTypeApplication = 0x80;
+    constexpr std::uint8_t kMetaTypePatch = 0x81;
+    constexpr std::size_t kRecordHeaderSize = 8; /* the blob's own header, before the extended one */
+    constexpr std::size_t kRequiredSystemVersionAt = 8;
+    if (lower_required_system_version &&
+        (meta_type == kMetaTypeApplication || meta_type == kMetaTypePatch) &&
+        extended_header_size >= kRequiredSystemVersionAt + 4) {
+        const std::size_t at = kRecordHeaderSize + kRequiredSystemVersionAt;
+        blob[at + 0] = 0;
+        blob[at + 1] = 0;
+        blob[at + 2] = 0;
+        blob[at + 3] = 0;
+    }
     /* The meta content first: it is what the console reads to reach the rest of the title. */
     std::uint8_t meta_id[16] = {};
     if (!IdFromHex(meta->name, meta_id)) {
@@ -204,21 +225,38 @@ bool ReadPackage(ContainerReader &reader, std::string_view name, std::uint64_t c
        stays pure so the host tests keep covering the container itself. */
 
     /* Tickets are optional: a base game shipped without one is still installable (the console
-       already has the ticket when it matters). */
+       already has the ticket when it matters).  A ticket is only usable next to its certificate,
+       and both are named by the rights id they belong to -- the reference implementation pairs
+       them the same way and refuses a `.tik` whose `.cert` is missing. */
     for (const auto &entry : out->container.extra) {
-        if (EndsWith(entry.name, ".tik") && out->ticket.empty()) {
-            out->ticket.resize(static_cast<std::size_t>(entry.size));
-            if (!reader.Read(entry.offset, out->ticket.size(), out->ticket.data())) {
-                *error = "cannot read the ticket";
-                return false;
-            }
-        } else if (EndsWith(entry.name, ".cert") && out->certificate.empty()) {
-            out->certificate.resize(static_cast<std::size_t>(entry.size));
-            if (!reader.Read(entry.offset, out->certificate.size(), out->certificate.data())) {
-                *error = "cannot read the certificate";
-                return false;
+        if (!EndsWith(entry.name, ".tik") || entry.name.size() < 32) {
+            continue;
+        }
+        const std::string rights_id = entry.name.substr(0, 32);
+        const ContainerEntry *cert = nullptr;
+        for (const auto &candidate : out->container.extra) {
+            if (candidate.name == rights_id + ".cert") {
+                cert = &candidate;
+                break;
             }
         }
+        if (cert == nullptr) {
+            *error = "the package carries a ticket without its certificate: " + entry.name;
+            return false;
+        }
+        PackageTicket pair;
+        pair.rights_id = rights_id;
+        pair.ticket.resize(static_cast<std::size_t>(entry.size));
+        pair.certificate.resize(static_cast<std::size_t>(cert->size));
+        if (!reader.Read(entry.offset, pair.ticket.size(), pair.ticket.data())) {
+            *error = "cannot read the ticket";
+            return false;
+        }
+        if (!reader.Read(cert->offset, pair.certificate.size(), pair.certificate.data())) {
+            *error = "cannot read the certificate";
+            return false;
+        }
+        out->tickets.push_back(std::move(pair));
     }
     return true;
 }
@@ -287,14 +325,14 @@ bool FillTaskContents(const std::vector<CnmtInfo> &metas, const ContainerInfo &c
     return true;
 }
 
-SkipDecision DecideSkip(const InstallOptions &options, std::uint32_t package_version,
+SkipDecision DecideSkip(const InstallOptions &options, MetaType type, std::uint32_t package_version,
                         std::uint32_t installed_version, bool has_this_version) {
     /* "This exact version is already here" is one question, asked by the console (see
        GameInstall::Prepare): the meta database and the application record both have it. */
     if (options.skip_if_already_installed && has_this_version) {
         return SkipDecision::AlreadyInstalled;
     }
-    if (!options.allow_downgrade && installed_version > package_version) {
+    if (type == MetaType::Patch && !options.allow_downgrade && installed_version > package_version) {
         return SkipDecision::NewerInstalled;
     }
     return SkipDecision::Install;

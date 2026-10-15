@@ -619,7 +619,8 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
 | `source/install/container.*` | PFS0(NSP/NSZ)、HFS0(含 secure 分区, XCI/XCZ)的解析与内容表;`.msp` 在识别阶段直接拒绝。**已实现**:随机读的 `ContainerReader` 接口 + 两种格式的解析、条目按 `.nca` / 其它分类、越界与畸形表头一律拒绝 | 主机(结构解析,已覆盖) |
 | `source/install/install_task.*` | 顺序流状态机:当前内容、写入目标、跳过规则、按体积的进度、续传点计算。**已实现**:按字节的进度(跳过的不计)、一次最多 4 MB 的取数请求(不跨内容)、`install-task.json` 往返、"续传必须是同一个文件"的判定 | 主机(已覆盖) |
 | `source/install/options.hpp` | 安装选项结构(默认值 = 参考实现的默认值,见第 5 节);1.1.0 没有界面,只有这个结构。**已实现**:15 项默认值、`MayNeedKeys()`、`Validate()`(挡住"什么都不装"与"只导票据却又跳过票据") | 主机(已覆盖) |
-| `source/install/nca.*` | NCA 头解密(spl header key)、CNMT 解析、按第 5 节的选项执行/跳过校验、XCI 的 distribution type 改造、结果页要用的如实说明。**已实现**:CNMT 解析(版本/类型/内容表/所需系统版本/所属本体)、NCA3 头解析(分布位/内容类型/keygen/大小/program id)、distribution 位改写;header key 解密与验签待引擎接上 | 解析主机可测(已覆盖);解密/验签走设备 |
+| `source/install/nca.*` | NCA 头解密(spl header key)、CNMT 解析、按第 5 节的选项执行/跳过校验、XCI 的 distribution type 改造、结果页要用的如实说明。**已实现**:CNMT 解析(版本/类型/内容表/所需系统版本/所属本体;application/patch 的所需系统版本在扩展头 +8,add-on 那里是所需**游戏**版本,data patch 的本体 id 在 data id 之后——三者按 libnx 的结构体逐个对齐)、NCA3 头解析(分布位/内容类型/keygen/大小/program id/**rights id**)、distribution 位改写;header key 解密与验签待在引擎侧接上(现在引擎自己读头,见第 36 条) | 解析主机可测(已覆盖);解密/验签走设备 |
+| `source/install/package.*` | 容器里的 meta/内容/票据三张表:meta 按名字与类型选,**容器里有几份 meta 就装几份**(第 33 条),内容表按 CNMT 生成(共享内容只列一次、delta fragment 丢弃,第 33 条),票据按 `<rights id>.tik` + `.cert` 成对收全(第 36 条),记录 blob 按控制台自己的布局拼(含"所需系统版本清零") | 主机(已覆盖) |
 | `source/install/content_install.*` | ncm/ns/es 调用:建占位 → 写入 → `Register` → 元数据库 → 导票据 → **删同 title 旧版本**(跳过本次复用的内容)→ 推 record;失败一律回滚自己建的占位;**"空间检查"与"跳过已有内容"共用同一个 `Has(content)` 判断**(同一目标存储),两者不允许各算一套 | 设备 |
 | `source/install/source_http_client.*` | libcurl 流式下载 + Range 续传 | 设备 |
 | `source/install/source_local_file.*` | SD 文件来源(含文件浏览器数据源) | 设备(逻辑可主机测) |
@@ -901,3 +902,35 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
     program 内容,都得到 5 679 251 456 字节、sha256 均为
     `8b4fcc9ca98de420ad868de0f29ed2e0782a762fc070d3332abf9f11023fe498`;主机测试里另有一个自造的
     压缩块 + 原样块 + 半块尾块混合包,单独钉住"原样块必须拷贝"这条规则(主机测试现在也链 zstd)。
+
+36. **四格式对照参考实现的一轮审查(2026-10-15,结论:再补四处)**:拿到真实样本后逐项对照
+    `yati.cpp` 的安装/收尾序列与 `nca.hpp` 的字段布局,发现四处"参考实现能做、我们做不到"的差异,
+    全部按参考实现补齐:
+    - **记录里的"所需系统版本"要清零**(`lower_system_version`,参考实现默认开):它位于
+      application / patch 扩展头里 `{u64 id, u32 required_system_version}` 的第二个字段,为零的
+      记录在任何固件上都能启动;带着更高版本号的包**装得上但启动会被系统以"需要系统更新"拒绝**。
+      我们在 `BuildMetaRecordBlob` 里照参考实现清零(两种 meta 类型都做,扩展头不足 12 字节则不动);
+    - **票(.tik/.cert)按 rights id 成对收全**:容器可以带多份票(一个包里有多个加密标题),原先只读
+      第一份,现在按 `<rights id>.tik` + `<rights id>.cert` 成对读取、全部导入,缺证书直接拒绝(参考
+      实现同样拒绝)。real 样本证实这条路是必需的:ACNH 的更新 NSP 中只有 program 内容是标题密钥
+      加密(rights id `01006f8002326800000000000000000b`),靠随包的票才能读;
+    - **内容大小以 NCA 头为准**:容器条目是"文件占多少"(HFS0 条目按 0x200 对齐,可能带 padding),
+      NCA 头里的 size 才是控制台存下来的内容大小;参考实现用它设占位(`write_size = header.size`)。
+      现在每个内容的头都会读一次,与条目大小不一致时按头走并把差异写进日志(已核的四个真实文件里
+      两者完全一致,所以这是带日志的兜底,不是行为变更);
+    - **gamecard 的 distribution 位对 meta 内容也要改写**:meta 内容走"装进占位再挂载"这条读出路,
+      原先不做头改写,而参考实现对**每一个**内容(meta 在内)都做。现在两条写路径共用
+      `RewriteDistributionBit`。卡带 dump 的 meta 内容保持 gamecard 也能挂载(实机验证过),所以这条
+      同样是"与参考实现装出同样的字节"而不是"今天装不上"。
+
+    同一轮还发现一条**跳过语义**的偏差并修正(与参考实现对齐):"已有更高版本就跳过"只对**更新包**
+    成立(`GetLatestVersion` 只对 patch 比较版本),本体与追加内容不受它约束。否则会出现真实故障:
+    本体内容被删、更新记录还在时,装本体会被判成"已有更高版本"而跳过,**标题永远修不回来**。跳过的
+    第二种情形(同一个版本已经装好且控制台可用)仍然对四种类型都生效,这是"重复安装不重传"的那条。
+
+    有意保留的一处差异:**票的"转公共票"(`convert_to_common_ticket`)不做**。它需要用
+    `/switch/prod.keys` 里的标题密钥与公共密钥重新签名票据(RSA-2048 + AES-CBC),本 App 的定位是
+    "不需要任何密钥文件"(第 6 节),而**官方渠道下载的包带的是公共票,原样导入即可用**(ACNH 的更新
+    包就是这么装的,实机可运行)。带**个人票**(本机专属票据,自制 dump 常见)的包仍会装完、但控制台
+    拿不到标题密钥,启动会被拒;这类包需要 sphaira 那套 `PatchTicket` 才能用,日志里的
+    `tickets N of M imported` 与 "a content needs title key …" 两行就是判别依据。

@@ -19,16 +19,28 @@
 
 namespace acnh_manager::install {
 
+/* A ticket and the certificate that goes with it, named by the rights id they belong to: a
+   package stores them as `<rights id>.tik` and `<rights id>.cert`.  A content whose NCA carries a
+   rights id is encrypted with that title key, so the console can only read it once this pair has
+   been imported -- which is why a real update downloaded from Nintendo carries one (measured:
+   `[UPD][v3.0.3][01006F8002326800]` has `<rights id>.tik` + `.cert` next to its four contents). */
+struct PackageTicket {
+    std::string rights_id; /* 32 hex digits, as the file names spell it */
+    std::vector<std::uint8_t> ticket;
+    std::vector<std::uint8_t> certificate;
+};
+
 struct PackageInfo {
     ContainerInfo container;
     std::string meta_content_name; /* the .nca whose payload is the CNMT */
     CnmtInfo cnmt;
     std::vector<std::uint8_t> meta_blob; /* the CNMT payload, stored verbatim in the meta database */
-    std::vector<std::uint8_t> ticket;    /* empty when the package carries none (a base game) */
-    std::vector<std::uint8_t> certificate;
+    /* Every ticket the container carries, in the order the file table lists them.  Empty for a
+       package that needs none, which is the normal case for a cartridge dump. */
+    std::vector<PackageTicket> tickets;
 };
 
-/* Reads the container's directory and the ticket pair, and points at the meta content by name
+/* Reads the container's directory and the ticket pairs, and points at the meta content by name
    (`meta_content_name`; a container that stores it compressed names it `.cnmt.ncz`).  The CNMT
    itself is *not* read here: it lives inside that content, which only the system's own file layer
    can open, so the device side installs that one content and mounts it (GameInstall::Prepare).
@@ -56,8 +68,15 @@ bool FillTaskContents(const std::vector<CnmtInfo> &metas, const ContainerInfo &c
    first and is not in the CNMT's own table, so it is added here; without it the console cannot
    find a title's control data at all (measured: the home menu drew an empty tile and
    `nsGetApplicationControlData` answered 0x8C10 while the record itself existed). */
+/* `lower_required_system_version` zeroes the firmware version an application or a patch asks for
+   inside that record, which is what the reference implementation does by default
+   (`lower_system_version`): a package built for newer firmware installs otherwise, and the console
+   then refuses to launch the title with "a system update is required".  Nothing the console
+   verifies covers this field -- it is read from the record, not from anything signed -- so zeroing
+   it leaves the record consistent, and it is the reference's long-standing default. */
 bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
                          const std::string &meta_content_name, const ContainerInfo &container,
+                         bool lower_required_system_version,
                          std::vector<std::uint8_t> *out, std::string *error);
 
 /* The two skips the design promises, decided from numbers alone (design section 9, step 4).
@@ -68,9 +87,14 @@ bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
 enum class SkipDecision {
     Install,
     AlreadyInstalled, /* same version, and the console already has it registered */
-    NewerInstalled,   /* the console's version is higher and downgrades are off */
+    NewerInstalled,   /* an update older than the one the console has, and downgrades are off */
 };
-SkipDecision DecideSkip(const InstallOptions &options, std::uint32_t package_version,
+/* The decision for one package.  Only an *update* is held back by a newer version being installed:
+   the reference implementation compares versions for patches alone (`GetLatestVersion`), and a game
+   or an add-on has to install anyway -- a base game whose contents were deleted while its update's
+   record stayed behind would otherwise be "already covered by a newer version" and could never be
+   repaired.  `has_this_version` is what stops a second run of the same package. */
+SkipDecision DecideSkip(const InstallOptions &options, MetaType type, std::uint32_t package_version,
                         std::uint32_t installed_version, bool has_this_version);
 
 /* The label the result page shows for a package (base / update / dlc), from the CNMT type. */

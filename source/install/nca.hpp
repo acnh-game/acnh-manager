@@ -102,6 +102,14 @@ struct NcaHeaderInfo {
        the CNMT read in the middle of the file system header. */
     std::uint64_t section0_offset{0};
     std::uint64_t section0_size{0};
+    /* The title key this content was encrypted with, 32 hex digits, empty when it uses the
+       console's own (standard) crypto.  A content with one can only be read when a ticket for it
+       is installed, which is why the package has to carry that ticket: the reference
+       implementation refuses a package that has such a content without it, and a real update
+       downloaded from Nintendo carries exactly that pair (measured on
+       `[UPD][v3.0.3][01006F8002326800]`: the program NCA has a rights id, and the container holds
+       `<rights id>.tik` + `.cert`). */
+    std::string rights_id;
     bool is_gamecard() const { return distribution_type != 0; }
 };
 

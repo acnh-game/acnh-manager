@@ -1058,6 +1058,21 @@ void TestNcaAndCnmt() {
     CHECK(header.key_generation == 0x11); /* the higher of the two wins */
     CHECK(header.size == 0x1000);
     CHECK(header.program_id == "01006f8002326000");
+    /* No rights id: standard crypto, which is what a cartridge dump carries -- and the reason
+       those install without any ticket. */
+    CHECK(header.rights_id.empty());
+
+    /* A rights id means the content is encrypted with that title key, so the package's ticket has
+       to be imported before the console can read it (the update packages from Nintendo carry one
+       *.tik + .cert* for exactly that).  All-zero means "none", anything else is kept verbatim. */
+    std::vector<std::uint8_t> keyed(nca);
+    const std::string rights = "01006f8002326800000000000000000b";
+    for (std::size_t i = 0; i < 16; ++i) {
+        keyed[0x230 + i] = static_cast<std::uint8_t>(std::stoul(rights.substr(i * 2, 2), nullptr,
+                                                              16));
+    }
+    CHECK(ParseNcaHeader(keyed.data(), keyed.size(), &header, &error));
+    CHECK(header.rights_id == rights);
 
     /* The distribution rewrite is what makes a card dump launchable from SD/NAND. */
     SetDistributionToSystem(nca.data());
@@ -1070,6 +1085,47 @@ void TestNcaAndCnmt() {
     PutU32(not_nca, 0x200, 0x3241434E); /* NCA2 */
     CHECK(!ParseNcaHeader(not_nca.data(), not_nca.size(), &header, &error));
     CHECK(!ParseNcaHeader(nca.data(), 0x500, &header, &error));
+}
+
+/* The ticket pairs a package carries: `<rights id>.tik` next to `<rights id>.cert`, one per title
+   the container holds.  A content encrypted with a title key needs exactly this imported before
+   the console can read it, which is why a real update package from Nintendo ships one (measured on
+   `[UPD][v3.0.3][01006F8002326800]`: every content is standard crypto except the program, whose
+   rights id is `01006f8002326800000000000000000b`, and the container carries that pair).  Only the
+   first pair used to be read, so a container holding two encrypted titles would leave the second
+   one unreadable, and a ticket without its certificate was accepted silently. */
+void TestPackageTickets() {
+    using acnh_manager::install::PackageInfo;
+    using acnh_manager::install::ReadPackage;
+
+    const char *kMeta = "1427c6a5b5ddbea8d99b4f2cfe94973c.cnmt.nca";
+    const std::string rights_a = "01006f8002326800000000000000000b";
+    const std::string rights_b = "01000000000108000000000000000004";
+    auto bytes = MakePfs0({{kMeta, 0x100},
+                           {rights_a + ".tik", 0x100},
+                           {rights_a + ".cert", 0x200},
+                           {rights_b + ".tik", 0x180},
+                           {rights_b + ".cert", 0x300}});
+    const std::uint64_t size = bytes.size();
+    MemoryReader reader(std::move(bytes));
+    PackageInfo package;
+    std::string error;
+    CHECK(ReadPackage(reader, "game.nsp", size, &package, &error));
+    CHECK(package.tickets.size() == 2);
+    CHECK(package.tickets[0].rights_id == rights_a);
+    CHECK(package.tickets[0].ticket.size() == 0x100);
+    CHECK(package.tickets[0].certificate.size() == 0x200);
+    CHECK(package.tickets[1].rights_id == rights_b);
+    CHECK(package.tickets[1].ticket.size() == 0x180);
+    CHECK(package.tickets[1].certificate.size() == 0x300);
+
+    /* A ticket whose certificate is missing is refused: it cannot be imported, and finding that out
+       while installing is worse than finding it out here. */
+    auto orphan = MakePfs0({{kMeta, 0x100}, {rights_a + ".tik", 0x100}});
+    MemoryReader orphan_reader(std::move(orphan));
+    PackageInfo broken;
+    CHECK(!ReadPackage(orphan_reader, "game.nsp", 0, &broken, &error));
+    CHECK(!error.empty());
 }
 
 void TestInstallTask() {
@@ -1260,6 +1316,7 @@ void TestInstallOptions() {
 void TestDecideSkip() {
     using acnh_manager::install::DecideSkip;
     using acnh_manager::install::InstallOptions;
+    using acnh_manager::install::MetaType;
     using acnh_manager::install::SkipDecision;
 
     const InstallOptions options;
@@ -1267,22 +1324,35 @@ void TestDecideSkip() {
     constexpr std::uint32_t kVersion3 = 0x220000;
 
     /* Nothing there: install. */
-    CHECK(DecideSkip(options, kVersion2, 0, false) == SkipDecision::Install);
+    CHECK(DecideSkip(options, MetaType::Patch, kVersion2, 0, false) == SkipDecision::Install);
     /* This exact version, and the console can use it: skip. */
-    CHECK(DecideSkip(options, kVersion2, kVersion2, true) == SkipDecision::AlreadyInstalled);
+    CHECK(DecideSkip(options, MetaType::Patch, kVersion2, kVersion2, true) ==
+          SkipDecision::AlreadyInstalled);
     /* The same number, but the console's record does not point at it: install (this is the repair
        path -- the bytes are already in the storage, so only the finish step runs). */
-    CHECK(DecideSkip(options, kVersion2, kVersion2, false) == SkipDecision::Install);
-    /* Something newer is installed and downgrades are off: skip, and say which kind of skip. */
-    CHECK(DecideSkip(options, kVersion2, kVersion3, false) == SkipDecision::NewerInstalled);
+    CHECK(DecideSkip(options, MetaType::Patch, kVersion2, kVersion2, false) ==
+          SkipDecision::Install);
+    /* An older *update* against a newer one installed, downgrades off: skip, and say which kind of
+       skip. */
+    CHECK(DecideSkip(options, MetaType::Patch, kVersion2, kVersion3, false) ==
+          SkipDecision::NewerInstalled);
+    /* A base game or an add-on is never held back that way: a base game whose contents were deleted
+       while its update's record stayed behind has to install, or the title can never be repaired
+       (the reference implementation compares versions for patches alone).  The launch version is
+       what keeps the newer update in place. */
+    CHECK(DecideSkip(options, MetaType::Application, kVersion2, kVersion3, false) ==
+          SkipDecision::Install);
+    CHECK(DecideSkip(options, MetaType::AddOnContent, kVersion2, kVersion3, false) ==
+          SkipDecision::Install);
 
     InstallOptions upgraded = options;
     upgraded.allow_downgrade = true;
-    CHECK(DecideSkip(upgraded, kVersion2, kVersion3, false) == SkipDecision::Install);
+    CHECK(DecideSkip(upgraded, MetaType::Patch, kVersion2, kVersion3, false) ==
+          SkipDecision::Install);
 
     InstallOptions forced = options;
     forced.skip_if_already_installed = false;
-    CHECK(DecideSkip(forced, kVersion2, kVersion2, true) == SkipDecision::Install);
+    CHECK(DecideSkip(forced, MetaType::Patch, kVersion2, kVersion2, true) == SkipDecision::Install);
 }
 
 /* The installer's file picker is the app's first scrolling list; the cases below are the ones
@@ -2282,7 +2352,15 @@ void TestBuildMetaRecordBlob() {
 
     std::vector<std::uint8_t> blob;
     std::string error;
-    CHECK(BuildMetaRecordBlob(package.meta_blob, package.meta_content_name, package.container, &blob, &error));
+    /* The required system version this patch asks for: 0x100000, which is what a console below it
+       would refuse to launch.  The reference implementation zeroes it by default, so the record we
+       write has to carry zero there as well. */
+    package.meta_blob[0x20 + 8] = 0x00;
+    package.meta_blob[0x20 + 9] = 0x00;
+    package.meta_blob[0x20 + 10] = 0x10;
+    package.meta_blob[0x20 + 11] = 0x00;
+    CHECK(BuildMetaRecordBlob(package.meta_blob, package.meta_content_name, package.container, true,
+                              &blob, &error));
     /* 8 header + 24 extended + 3 content infos + no meta infos: the meta content and the two
        contents the package carries.  The delta fragment is *listed by the CNMT and not shipped*,
        so the record must not list it either -- a record that does is a title whose contents are
@@ -2293,6 +2371,9 @@ void TestBuildMetaRecordBlob() {
     CHECK(blob[2] == 3 && blob[3] == 0);
     CHECK(blob[4] == 0 && blob[5] == 0);       /* no content-meta infos */
     CHECK(blob[6] == 0 && blob[7] == 0);       /* attributes, storage */
+    /* The extended header is copied, with the required system version lowered to zero (it sits 8
+       bytes into it, right after the extended header's id). */
+    CHECK(blob[8 + 8] == 0 && blob[8 + 9] == 0 && blob[8 + 10] == 0 && blob[8 + 11] == 0);
     /* The meta content comes first, with the type the service expects for it (0 = Meta). */
     CHECK(blob[8 + 24 + 0] == 0x3C && blob[8 + 24 + 1] == 0x38);
     CHECK(blob[8 + 24 + 16] == static_cast<std::uint8_t>(11776 & 0xFF));
@@ -2317,7 +2398,8 @@ void TestBuildMetaRecordBlob() {
     /* A truncated CNMT is refused rather than half-copied. */
     PackageInfo broken = package;
     broken.meta_blob.resize(0x20 + 24 + 0x38);
-    CHECK(!BuildMetaRecordBlob(broken.meta_blob, broken.meta_content_name, broken.container, &blob, &error));
+    CHECK(!BuildMetaRecordBlob(broken.meta_blob, broken.meta_content_name, broken.container, true,
+                               &blob, &error));
     CHECK(!error.empty());
 }
 
@@ -2325,6 +2407,7 @@ int main() {
     TestContainer();
     TestQrCode();
     TestNcaAndCnmt();
+    TestPackageTickets();
     TestInstallTask();
     TestApplicationIdOf();
     TestBuildMetaRecordBlob();
