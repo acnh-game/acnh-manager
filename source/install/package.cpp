@@ -89,10 +89,11 @@ void AppendContentInfo(std::vector<std::uint8_t> *out, const std::uint8_t *id,
 
 }  // namespace
 
-bool BuildMetaRecordBlob(const PackageInfo &package, std::vector<std::uint8_t> *out,
-                         std::string *error) {
+bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
+                         const std::string &meta_content_name, const ContainerInfo &container,
+                         std::vector<std::uint8_t> *out, std::string *error) {
     out->clear();
-    const std::vector<std::uint8_t> &payload = package.meta_blob;
+    const std::vector<std::uint8_t> &payload = cnmt_payload;
     if (payload.size() < kCnmtHeaderSize) {
         *error = "the CNMT payload is too small to describe a record";
         return false;
@@ -112,8 +113,8 @@ bool BuildMetaRecordBlob(const PackageInfo &package, std::vector<std::uint8_t> *
         return false;
     }
     const ContainerEntry *meta = nullptr;
-    for (const auto &entry : package.container.contents) {
-        if (entry.name == package.meta_content_name) {
+    for (const auto &entry : container.contents) {
+        if (entry.name == meta_content_name) {
             meta = &entry;
             break;
         }
@@ -219,40 +220,60 @@ bool ReadPackage(ContainerReader &reader, std::string_view name, std::uint64_t c
     return true;
 }
 
-bool FillTaskContents(const PackageInfo &package, InstallTask *task, std::string *error) {
+bool FillTaskContents(const std::vector<CnmtInfo> &metas, const ContainerInfo &container,
+                      InstallTask *task, std::string *error) {
     task->contents.clear();
-    task->contents.reserve(package.cnmt.contents.size());
-    for (const auto &content : package.cnmt.contents) {
-        if (content.type == ContentType::DeltaFragment) {
-            /* Delta fragments are listed by the CNMT but not shipped inside the package: they are
-               the "what changed since the version you might have" data, and the console does not
-               need them from us.  The reference implementation skips them for the same reason --
-               without this, every update package would look like it is missing a content. */
-            continue;
+    std::size_t total = 0;
+    for (const CnmtInfo &meta : metas) {
+        total += meta.contents.size();
+    }
+    task->contents.reserve(total);
+    for (const CnmtInfo &meta : metas) {
+        for (const auto &content : meta.contents) {
+            if (content.type == ContentType::DeltaFragment) {
+                /* Delta fragments are listed by the CNMT but not shipped inside the package: they
+                   are the "what changed since the version you might have" data, and the console
+                   does not need them from us.  The reference implementation skips them for the
+                   same reason -- without this, every update package would look like it is missing
+                   a content. */
+                continue;
+            }
+            /* Shared between metas (an update reusing the base game's data) and already listed by
+               an earlier meta: one entry is enough, and fetching it twice would be wasted work. */
+            bool seen = false;
+            for (const TaskContent &existing : task->contents) {
+                if (existing.content_id == content.content_id) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (seen) {
+                continue;
+            }
+            const ContainerEntry *entry = FindContentEntry(container, content.content_id);
+            if (entry == nullptr) {
+                *error = "the package lists a content it does not carry: " + content.content_id;
+                return false;
+            }
+            TaskContent item;
+            item.name = entry->name;
+            item.offset = entry->offset;
+            item.size = entry->size;
+            item.packed_size = entry->packed_size;
+            item.compressed = entry->compressed;
+            item.content_id = content.content_id;
+            switch (content.type) {
+                case ContentType::Meta: item.kind = ContentKind::Meta; break;
+                case ContentType::Program: item.kind = ContentKind::Program; break;
+                case ContentType::Control: item.kind = ContentKind::Control; break;
+                case ContentType::Manual: item.kind = ContentKind::Legal; break;
+                case ContentType::Data: item.kind = ContentKind::Data; break;
+                case ContentType::PublicData: item.kind = ContentKind::PublicData; break;
+                case ContentType::DeltaFragment: item.kind = ContentKind::DeltaFragment; break;
+                case ContentType::Unknown: item.kind = ContentKind::Unknown; break;
+            }
+            task->contents.push_back(std::move(item));
         }
-        const ContainerEntry *entry = FindContentEntry(package.container, content.content_id);
-        if (entry == nullptr) {
-            *error = "the package lists a content it does not carry: " + content.content_id;
-            return false;
-        }
-        TaskContent item;
-        item.name = entry->name;
-        item.offset = entry->offset;
-        item.size = entry->size;
-        item.packed_size = entry->packed_size;
-        item.compressed = entry->compressed;
-        item.content_id = content.content_id;
-        switch (content.type) {
-            case ContentType::Meta: item.kind = ContentKind::Meta; break;
-            case ContentType::Program: item.kind = ContentKind::Program; break;
-            case ContentType::Control: item.kind = ContentKind::Control; break;
-            case ContentType::Manual: item.kind = ContentKind::Legal; break;
-            case ContentType::Data: item.kind = ContentKind::Data; break;
-            case ContentType::PublicData: item.kind = ContentKind::PublicData; break;
-            case ContentType::DeltaFragment: item.kind = ContentKind::DeltaFragment; break;
-            case ContentType::Unknown: item.kind = ContentKind::Unknown; break;
-        }
-        task->contents.push_back(std::move(item));
     }
     /* The meta content first: it carries the CNMT, so reading it early is what lets the console
        answer "is this already installed?" before the multi-GB content moves (design section 4). */

@@ -210,6 +210,9 @@ constexpr Entry kStrings[] = {
        it useful): what it wrote, and the one case where it wrote nothing. */
     {"agent 已一并安装", "The agent was installed as well"},  /* ResultAgentFollowUpInstalled */
     {"agent 这次没能装上:回首页可以重新安装", "The agent was not installed this time - install it again from the home screen"},  /* ResultAgentFollowUpFailed */
+    /* "<type> xN": one piece of a dump that carries more than one meta ("更新 ×1 · 追加内容 ×2").
+       The word order works in both languages because the count follows the type. */
+    {"%s ×%d", "%s x%d"},  /* MetaCount */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

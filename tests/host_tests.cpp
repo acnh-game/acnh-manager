@@ -1318,8 +1318,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::ResultAgentFollowUpFailed) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ResultAgentFollowUpFailed); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::MetaCount) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::MetaCount); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -2060,7 +2060,7 @@ void TestBuildMetaRecordBlob() {
 
     std::vector<std::uint8_t> blob;
     std::string error;
-    CHECK(BuildMetaRecordBlob(package, &blob, &error));
+    CHECK(BuildMetaRecordBlob(package.meta_blob, package.meta_content_name, package.container, &blob, &error));
     /* 8 header + 24 extended + 3 content infos + no meta infos: the meta content and the two
        contents the package carries.  The delta fragment is *listed by the CNMT and not shipped*,
        so the record must not list it either -- a record that does is a title whose contents are
@@ -2095,7 +2095,7 @@ void TestBuildMetaRecordBlob() {
     /* A truncated CNMT is refused rather than half-copied. */
     PackageInfo broken = package;
     broken.meta_blob.resize(0x20 + 24 + 0x38);
-    CHECK(!BuildMetaRecordBlob(broken, &blob, &error));
+    CHECK(!BuildMetaRecordBlob(broken.meta_blob, broken.meta_content_name, broken.container, &blob, &error));
     CHECK(!error.empty());
 }
 

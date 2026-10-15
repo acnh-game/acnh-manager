@@ -842,13 +842,16 @@ void App::RunAgentFollowUp() {
         status.stage != install::InstallStage::Skipped) {
         return;
     }
-    /* What the console ends up on: the version this package brings, or the one it already had when
-       the package turned out to be pointless.  Only base games and updates bring a game version at
-       all -- an add-on or a data patch changes none, and a version the manifest does not name is
-       one the agent cannot work with, which the confirm page already said. */
+    /* What the console ends up on: the version this run brings, or the one it already had when the
+       package turned out to be pointless.  "This run" is the *newest* version-carrying meta of the
+       container, not the base game's: a dump that carries a game and its update lands on the
+       update's version, and that is the version the agent has to work with.  Only base games and
+       updates bring a game version at all -- an add-on or a data patch changes none, and a version
+       the manifest does not name is one the agent cannot work with, which the confirm page already
+       said. */
     const std::uint32_t effective = status.stage == install::InstallStage::Skipped
                                         ? status.installed_version
-                                        : status.package_version;
+                                        : status.effective_version;
     if (!install::MetaTypeCarriesGameVersion(package.cnmt.type) ||
         !AgentSupportedFor(package.cnmt.title_id, effective)) {
         return;
@@ -3446,10 +3449,18 @@ void App::RenderInstallConfirm(Surface surface) {
     }
     switch (package.cnmt.type) {
         case install::MetaType::Application:
-            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeBase));
+            row(i18n::StringId::ConfirmType,
+                Tr(i18n::StringId::TypeBase) +
+                    (m_install_status.extra_summary.empty()
+                         ? std::string()
+                         : " + " + m_install_status.extra_summary));
             break;
         case install::MetaType::Patch:
-            row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeUpdate));
+            row(i18n::StringId::ConfirmType,
+                Tr(i18n::StringId::TypeUpdate) +
+                    (m_install_status.extra_summary.empty()
+                         ? std::string()
+                         : " + " + m_install_status.extra_summary));
             break;
         case install::MetaType::AddOnContent:
             row(i18n::StringId::ConfirmType, Tr(i18n::StringId::TypeDlc));
@@ -3646,9 +3657,11 @@ void App::RenderInstallResult(Surface surface) {
     if ((status.stage == install::InstallStage::Done ||
          status.stage == install::InstallStage::Skipped) &&
         install::MetaTypeCarriesGameVersion(package.cnmt.type)) {
+        /* The same "what did this run leave behind" question the follow-up asks: the newest
+           version-carrying meta of the container (see RunAgentFollowUp). */
         const std::uint32_t effective = status.stage == install::InstallStage::Skipped
                                             ? status.installed_version
-                                            : status.package_version;
+                                            : status.effective_version;
         if (AgentSupportedFor(package.cnmt.title_id, effective)) {
             /* The agent is normally in place by the time this screen is up: it was installed by
                the step that followed the game (RunAgentFollowUp), which is the whole point of that

@@ -148,65 +148,121 @@ bool GameInstall::Prepare(std::string *error) {
         m_status.error = *error;
         return false;
     }
-    const ContainerEntry *meta_entry = meta_entries.front();
-    if (meta_entries.size() > 1) {
-        std::uint64_t chosen_type = static_cast<std::uint64_t>(-1);
-        for (const ContainerEntry *candidate : meta_entries) {
-            Placeholder probe_placeholder;
-            std::uint64_t probe_title_id = 0;
-            std::vector<std::uint8_t> probe_blob;
-            std::string probe_error;
-            if (!ReadMetaContent(*candidate, &probe_placeholder, &probe_title_id, &probe_blob,
-                                 &probe_error)) {
-                Note("install: meta %s could not be read for selection: %s", candidate->name.c_str(),
-                     probe_error.c_str());
+    /* Read *every* meta the container carries.  The reference implementation does the same and
+       files one record per meta, which is how an update and the add-ons end up attached to the
+       game they belong to instead of being ignored because the base game came first.  (Reading
+       them all is also what makes the choice below possible at all: a CNMT's type is only visible
+       inside the encrypted meta content.) */
+    for (const ContainerEntry *candidate : meta_entries) {
+        MetaUnit unit;
+        unit.entry = candidate;
+        if (!ReadMetaContent(*candidate, &unit.placeholder, &unit.title_id, &unit.blob, error)) {
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+        if (!ParseCnmt(unit.blob.data(), unit.blob.size(), &unit.cnmt, error)) {
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+        unit.content.name = candidate->name;
+        unit.content.offset = candidate->offset;
+        unit.content.size = candidate->size;
+        unit.content.content_id = candidate->name.substr(0, 32);
+        unit.content.kind = ContentKind::Meta;
+        unit.content.placeholder_id = unit.placeholder.placeholder_id;
+        m_read_placeholders.push_back(unit.placeholder);
+        Note("install: meta %s title=%s v=0x%x type=%s contents=%zu", candidate->name.c_str(),
+             unit.cnmt.title_id.c_str(), unit.cnmt.version, MetaTypeLabel(unit.cnmt.type),
+             unit.cnmt.contents.size());
+        m_metas.push_back(std::move(unit));
+    }
+    /* The base game leads: the screens describe the title through its control data, and the
+       console's application record is filed under its id.  Patch and add-on metas follow, in the
+       container's own order among themselves. */
+    const auto rank = [](MetaType type) -> int {
+        switch (type) {
+            case MetaType::Application: return 0;
+            case MetaType::Patch: return 1;
+            case MetaType::AddOnContent: return 2;
+            default: return 3;
+        }
+    };
+    std::stable_sort(m_metas.begin(), m_metas.end(),
+                     [&rank](const MetaUnit &lhs, const MetaUnit &rhs) {
+                         return rank(lhs.cnmt.type) < rank(rhs.cnmt.type);
+                     });
+    m_primary = &m_metas.front();
+    if (m_primary->cnmt.type != MetaType::Application) {
+        Note("install: none of the %zu metas is an application; the screens describe %s",
+             m_metas.size(), m_primary->entry->name.c_str());
+    }
+    /* The package's identity for the rest of the run is the primary meta's: its CNMT is what the
+       confirm page shows, what the skip rules compare, and what names the control content the
+       name and cover come from.  (The record builder used to read `meta_content_name`, which the
+       pure parse filled with the *first* `.cnmt.nca` -- in a container with several metas that is
+       usually a DLC's, and the record then named a content nobody installed, which is why the
+       console refused to launch the title.  It is the primary's name now.) */
+    m_package.cnmt = m_primary->cnmt;
+    m_package.meta_blob = m_primary->blob;
+    m_package.meta_content_name = m_primary->entry->name;
+    Note("install: primary meta %s", m_primary->entry->name.c_str());
+
+    /* The version the console ends up on is the newest one of the metas that carry a game version
+       (base game or update, not the add-ons): a container with a game and its update raises the
+       title to the update's version, and that is the version the agent's "does it work with this?"
+       question is about -- and the control content whose NACP describes the title afterwards. */
+    const MetaUnit *effective = m_primary;
+    for (const MetaUnit &meta : m_metas) {
+        if (!MetaTypeCarriesGameVersion(meta.cnmt.type)) {
+            continue;
+        }
+        if (m_status.effective_version == 0 || meta.cnmt.version >= m_status.effective_version) {
+            m_status.effective_version = meta.cnmt.version;
+            m_status.effective_title_id = meta.cnmt.title_id;
+            effective = &meta;
+        }
+    }
+    if (m_status.effective_version == 0) {
+        m_status.effective_version = m_primary->cnmt.version;
+        m_status.effective_title_id = m_primary->cnmt.title_id;
+    }
+    Note("install: effective version 0x%x (%s)", m_status.effective_version,
+         m_status.effective_title_id.c_str());
+
+    /* What else rides along, in the app's language: "更新 ×1 · 追加内容 ×2".  The confirm page
+       says it, because installing a game out of a dump that also holds its update and DLCs and
+       silently leaving them out is the kind of surprise this app is not allowed to spring. */
+    {
+        int updates = 0;
+        int addons = 0;
+        for (const MetaUnit &meta : m_metas) {
+            if (&meta == m_primary) {
                 continue;
             }
-            CnmtInfo probe_cnmt;
-            const bool parsed = ParseCnmt(probe_blob.data(), probe_blob.size(), &probe_cnmt,
-                                          &probe_error);
-            Note("install: meta candidate %s type=%s", candidate->name.c_str(),
-                 parsed ? MetaTypeLabel(probe_cnmt.type) : "unparsed");
-            if (parsed && probe_cnmt.type == MetaType::Application) {
-                meta_entry = candidate;
-                chosen_type = static_cast<std::uint64_t>(probe_cnmt.type);
-            }
-            std::string drop_error;
-            m_installer.DropPlaceholders({probe_placeholder}, &drop_error);
-            if (chosen_type != static_cast<std::uint64_t>(-1)) {
-                break; /* the base game is the one this run installs */
+            switch (meta.cnmt.type) {
+                case MetaType::Patch: ++updates; break;
+                case MetaType::AddOnContent: ++addons; break;
+                default: break;
             }
         }
-        if (chosen_type == static_cast<std::uint64_t>(-1)) {
-            Note("install: none of the %zu metas is an application; installing the first",
-                 meta_entries.size());
+        std::string parts;
+        if (updates > 0) {
+            parts = i18n::Format(i18n::StringId::MetaCount,
+                                 i18n::Text(i18n::StringId::TypeUpdate, i18n::Current()), updates);
+        }
+        if (addons > 0) {
+            const std::string addon = i18n::Format(
+                i18n::StringId::MetaCount, i18n::Text(i18n::StringId::TypeDlc, i18n::Current()),
+                addons);
+            parts += parts.empty() ? addon : " · " + addon;
+        }
+        m_status.extra_summary = parts;
+        if (!parts.empty()) {
+            Note("install: also installing %s", parts.c_str());
         }
     }
-    Placeholder meta_placeholder;
-    std::uint64_t title_id = 0;
-    std::vector<std::uint8_t> meta_blob;
-    if (!ReadMetaContent(*meta_entry, &meta_placeholder, &title_id, &meta_blob, error)) {
-        m_status.stage = InstallStage::Failed;
-        m_status.error = *error;
-        return false;
-    }
-    {
-        TaskContent meta_content;
-        meta_content.name = meta_entry->name;
-        meta_content.offset = meta_entry->offset;
-        meta_content.size = meta_entry->size;
-        meta_content.content_id = meta_entry->name.substr(0, 32);
-        meta_content.kind = ContentKind::Meta;
-        meta_content.placeholder_id = meta_placeholder.placeholder_id;
-        m_meta_content = meta_content; /* the register step needs it: the task cannot carry it */
-        m_meta_placeholder = meta_placeholder;
-    }
-    if (!ParseCnmt(meta_blob.data(), meta_blob.size(), &m_package.cnmt, error)) {
-        m_status.stage = InstallStage::Failed;
-        m_status.error = *error;
-        return false;
-    }
-    m_package.meta_blob = std::move(meta_blob);
     /* The log line is composed *before* the NACP step, because that step appends to it: building
        it afterwards silently dropped the NACP outcome, which is exactly the information needed
        when the name does not appear. */
@@ -257,34 +313,69 @@ bool GameInstall::Prepare(std::string *error) {
            implementation passes `nca.header.program_id`, and for an update package that differs
            from the meta content's id (patch id vs base id) -- which is exactly what made the
            mount fail. */
-        std::uint64_t control_title_id = title_id;
-        for (const auto &entry : m_package.container.contents) {
+        /* Reading one NCA header is what tells a control content from everything else, and the
+           mount's key is that header's own program id (the reference implementation passes it the
+           same way). */
+        const auto header_of = [&](const ContainerEntry &entry, NcaHeaderInfo *out) -> bool {
             if (entry.name.size() <= 32 ||
                 (entry.name.compare(entry.name.size() - 4, 4, ".nca") != 0 &&
                  entry.name.compare(entry.name.size() - 4, 4, ".ncz") != 0)) {
-                continue;
+                return false;
             }
             if (entry.size < kNcaHeaderSize) {
-                continue;
+                return false;
             }
             std::vector<std::uint8_t> encrypted(kNcaHeaderSize);
             std::vector<std::uint8_t> decrypted(kNcaHeaderSize);
             std::string header_error;
             if (!m_reader.Read(entry.offset, encrypted.size(), encrypted.data()) ||
                 !DecryptNcaHeader(encrypted.data(), decrypted.data(), &header_error)) {
+                return false;
+            }
+            return ParseNcaHeader(decrypted.data(), decrypted.size(), out, &header_error);
+        };
+        const auto entry_for = [&](const std::string &id) -> const ContainerEntry * {
+            for (const auto &entry : m_package.container.contents) {
+                if (entry.name.size() > 32 && entry.name.compare(0, 32, id) == 0) {
+                    return &entry;
+                }
+            }
+            return nullptr;
+        };
+        /* The *effective* meta's control content is the one whose data the console will serve
+           (an update's replaces the base game's), so when the container carries several metas its
+           own content list points at the right one; a package with a single meta, or one whose
+           CNMT does not name a control content, falls back to scanning by NCA header. */
+        for (const CnmtContent &content : effective->cnmt.contents) {
+            if (content.type != ContentType::Control) {
                 continue;
             }
+            const ContainerEntry *entry = entry_for(content.content_id);
+            if (entry != nullptr) {
+                control_entry = entry;
+                break;
+            }
+        }
+        if (control_entry == nullptr) {
+            for (const auto &entry : m_package.container.contents) {
+                NcaHeaderInfo header;
+                if (!header_of(entry, &header)) {
+                    continue;
+                }
+                if (header.content_type == ContentType::Control) {
+                    control_entry = &entry;
+                    break;
+                }
+            }
+        }
+        std::uint64_t control_title_id = m_primary->title_id;
+        if (control_entry != nullptr) {
             NcaHeaderInfo header;
-            if (!ParseNcaHeader(decrypted.data(), decrypted.size(), &header, &header_error)) {
-                continue;
-            }
-            if (header.content_type == ContentType::Control) {
-                control_entry = &entry;
+            if (header_of(*control_entry, &header)) {
                 const std::uint64_t own = std::strtoull(header.program_id.c_str(), nullptr, 16);
                 if (own != 0) {
                     control_title_id = own;
                 }
-                break;
             }
         }
         if (control_entry == nullptr) {
@@ -383,21 +474,31 @@ bool GameInstall::Prepare(std::string *error) {
        ship them) and refuses a package that lists a content it does not carry.  This call was
        lost to a careless range-edit earlier, which is why the confirm page showed 0.0 GB and the
        transfer had nothing to do: the parse was right, nothing consumed it. */
-    if (!FillTaskContents(m_package, &m_task, error)) {
+    std::vector<CnmtInfo> cnmt_list;
+    cnmt_list.reserve(m_metas.size());
+    for (const MetaUnit &meta : m_metas) {
+        cnmt_list.push_back(meta.cnmt);
+    }
+    if (!FillTaskContents(cnmt_list, m_package.container, &m_task, error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
     }
 
-    /* The meta content is already in its placeholder: mark it so the transfer phase does not
-       fetch it a second time (and so Register finds it complete). */
+    /* The meta contents are already in their placeholders: mark them so the transfer phase does
+       not fetch them a second time (and so Register finds them complete). */
     for (auto &content : m_task.contents) {
-        if (content.content_id == m_meta_placeholder.content_id) {
-            content.placeholder_id = m_meta_placeholder.placeholder_id;
-            content.written = content.size;
-        } else if (content.content_id == m_control_placeholder.content_id) {
+        if (content.content_id == m_control_placeholder.content_id) {
             content.placeholder_id = m_control_placeholder.placeholder_id;
             content.written = content.size;
+            continue;
+        }
+        for (const MetaUnit &meta : m_metas) {
+            if (content.content_id == meta.content.content_id) {
+                content.placeholder_id = meta.placeholder.placeholder_id;
+                content.written = content.size;
+                break;
+            }
         }
     }
     /* Ask the console which version it has and decide before anything moves: the skip rules are
@@ -535,13 +636,12 @@ bool GameInstall::Prepare(std::string *error) {
    behind makes the next attempt collide with it ("creating a placeholder failed"), which is
    exactly how one failed run turned every later run into the same error. */
 bool GameInstall::CleanupAfterFailure(std::string *error) {
-    if (m_meta_placeholder.placeholder_id.empty()) {
+    if (m_read_placeholders.empty()) {
         return true;
     }
     std::string ignored;
     const bool ok = m_installer.DropPlaceholders(m_read_placeholders, &ignored);
     m_read_placeholders.clear();
-    m_meta_placeholder.placeholder_id.clear();
     m_control_placeholder.placeholder_id.clear();
     if (error != nullptr && !ok) {
         *error = ignored;
@@ -913,16 +1013,19 @@ bool GameInstall::Finish(std::string *error) {
         return false;
     }
     m_status.stage = InstallStage::Finalizing;
-    /* The meta content is registered here too: it is the one content the task cannot list (the
+    /* The meta contents are registered here too: they are the contents the task cannot list (a
        CNMT does not name itself), and a record that names a content the storage does not have is a
-       title the console refuses to launch.  The placeholder may already be gone if the read-out's
-       fallback registered it, which Register tolerates. */
-    const std::string meta_placeholder_id = m_meta_placeholder.placeholder_id;
-    TaskContent meta_for_register = m_meta_content;
-    meta_for_register.placeholder_id = meta_placeholder_id;
-    meta_for_register.written = meta_for_register.size;
-    if (!m_installer.Register(m_task, meta_placeholder_id.empty() ? nullptr : &meta_for_register,
-                              error)) {
+       title the console refuses to launch.  Every meta of the container is registered, not just
+       the one the screens describe, because every one of them gets a record.  A placeholder may
+       already be gone if the read-out's fallback registered it, which Register tolerates. */
+    std::vector<TaskContent> metas_for_register;
+    metas_for_register.reserve(m_metas.size());
+    for (const MetaUnit &meta : m_metas) {
+        TaskContent entry = meta.content;
+        entry.written = entry.size;
+        metas_for_register.push_back(std::move(entry));
+    }
+    if (!m_installer.Register(m_task, metas_for_register, error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
@@ -934,13 +1037,14 @@ bool GameInstall::Finish(std::string *error) {
         Note("install: register %s", line.c_str());
     }
     ContentInstaller::FinishInputs inputs;
-    inputs.title_id = m_package.cnmt.title_id;
-    inputs.version = m_package.cnmt.version;
-    inputs.meta_type = static_cast<std::uint8_t>(m_package.cnmt.type);
+    inputs.title_id = m_primary->cnmt.title_id;
+    inputs.version = m_primary->cnmt.version;
+    inputs.meta_type = static_cast<std::uint8_t>(m_primary->cnmt.type);
     /* The record's payload is built in the console's own layout, not copied from the CNMT file --
        see BuildMetaRecordBlob.  Without this the console stores a record whose content list it
        cannot read, which is how a title ends up with no control data. */
-    if (!BuildMetaRecordBlob(m_package, &inputs.meta_blob, error)) {
+    if (!BuildMetaRecordBlob(m_primary->blob, m_primary->entry->name, m_package.container,
+                             &inputs.meta_blob, error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
@@ -948,13 +1052,22 @@ bool GameInstall::Finish(std::string *error) {
     for (const auto &content : m_task.contents) {
         inputs.content_ids.push_back(content.content_id);
     }
-    inputs.base_title_id = m_package.cnmt.application_id; /* set for patches */
+    inputs.base_title_id = m_primary->cnmt.application_id; /* set for patches */
     /* The record and the launch version are filed under the base application id (for a base game
        that is its own id), with this package's key inside -- see ContentInstaller::Finish. */
-    const std::uint64_t title_id = std::strtoull(m_package.cnmt.title_id.c_str(), nullptr, 16);
-    inputs.record_title_id = ApplicationIdOf(title_id, m_package.cnmt.type);
-    inputs.launch_version = m_package.cnmt.version;
-    if (m_package.cnmt.type != MetaType::Patch) {
+    const std::uint64_t title_id = std::strtoull(m_primary->cnmt.title_id.c_str(), nullptr, 16);
+    inputs.record_title_id = ApplicationIdOf(title_id, m_primary->cnmt.type);
+    /* The console is allowed to launch the *newest* version this run puts in place: a container
+       that carries a game and its update has to raise the launch version to the update's, or the
+       console keeps starting the base game (the reference implementation asks for the newest
+       version it can see, per meta, for the same reason). */
+    inputs.launch_version = m_primary->cnmt.version;
+    for (const MetaUnit &meta : m_metas) {
+        if (meta.cnmt.version > inputs.launch_version) {
+            inputs.launch_version = meta.cnmt.version;
+        }
+    }
+    if (m_primary->cnmt.type != MetaType::Patch) {
         /* A base game or add-on installed on top of an update must not lower what the console is
            allowed to launch: the reference implementation takes the newest version it can see for
            the game.  An update's own version is the package's version (that is the newest record
@@ -972,6 +1085,27 @@ bool GameInstall::Finish(std::string *error) {
                 inputs.launch_version = installed;
             }
         }
+    }
+    /* The container's other metas: each is filed with its own key and its own record, which is how
+       the console attaches an update and the add-ons to the game they belong to.  The reference
+       implementation loops over them exactly like this. */
+    for (const MetaUnit &meta : m_metas) {
+        if (&meta == m_primary) {
+            continue;
+        }
+        ContentInstaller::FinishInputs::ExtraMeta extra;
+        extra.title_id = meta.cnmt.title_id;
+        extra.version = meta.cnmt.version;
+        extra.meta_type = static_cast<std::uint8_t>(meta.cnmt.type);
+        const std::uint64_t extra_title_id = std::strtoull(meta.cnmt.title_id.c_str(), nullptr, 16);
+        extra.record_title_id = ApplicationIdOf(extra_title_id, meta.cnmt.type);
+        if (!BuildMetaRecordBlob(meta.blob, meta.entry->name, m_package.container, &extra.meta_blob,
+                                 error)) {
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+        inputs.extra_metas.push_back(std::move(extra));
     }
     inputs.ticket = m_package.ticket;
     inputs.certificate = m_package.certificate;
@@ -997,7 +1131,6 @@ bool GameInstall::Abandon(std::string *error) {
     std::string ignored;
     ok = m_installer.DropPlaceholders(m_read_placeholders, &ignored) && ok;
     m_read_placeholders.clear();
-    m_meta_placeholder.placeholder_id.clear();
     m_control_placeholder.placeholder_id.clear();
     if (m_status.modified) {
         /* Only discard registered content when this run registered it: a cancel before Register

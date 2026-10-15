@@ -553,17 +553,17 @@ bool ContentInstaller::Write(const InstallTask &task, const RangeRequest &range,
     return true;
 }
 
-bool ContentInstaller::Register(const InstallTask &task, const TaskContent *meta,
+bool ContentInstaller::Register(const InstallTask &task, const std::vector<TaskContent> &metas,
                                 std::string *error) {
     if (!EnsureOpen(error)) {
         return false;
     }
-    /* One loop for both: the meta content needs exactly the same treatment as the task's
-       contents, and giving it its own copy of this logic is how the two drift apart. */
+    /* One loop for both: a meta content needs exactly the same treatment as the task's contents,
+       and giving it its own copy of this logic is how the two drift apart. */
     std::vector<const TaskContent *> ordered;
-    ordered.reserve(task.contents.size() + 1);
-    if (meta != nullptr) {
-        ordered.push_back(meta);
+    ordered.reserve(task.contents.size() + metas.size());
+    for (const TaskContent &meta : metas) {
+        ordered.push_back(&meta);
     }
     for (const auto &content : task.contents) {
         ordered.push_back(&content);
@@ -606,10 +606,12 @@ bool ContentInstaller::Register(const InstallTask &task, const TaskContent *meta
             *error = Describe("registering a content", rc);
             return false;
         }
-        if (entry == meta) {
-            /* The one content whose registration is easy to forget (it is not in the task), so its
-               outcome is in the trace: a record that names it while the storage does not have it
-               is a title that will not launch. */
+        if (std::find_if(metas.begin(), metas.end(), [&content](const TaskContent &meta) {
+                return meta.content_id == content.content_id;
+            }) != metas.end()) {
+            /* The contents whose registration is easy to forget (they are not in the task), so
+               their outcome is in the trace: a record that names one while the storage does not
+               have it is a title that will not launch. */
             m_finish_trace.push_back("meta content registered " + content.content_id);
         }
     }
@@ -868,28 +870,15 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
         return false;
     }
 
-    NcmContentMetaKey key{};
-    key.id = std::strtoull(inputs.title_id.c_str(), nullptr, 16);
-    key.version = inputs.version;
-    key.type = inputs.meta_type;
-    key.install_type = 0; /* NcmContentInstallType_Full */
-
-    /* The record and the launch version belong to the *application*, with this package's key
+    /* The record and the launch version belong to the *application*, with each meta's own key
        inside: that is how the system connects an update to the game it updates, and how it knows
-       which control data to serve.  Filing the patch's record under the patch id instead left the
+       which control data to serve.  Filing a patch's record under the patch id instead left the
        console reporting 1.0.0 while ncm had the 2.0.0 record (measured on the console: our own
        query by the application id found only the base game's record). */
-    const std::uint64_t record_id = inputs.record_title_id != 0 ? inputs.record_title_id : key.id;
-
-    {
-        char note[160];
-        std::snprintf(note, sizeof(note),
-                      "key id=%s version=0x%x type=%u install=%u contents=%zu record=%016llx",
-                      inputs.title_id.c_str(), inputs.version,
-                      static_cast<unsigned>(inputs.meta_type), static_cast<unsigned>(key.install_type),
-                      inputs.content_ids.size(), static_cast<unsigned long long>(record_id));
-        m_finish_trace.push_back(note);
-    }
+    const std::uint64_t record_id =
+        inputs.record_title_id != 0
+            ? inputs.record_title_id
+            : std::strtoull(inputs.title_id.c_str(), nullptr, 16);
 
     /* 1. Ticket.  A package without one (a base game only) is legal, so an empty blob is not an
           error; the import failure itself is reported, never swallowed (design section 9). */
@@ -899,28 +888,50 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
             return false;
         }
     }
-
     m_finish_trace.push_back("ticket " + std::string(inputs.ticket.empty() ? "absent" : "imported"));
 
-    /* 2. Delete the older version of this title, across every storage -- the console keeps each
-          version's contents otherwise, which is how a second update silently eats the card
-          (measured: installing 3.0.3 left 2.0.0's several GB behind until this step existed).
-          Contents the new version reuses are skipped: deleting them would delete what we just
-          registered. */
-    {
+    /* Steps 2 and 3 for one meta: the older version of *this* title is deleted, the record is
+       written and the application record is pushed.  A container can carry several metas (a
+       cartridge dump made from a game plus its update and DLCs), and the reference implementation
+       loops over them exactly like this -- each meta is one row the console can use, and pushing
+       only the base game's leaves the update and the add-ons unannounced. */
+    const auto file_meta = [&](const std::string &title_id_hex, std::uint32_t version,
+                               std::uint8_t meta_type, const std::vector<std::uint8_t> &blob,
+                               std::uint64_t meta_record_title_id) -> bool {
+        NcmContentMetaKey meta_key{};
+        meta_key.id = std::strtoull(title_id_hex.c_str(), nullptr, 16);
+        meta_key.version = version;
+        meta_key.type = meta_type;
+        meta_key.install_type = 0; /* NcmContentInstallType_Full */
+        const std::uint64_t meta_record_id =
+            meta_record_title_id != 0 ? meta_record_title_id : meta_key.id;
+        {
+            char note[192];
+            std::snprintf(note, sizeof(note), "meta %s version=0x%x type=%u contents=%zu record=%016llx",
+                          title_id_hex.c_str(), version, static_cast<unsigned>(meta_type),
+                          inputs.content_ids.size(),
+                          static_cast<unsigned long long>(meta_record_id));
+            m_finish_trace.push_back(note);
+        }
+
+        /* 2. Delete the older version of this title, across every storage -- the console keeps each
+              version's contents otherwise, which is how a second update silently eats the card
+              (measured: installing 3.0.3 left 2.0.0's several GB behind until this step existed).
+              Contents the new version reuses are skipped: deleting them would delete what we just
+              registered. */
         s32 total = 0;
         s32 written = 0;
         if (R_SUCCEEDED(ncmContentMetaDatabaseListApplication(&m_meta, &total, &written, nullptr, 0,
-                                                              static_cast<NcmContentMetaType>(inputs.meta_type))) &&
+                                                             static_cast<NcmContentMetaType>(meta_type))) &&
             total > 0) {
             std::vector<NcmApplicationContentMetaKey> keys(static_cast<std::size_t>(total));
             if (R_SUCCEEDED(ncmContentMetaDatabaseListApplication(
                     &m_meta, &total, &written, keys.data(), static_cast<s32>(keys.size()),
-                    static_cast<NcmContentMetaType>(inputs.meta_type)))) {
+                    static_cast<NcmContentMetaType>(meta_type)))) {
                 for (s32 i = 0; i < written; ++i) {
                     const NcmContentMetaKey &old = keys[static_cast<std::size_t>(i)].key;
-                    if (old.id != key.id || (old.version == key.version &&
-                                             old.type == key.type)) {
+                    if (old.id != meta_key.id ||
+                        (old.version == meta_key.version && old.type == meta_key.type)) {
                         continue;
                     }
                     /* The old version's contents come from the meta *database*, through the
@@ -929,8 +940,8 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
                        console unable to draw a title after an install). */
                     NcmContentInfo infos[64]{};
                     s32 count = 0;
-                    if (R_SUCCEEDED(ncmContentMetaDatabaseListContentInfo(&m_meta, &count, infos,
-                                                                         64, &old, 0))) {
+                    if (R_SUCCEEDED(ncmContentMetaDatabaseListContentInfo(&m_meta, &count, infos, 64,
+                                                                         &old, 0))) {
                         for (s32 c = 0; c < count && c < 64; ++c) {
                             NcmContentId id = infos[c].content_id;
                             const std::string content_hex = ToHex(id.c, 16);
@@ -945,80 +956,112 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
                 }
             }
         }
-    }
 
-    /* 3. This version's meta record, then the application record that makes the console see the
-          title.  The blob is the CNMT payload exactly as it came out of the package: the system
-          reads it back, so rewriting it here would be a second, silent format to keep in sync. */
-    {
-        const Result rc = ncmContentMetaDatabaseSet(&m_meta, &key, inputs.meta_blob.data(),
-                                                    inputs.meta_blob.size());
+        /* 3. This version's meta record.  The blob is the CNMT payload exactly as it came out of the
+              package: the system reads it back, so rewriting it here would be a second, silent
+              format to keep in sync. */
         {
-            char note[96];
-            std::snprintf(note, sizeof(note), "metadb set rc=0x%x blob=%zu", static_cast<unsigned>(rc),
-                          inputs.meta_blob.size());
-            m_finish_trace.push_back(note);
+            const Result rc = ncmContentMetaDatabaseSet(&m_meta, &meta_key, blob.data(), blob.size());
+            {
+                char note[96];
+                std::snprintf(note, sizeof(note), "metadb set rc=0x%x blob=%zu",
+                              static_cast<unsigned>(rc), blob.size());
+                m_finish_trace.push_back(note);
+            }
+            if (R_FAILED(rc)) {
+                *error = Describe("writing the content meta record", rc);
+                return false;
+            }
+            const Result commit = ncmContentMetaDatabaseCommit(&m_meta);
+            {
+                char note[64];
+                std::snprintf(note, sizeof(note), "metadb commit rc=0x%x",
+                              static_cast<unsigned>(commit));
+                m_finish_trace.push_back(note);
+            }
+            if (R_FAILED(commit)) {
+                *error = Describe("committing the content meta database", commit);
+                return false;
+            }
         }
-        if (R_FAILED(rc)) {
-            *error = Describe("writing the content meta record", rc);
-            return false;
-        }
-        const Result commit = ncmContentMetaDatabaseCommit(&m_meta);
-        {
-            char note[64];
-            std::snprintf(note, sizeof(note), "metadb commit rc=0x%x", static_cast<unsigned>(commit));
-            m_finish_trace.push_back(note);
-        }
-        if (R_FAILED(commit)) {
-            *error = Describe("committing the content meta database", commit);
-            return false;
-        }
-    }
-    {
-        /* An update or add-on must never be filed as an application of its own: a build of this
-           app that pushed the record under the patch's id left the console with an application it
-           had nothing to draw for, which the home screen showed as an extra, empty tile.  That
-           entry is a row of its own, so it is cleared here -- and only here, *before* our own
-           record is pushed, because the same call also means "clear this application's record
-           list": running it afterwards clears the list we just wrote (measured: the game
-           disappeared from the home screen until an install wrote the record back).  It touches no
-           content either way. */
-        if (key.id != record_id) {
+
+        /* An update or add-on must never be filed as an application of its own: a build of this app
+           that pushed the record under the patch's id left the console with an application it had
+           nothing to draw for, which the home screen showed as an extra, empty tile.  That entry is
+           a row of its own, so it is cleared here -- and only here, *before* our own record is
+           pushed, because the same call also means "clear this application's record list": running
+           it afterwards clears the list we just wrote (measured: the game disappeared from the home
+           screen until an install wrote the record back).  It touches no content either way. */
+        if (meta_key.id != meta_record_id) {
             std::string cleanup_error;
-            if (m_services.DeleteApplicationRecord(key.id, &cleanup_error)) {
-                m_finish_trace.push_back("cleared the record list of " + inputs.title_id +
-                                         " (this package is not an application of its own)");
+            if (m_services.DeleteApplicationRecord(meta_key.id, &cleanup_error)) {
+                m_finish_trace.push_back("cleared the record list of " + title_id_hex +
+                                         " (this meta is not an application of its own)");
             } else {
-                m_finish_trace.push_back("record-list cleanup for " + inputs.title_id +
+                m_finish_trace.push_back("record-list cleanup for " + title_id_hex +
                                          " failed: " + cleanup_error);
             }
         }
-        /* One record, under the application id: this package's own key and the storage it lives
-           on.  The service adds it to that application's list -- the reference implementation
-           pushes exactly one record for exactly this reason.  Re-pushing the list's other entries
-           was our own invention, and re-pushing a record one did not understand is a way to
+        /* One record per meta, under the application id: this meta's own key and the storage it
+           lives on.  The service adds it to that application's list -- the reference implementation
+           pushes exactly one record per meta for exactly this reason.  Re-pushing the list's other
+           entries was our own invention, and re-pushing a record one did not understand is a way to
            damage it. */
         ContentStorageRecord mine{};
-        mine.key = key;
+        mine.key = meta_key;
         mine.storage_id = static_cast<std::uint8_t>(ToNcmStorage(m_target));
         const std::vector<ContentStorageRecord> records{mine};
         {
-            char note[96];
-            std::snprintf(note, sizeof(note), "record app=%016llx key=%016llx storage=%u",
-                          static_cast<unsigned long long>(record_id),
-                          static_cast<unsigned long long>(key.id),
+            char note[128];
+            std::snprintf(note, sizeof(note), "record app=%016llx key=%016llx version=0x%x storage=%u",
+                          static_cast<unsigned long long>(meta_record_id),
+                          static_cast<unsigned long long>(meta_key.id), version,
                           static_cast<unsigned>(mine.storage_id));
             m_finish_trace.push_back(note);
         }
-        if (!m_services.PushApplicationRecord(record_id, records, error)) {
+        if (!m_services.PushApplicationRecord(meta_record_id, records, error)) {
             return false;
         }
-        /* Read the application's list back: "one record was accepted" and "the application has the
-           records it needs" are different statements, and the home screen shows the difference. */
+
+        /* What the console can read back out of the record we just wrote: the same question the home
+           menu asks when it looks for a title's control data.  A record whose content list cannot be
+           read is a title that cannot be drawn, so the answer is traced here instead of inferred
+           from a blank tile later. */
+        {
+            NcmContentInfo infos[64]{};
+            s32 count = 0;
+            const Result list_rc =
+                ncmContentMetaDatabaseListContentInfo(&m_meta, &count, infos, 64, &meta_key, 0);
+            char note[128];
+            std::snprintf(note, sizeof(note), "record read-back rc=0x%x contents=%d",
+                          static_cast<unsigned>(list_rc), static_cast<int>(count));
+            m_finish_trace.push_back(note);
+        }
+        return true;
+    };
+
+    if (!file_meta(inputs.title_id, inputs.version, inputs.meta_type, inputs.meta_blob,
+                   inputs.record_title_id)) {
+        return false;
+    }
+    for (const FinishInputs::ExtraMeta &extra : inputs.extra_metas) {
+        if (extra.title_id.empty() || extra.meta_blob.empty()) {
+            continue;
+        }
+        if (!file_meta(extra.title_id, extra.version, extra.meta_type, extra.meta_blob,
+                       extra.record_title_id)) {
+            return false;
+        }
+    }
+
+    /* The application's record list, read back once: "one record was accepted" and "the
+       application has the records it needs" are different statements, and the home screen shows
+       the difference. */
+    {
         std::vector<ContentStorageRecord> after;
         std::string after_error;
         if (m_services.ListApplicationRecords(record_id, &after, &after_error)) {
-            char note[96];
+            char note[128];
             std::snprintf(note, sizeof(note), "record list app=%016llx entries=%zu",
                           static_cast<unsigned long long>(record_id), after.size());
             m_finish_trace.push_back(note);
@@ -1027,23 +1070,9 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
         }
     }
 
-    /* What the console can read back out of the record we just wrote: the same question the home
-       menu asks when it looks for a title's control data.  A record whose content list cannot be
-       read is a title that cannot be drawn, so the answer is traced here instead of inferred from
-       a blank tile later. */
-    {
-        NcmContentInfo infos[64]{};
-        s32 count = 0;
-        const Result list_rc =
-            ncmContentMetaDatabaseListContentInfo(&m_meta, &count, infos, 64, &key, 0);
-        char note[128];
-        std::snprintf(note, sizeof(note), "record read-back rc=0x%x contents=%d",
-                      static_cast<unsigned>(list_rc), static_cast<int>(count));
-        m_finish_trace.push_back(note);
-    }
-
-    /* 4. The launch version: without it the system refuses to start a title whose record is
-          newer than what it was told to launch (HOS 6.0.0+). */
+    /* 4. The launch version: without it the system refuses to start a title whose record is newer
+          than what it was told to launch (HOS 6.0.0+).  It is the application's, so it is raised
+          once for the whole run -- to the newest version this run puts in place. */
     if (!m_services.PushLaunchVersion(
             record_id, inputs.launch_version != 0 ? inputs.launch_version : inputs.version, error)) {
         return false;
@@ -1056,20 +1085,22 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
                                                                      : inputs.version));
         m_finish_trace.push_back(note);
     }
-    /* The system serves a cached NACP per title: without this the version and name it reports
-       stay at whatever they were before the install (measured: contents written, record pushed,
-       home screen still said 1.0.0).  A patch's control data belongs to the base title, so both
-       ids are refreshed (and a base game's own id when the package is a base game); a failure
-       here is reported, never swallowed. */
-    if (!m_services.InvalidateApplicationControlCache(key.id, error)) {
+
+    /* The system serves a cached NACP per title: without this the version and name it reports stay
+       at whatever they were before the install (measured: contents written, record pushed, home
+       screen still said 1.0.0).  A patch's control data belongs to the base title, so both ids are
+       refreshed (and a base game's own id when the package is a base game); a failure here is
+       reported, never swallowed. */
+    const std::uint64_t key_id = std::strtoull(inputs.title_id.c_str(), nullptr, 16);
+    if (!m_services.InvalidateApplicationControlCache(key_id, error)) {
         return false;
     }
-    if (record_id != key.id && !m_services.InvalidateApplicationControlCache(record_id, error)) {
+    if (record_id != key_id && !m_services.InvalidateApplicationControlCache(record_id, error)) {
         return false;
     }
     if (!inputs.base_title_id.empty()) {
         const std::uint64_t base = std::strtoull(inputs.base_title_id.c_str(), nullptr, 16);
-        if (base != 0 && base != key.id && base != record_id &&
+        if (base != 0 && base != key_id && base != record_id &&
             !m_services.InvalidateApplicationControlCache(base, error)) {
             return false;
         }

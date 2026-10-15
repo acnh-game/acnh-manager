@@ -79,6 +79,15 @@ struct InstallStatus {
        title, and the screens then leave the number out. */
     std::string installed_version_text;
     bool needs_keys{false};   /* the run may need /switch/prod.keys */
+    /* What else the container brings, in the app's language ("更新 ×1 · 追加内容 ×2"): a
+       cartridge dump that was made from a game plus its update and DLCs carries one meta per
+       piece, and the confirm page says so instead of quietly installing only the base game. */
+    std::string extra_summary;
+    /* The version the console ends up on: the newest of the metas that carry a game version (the
+       update's, when the container has one).  The agent's "does it work with this version?" is
+       answered with this one, not with the base game's version. */
+    std::uint32_t effective_version{0};
+    std::string effective_title_id;
 };
 
 class GameInstall {
@@ -121,13 +130,23 @@ public:
        decode lives in the UI layer, because the installer has no business knowing about pixels. */
     const std::vector<std::uint8_t> &IconJpeg() const { return m_icon; }
     std::string TaskJson() const { return DumpTask(m_task); }
-    /* The meta content's placeholder: it is filled before the CNMT can be read, and the transfer
-       phase must not fetch it again. */
-    Placeholder m_meta_placeholder;
+    /* Every meta the container carries, the base game's first.  A cartridge dump that was made
+       from a game plus its update and DLCs has one per piece; the reference implementation
+       installs all of them in one run, each with its own meta record -- which is also how the
+       console attaches an update and its add-ons to the same title. */
+    struct MetaUnit {
+        const ContainerEntry *entry{nullptr};
+        Placeholder placeholder;        /* the meta content, already read into a placeholder */
+        TaskContent content;            /* the meta content as a task entry (for the register step) */
+        std::uint64_t title_id{0};      /* the mount's key: the meta NCA's own header field */
+        std::vector<std::uint8_t> blob; /* the CNMT payload */
+        CnmtInfo cnmt;
+    };
+    std::vector<MetaUnit> m_metas;
+    /* The meta the screens describe: the base game when the container has one (its control data is
+       what carries the title's name and version), otherwise the first meta. */
+    MetaUnit *m_primary{nullptr};
     Placeholder m_control_placeholder;
-    /* The package's own meta content, kept so the register step can hand it to the installer: the
-       CNMT does not list itself, so the task never carries it (see ContentInstaller::Register). */
-    TaskContent m_meta_content;
     /* Contents that were installed only so we could read out of them (meta for the CNMT, control
        for the NACP): filled before the transfer phase, and cleaned up if the run fails. */
     std::vector<Placeholder> m_read_placeholders;

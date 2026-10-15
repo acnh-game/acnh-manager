@@ -839,3 +839,34 @@ Patch / Application`;
 必须像参考实现那样做 `convert_to_standard_crypto`(用卡上的 `prod.keys` 转成标准 crypto)才能启动;
 1.1.0 还没有实现这一步 —— 它在设计第 5 节的选项表里,标注是"只在内容确实需要时触发"。判别实验留给用户:
 用 DBI/sphaira 装同一个 XCI,若那边也起不来,则这条假设不成立,得再查(例如补丁/签名层面)。
+
+### 追查到根因:记录里那份 meta 不是"这次安装的那一份"(2026-10-15)
+
+用户复验:sphaira 与 DBI 装同一个 XCI 都能正常启动,所以不是卡带加密的事,是我们代码的错。日志里
+我们自己的自检先说了真话:
+
+```
+install: usable? storage=5 rc=0x0 contents=5 sized=1 control=1 present=0
+install: usable? missing 1 of 5: 6dad0a38d832e2ce4c50784151891653
+install: meta candidate 6dad0a38…cnmt.nca type=dlc
+install: meta candidate 92974ca9…cnmt.nca type=base
+```
+
+`6dad0a38…` 是整合包里**某个 DLC 的 meta**,而我们的安装从没装过它。原因是两处不一致:纯解析层
+(`ReadPackage`)把 `meta_content_name` 记成**容器里第一个 `.cnmt.nca`**(整合包里通常是 DLC 的),
+而设备侧虽然按类型选对了本体,却**没有把这个名字写回去** —— 写进 ncm 的 meta 记录第一项于是指向
+一份不存在的内容,控制台据此把整条记录判成不可用,标题拒绝启动。单 meta 的包(NSP/NSZ)走不到这条
+分支,所以此前一直全绿。
+
+修法:选完本体后把 `meta_content_name` 改成选中的那份(并把这个选择写进日志:`install: primary
+meta …`、`install: installing meta …`)。
+
+### 同时按参考实现补上"容器里有几份 meta 就装几份"(2026-10-15)
+
+sphaira 的 `InstallInternal` 是遍历容器里每个 CNMT 逐个安装(本体、更新、每个 DLC,各自一份记录);
+我们此前只装本体那份,于是整合包里的"1U+2D"从头到尾不会落地,控制台也永远不知道追加内容存在。
+现在:读全 → 本体排第一 → 内容并成一张任务表(共享内容只列一次)→ 收尾对**每份 meta**各走一遍
+"删旧版本 → 写 meta 记录 → 推记录",运行级的 ticket / launch version / 控制数据缓存刷新仍只做一次;
+界面确认页的「类型」会把搭车的写出来(「本体 + 更新 ×1 · 追加内容 ×2」),名称/版本取**生效版本**
+那份 meta 的控制数据,agent 的支持判断也改用它(真机复验由用户执行:卡上 `/.NSP/luigi.xci` 整份安装,
+期望装完控制台显示 1.4.0 且能启动)。

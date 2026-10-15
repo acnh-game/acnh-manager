@@ -64,7 +64,7 @@ public:
        a placeholder and the game would not start).  The reference implementation registers it with
        the rest (`RegisterNcasAndPushRecord` registers the CNMT NCA first).  Pass nullptr when the
        read-out's fallback already registered it to mount it, or for an add-on, which has none. */
-    bool Register(const InstallTask &task, const TaskContent *meta, std::string *error);
+    bool Register(const InstallTask &task, const std::vector<TaskContent> &metas, std::string *error);
 
     /* True when an application whose program id belongs to `title_id_hex` is running right now
        (suspended in the background counts: the finish step deletes the older version's contents,
@@ -174,6 +174,19 @@ public:
            or add-on installed on top of a newer update must not undo it; zero means
            `version`. */
         std::uint32_t launch_version{0};
+        /* The container's other metas, filed in this same run: a cartridge dump made from a game
+           plus its update and DLCs carries one CNMT per piece, and the reference implementation
+           installs every one of them, each with its own meta record.  Filing only the base game
+           leaves the update and the add-ons unannounced -- the console then serves the base
+           game's control data, and the card's own "1U+2D" never arrives. */
+        struct ExtraMeta {
+            std::string title_id;                /* 16 hex digits */
+            std::uint32_t version{0};
+            std::uint8_t meta_type{0};
+            std::vector<std::uint8_t> meta_blob; /* the CNMT payload, byte for byte */
+            std::uint64_t record_title_id{0};
+        };
+        std::vector<ExtraMeta> extra_metas;
         std::vector<std::uint8_t> ticket;
         std::vector<std::uint8_t> certificate;
     };

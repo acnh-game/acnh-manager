@@ -33,10 +33,14 @@ struct PackageInfo {
 bool ReadPackage(ContainerReader &reader, std::string_view name, std::uint64_t container_size,
                  PackageInfo *out, std::string *error);
 
-/* Fills `task->contents` from the CNMT: one entry per content, in CNMT order, with the byte range
-   it occupies inside the container.  A content the package does not actually carry is an error
-   here rather than a surprise while fetching. */
-bool FillTaskContents(const PackageInfo &package, InstallTask *task, std::string *error);
+/* Fills `task->contents` with the union of every meta's contents: one entry per content, in meta
+   order, with the byte range it occupies inside the container.  A container can carry several
+   metas (a cartridge dump made from a game plus its update and DLCs has one per piece, and the
+   reference implementation installs all of them in one run), and a content two of them share --
+   an update reusing the base game's data -- appears once.  A content a meta lists but the package
+   does not carry is an error here rather than a surprise while fetching. */
+bool FillTaskContents(const std::vector<CnmtInfo> &metas, const ContainerInfo &container,
+                      InstallTask *task, std::string *error);
 
 /* The bytes the console stores as this package's content-meta record (and reads back when it wants
    a title's contents, its control data, its icon and its version).
@@ -49,8 +53,9 @@ bool FillTaskContents(const PackageInfo &package, InstallTask *task, std::string
    first and is not in the CNMT's own table, so it is added here; without it the console cannot
    find a title's control data at all (measured: the home menu drew an empty tile and
    `nsGetApplicationControlData` answered 0x8C10 while the record itself existed). */
-bool BuildMetaRecordBlob(const PackageInfo &package, std::vector<std::uint8_t> *out,
-                         std::string *error);
+bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
+                         const std::string &meta_content_name, const ContainerInfo &container,
+                         std::vector<std::uint8_t> *out, std::string *error);
 
 /* The two skips the design promises, decided from numbers alone (design section 9, step 4).
    `has_this_version` means "this exact version is installed *and* the console's application record

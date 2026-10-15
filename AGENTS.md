@@ -218,6 +218,7 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 | `README.md` | 项目概览与当前支持范围 |
 | `docs/architecture.md` | 架构、版本识别与门控、SD 布局、环境检查(改行为前必读) |
 | `docs/game_installer_design.md` | 通用游戏安装器(1.1.0)设计:支持 NSP/NSZ/XCI/XCZ(不做 MSP)、三种来源(SD 文件 / HTTP 下载 / HTTP 上传)、安装选项与校验策略、HTTP 服务端实现(picohttpparser + 自写薄层,含端口策略)、界面文案、真机测试矩阵(动这项功能前必读) |
+| `docs/home_menu_and_startup_check_design.md` | 启动自检页(程序位置自愈)与「安装到桌面主菜单」(1.2.0 计划,尚未实施) |
 | `docs/tools-guide.md` | 本仓库工具的用法与登记 |
 | `docs/release-process.md` | 发布流程:导入门控、商店打包、上架与 Gitee 托管地址(发布前必读) |
 | `docs/store-listing.md` | 商店条目元数据与素材要求(改对外文案前) |

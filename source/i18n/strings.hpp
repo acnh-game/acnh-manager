@@ -222,6 +222,7 @@ enum class StringId {
     FooterPagesHint,
     ResultAgentFollowUpInstalled,
     ResultAgentFollowUpFailed,
+    MetaCount,
 };
 
 const char *Text(StringId id, Language language);
