@@ -302,7 +302,10 @@ bool ContentInstaller::InstalledState(const std::string &title_id_hex, std::uint
         if (R_SUCCEEDED(has_rc) && has) {
             *same_version_installed = true;
         }
-        /* "How new is what is here?"  Keyed by the same id, so a patch answers about the patch. */
+        /* "How new is what is here?"  Asked by the package's own title id, which every install
+           kind has to itself: a patch is filed under the patch's id (base + 0x800) and an add-on
+           under its own, so the answer is about this kind of record and not about the game.  The
+           trace carries the type the service reported, so a surprise here is visible in the log. */
         NcmContentMetaKey latest{};
         const Result latest_rc = ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &latest, id);
         {
@@ -899,6 +902,17 @@ bool ContentInstaller::RegisterContent(const TaskContent &content, std::string *
     }
     const Result rc = ncmContentStorageRegister(&m_storage, &id, &placeholder);
     if (R_FAILED(rc)) {
+        /* The content can already be registered: an earlier run of the same package left these
+           bytes in the storage, and content storage is content-addressed, so there is nothing to
+           register.  The reference implementation deletes the existing content and registers
+           again; tolerating it comes to the same place without deleting bytes the console may
+           already be using.  (This path is the fallback that mounts by *content* path when the
+           placeholder path is refused, which is exactly the situation a second install of the same
+           package lands in.) */
+        bool present = false;
+        if (R_SUCCEEDED(ncmContentStorageHas(&m_storage, &present, &id)) && present) {
+            return true;
+        }
         *error = Describe("registering the content", rc);
         return false;
     }

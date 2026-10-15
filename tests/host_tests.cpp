@@ -1735,6 +1735,7 @@ void TestFormatSize() {
 void TestMetaTypeCarriesGameVersion() {
     using acnh_manager::install::MetaType;
     using acnh_manager::install::MetaTypeCarriesGameVersion;
+    using acnh_manager::install::MetaTypeIsInstallable;
 
     CHECK(MetaTypeCarriesGameVersion(MetaType::Application));
     CHECK(MetaTypeCarriesGameVersion(MetaType::Patch));
@@ -1742,6 +1743,22 @@ void TestMetaTypeCarriesGameVersion() {
     CHECK(!MetaTypeCarriesGameVersion(MetaType::DataPatch));
     CHECK(!MetaTypeCarriesGameVersion(MetaType::Delta));
     CHECK(!MetaTypeCarriesGameVersion(MetaType::Unknown));
+
+    /* Which kinds belong to a *user* installer: every NcmContentMetaType with bit 0x80 set.  The
+       five below it are system data (a firmware package, boot images), which the console's own
+       updater owns -- the reference implementation refuses exactly these, and without the rule a
+       firmware NSP dropped into the file list would be installed like a game. */
+    CHECK(MetaTypeIsInstallable(MetaType::Application));
+    CHECK(MetaTypeIsInstallable(MetaType::Patch));
+    CHECK(MetaTypeIsInstallable(MetaType::AddOnContent));
+    CHECK(MetaTypeIsInstallable(MetaType::Delta));
+    CHECK(MetaTypeIsInstallable(MetaType::DataPatch));
+    CHECK(!MetaTypeIsInstallable(MetaType::SystemProgram));
+    CHECK(!MetaTypeIsInstallable(MetaType::SystemData));
+    CHECK(!MetaTypeIsInstallable(MetaType::SystemUpdate));
+    CHECK(!MetaTypeIsInstallable(MetaType::BootImagePackage));
+    CHECK(!MetaTypeIsInstallable(MetaType::BootImagePackageSafe));
+    CHECK(!MetaTypeIsInstallable(MetaType::Unknown));
 }
 
 /* Home-screen state: the eight states and their priority.  Getting the order wrong would

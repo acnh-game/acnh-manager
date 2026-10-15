@@ -61,6 +61,15 @@ const char *MetaTypeLabel(MetaType type);
    installing an add-on could warn that the agent does not support "this version". */
 bool MetaTypeCarriesGameVersion(MetaType type);
 
+/* True for the kinds a user installs: application, patch, add-on, delta and data patch -- the
+   values the console defines with bit 0x80 set.  Everything else is either system data (a system
+   program, system data, a firmware update, boot images), which belongs to the console's own
+   updater and not to a game installer (the reference implementation refuses exactly those,
+   `!(cnmt.key.type & 0x80)`), or a type byte nobody defines, which this app refuses rather than
+   guess at.  Without the rule a firmware package dropped into the file list would be installed as
+   if it were a game. */
+bool MetaTypeIsInstallable(MetaType type);
+
 struct CnmtContent {
     std::string content_id; /* 32 hex digits, lower case */
     ContentType type{ContentType::Unknown};

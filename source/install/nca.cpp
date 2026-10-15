@@ -62,6 +62,22 @@ bool MetaTypeCarriesGameVersion(MetaType type) {
     return type == MetaType::Application || type == MetaType::Patch;
 }
 
+bool MetaTypeIsInstallable(MetaType type) {
+    /* Spelled out instead of testing bit 0x80: `Unknown` is this app's stand-in for a type byte
+       the console does not define, and a bit test would let 0xFF (and any future value above 0x80)
+       through as if it were a user title.  Every value the console defines is listed here. */
+    switch (type) {
+        case MetaType::Application:
+        case MetaType::Patch:
+        case MetaType::AddOnContent:
+        case MetaType::Delta:
+        case MetaType::DataPatch:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Title ids are stored little-endian in the headers but written big-endian everywhere a person
    reads them (file names, tickets, the log).  Content ids are the other way round: they are
    already in the order the names use.  Getting this backwards made the console answer "no such

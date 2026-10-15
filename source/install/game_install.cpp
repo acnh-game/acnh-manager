@@ -212,6 +212,20 @@ bool GameInstall::Prepare(std::string *error) {
             m_status.error = *error;
             return false;
         }
+        /* Only the kinds a *user* can install are kept: everything below 0x80 is system data
+           (system program, system data, a firmware update, boot images), which is not something a
+           game installer has any business writing into a player's storage -- and the reference
+           implementation skips exactly these (`!(cnmt.key.type & 0x80)` in ShouldSkip).  A package
+           that carries nothing else is refused below instead of half-installed. */
+        if (!MetaTypeIsInstallable(unit.cnmt.type)) {
+            /* Either system data or a type byte this app does not know; both are refused with the
+               type spelled out, so a misparse is visible as "unknown" rather than silent. */
+            Note("install: %s is not a user-installable meta (type=%s), skipped",
+                 candidate->name.c_str(), MetaTypeLabel(unit.cnmt.type));
+            std::string ignored;
+            m_installer.DropPlaceholders({unit.placeholder}, &ignored);
+            continue;
+        }
         unit.content.name = candidate->name;
         unit.content.offset = candidate->offset;
         unit.content.size = candidate->size;
@@ -239,6 +253,16 @@ bool GameInstall::Prepare(std::string *error) {
                      [&rank](const MetaUnit &lhs, const MetaUnit &rhs) {
                          return rank(lhs.cnmt.type) < rank(rhs.cnmt.type);
                      });
+    if (m_metas.empty()) {
+        /* Every meta this container carries is system data (a firmware package, or a container
+           built out of system titles).  Saying so is the difference between "the app refused this
+           file" and a player watching a few GB of system data land in their storage. */
+        *error = "this package carries nothing this app installs: its metas are system contents "
+                 "(a firmware package) or types it does not recognise";
+        m_status.stage = InstallStage::Failed;
+        m_status.error = *error;
+        return false;
+    }
     m_primary = &m_metas.front();
     if (m_primary->cnmt.type != MetaType::Application) {
         Note("install: none of the %zu metas is an application; the screens describe %s",
@@ -846,19 +870,24 @@ bool GameInstall::ReadNczInfo(const ContainerEntry &entry, NczInfo *out, std::st
     if (!ParseNczTables(tables.data(), tables.size(), header, entry.packed_size, out, error)) {
         return false;
     }
-    /* The NCA's own header is verbatim at the front of the `.ncz`, and it also states the NCA's
-       size.  The sections' end is the fallback (and what a real package's tables agree with), but
-       the header is authoritative: a package whose last section stops short of the file would
-       otherwise get a short placeholder, which the console answers with "cannot start the
-       software" -- the same class of failure as the record naming a content nobody installed. */
+    /* The NCA's own header is verbatim at the front of the `.ncz`, and it states the NCA's size.
+       That number is what the console stores as the content's size, so it is what the placeholder
+       is made of -- the reference implementation does exactly this (`write_size = header.size`,
+       and its read loop stops there).  The sections' end is only the fallback for a file whose
+       header cannot be read: taking the *larger* of the two looks harmless, but a section table
+       that reaches past the header's size would leave a placeholder the payload never fills, and
+       the install would then fail on its own last byte with "ended before the whole NCA was
+       decoded".  Both real packages checked (an NSZ and an XCZ) have the two agreeing. */
     {
         NcaHeaderInfo nca_header;
         std::string header_error;
         if (ReadContentHeader(entry, &nca_header, &header_error)) {
-            if (nca_header.size > out->nca_size) {
-                Note("install: %s decodes to %llu bytes (sections end at %llu)",
+            if (nca_header.size >= kNczHeaderSize && nca_header.size != out->nca_size) {
+                Note("install: %s declares %llu bytes as an NCA (its sections end at %llu)",
                      entry.name.c_str(), static_cast<unsigned long long>(nca_header.size),
                      static_cast<unsigned long long>(out->nca_size));
+            }
+            if (nca_header.size >= kNczHeaderSize) {
                 out->nca_size = nca_header.size;
             }
         } else {

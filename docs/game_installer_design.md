@@ -934,3 +934,34 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
     包就是这么装的,实机可运行)。带**个人票**(本机专属票据,自制 dump 常见)的包仍会装完、但控制台
     拿不到标题密钥,启动会被拒;这类包需要 sphaira 那套 `PatchTicket` 才能用,日志里的
     `tickets N of M imported` 与 "a content needs title key …" 两行就是判别依据。
+
+37. **与参考实现逐步骤的对照清单(2026-10-15 第二轮,按 `InstallInternal` / `InstallNcaInternal` /
+    `RegisterNcasAndPushRecord` / `RemoveInstalledNcas` 的顺序)**:下表是"这条我们做了没有"的答案,
+    也是以后再加格式或选项时该对着看的东西。同一轮的两处补漏在表后。
+
+    | 参考实现的步骤 | 我们 |
+    |---|---|
+    | 容器解析:PFS0(NSP/NSZ)、HFS0 + `secure` 分区(XCI/XCZ);条目边界与名字校验(文件数 / 字符串表上限、偏移不越界、名字 NUL 结尾) | 同(另加"没有 `.nca` 的 PFS0 一律拒绝"和 `.msp` 拒绝) |
+    | 收集容器里**所有** `.cnmt.nca` / `.cnmt.ncz`,每个 meta 各走一遍 | 同(本体排第一,见第 33 条) |
+    | 系统类 meta(`type & 0x80 == 0`:系统程序 / 系统数据 / 固件更新 / 启动镜像)**整体跳过** | 同(本轮补:读到 CNMT 后按类型过滤;整包只有系统内容时直接拒绝并说明原因,而不是把几 GB 固件写进玩家的存储) |
+    | 每个 meta:meta 内容装进占位 → 挂载 → 读出 CNMT(不解密任何东西,靠系统自己的文件层) | 同 |
+    | 票:按 `<rights id>.tik` + `.cert` 成对收集、逐个 `es` 导入;缺证书拒绝 | 同(第 36 条) |
+    | "内容有 rights id 却没有票"直接拒绝 | **只写日志**("a content needs title key …"),继续安装:卡带 dump 无票也能装,控制台往往已持有票 |
+    | 按 CNMT 装内容;跳过 delta fragment;多个 meta 共享的内容只装一次 | 同(第 33 条) |
+    | 跳过判定:同 key 已存在则跳过;patch 比控制台已有的旧则跳过(`allow_downgrade` 关) | 同,且**只有 patch** 受"更高版本"约束(第 36 条) |
+    | 每个内容:建占位(大小 = NCA 头声明的 size)→ 写入 → `ncmContentStorageRegister` | 同;寄存器已存在时容忍(参考实现是先删再注册,结果等价) |
+    | 写盘时改写 gamecard 的 distribution 位(默认开,`ignore_distribution_bit` 关) | 同,**meta 内容也改**(第 36 条) |
+    | NCA 哈希校验 / RSA fixed-key 校验,默认**跳过** | 同(默认跳过;两项都不做) |
+    | 收尾,每个 meta 一次:导入票 → 删同 title 旧版本(保留本次复用的内容)→ 写 meta 记录 → 推 application record → `avmPushLaunchVersion` | 同 |
+    | 记录 blob:8 字节 ContentMetaHeader + 扩展头 + 各 content info(meta 自己排第一)+ content meta infos;`content_count = 内容数 + 1` | 同(另加"所需系统版本清零",第 36 条) |
+    | `convert_to_common_ticket` / `convert_to_standard_crypto` / `lower_master_key` | **不做**(需要 `prod.keys`;三者的默认值里只有公共票转换是开的,见第 36 条) |
+    | 流式安装(它们的 FTP/MTP 路径)关掉"已安装就跳过" | 我们**保留**跳过:重复安装同一个包应当秒完成并明确告知,这是产品要的行为 |
+    | 计数 / 版本查询只按目标存储做跳过 | 我们**两种存储都查**(SD + 机身),并按存储分别记录版本,便于解释"记录写到了系统不读的那一边" |
+    | (参考实现没有) | 我们额外做:内容缓存失效(ns 404)、记录可用性自检与修复、结果页与日志的逐步 trace |
+
+    同轮补的两处:
+    - **压缩内容的占位大小改为"以 NCA 头声明的 size 为准"**(分节末端只作兜底):此前取两者较大值,
+      若某个包的分节表越过头部声明的大小,占位会永远填不满,安装会在最后一个字节上报"流提前结束";
+      已核的两个真实压缩包(NSZ / XCZ)两者一致,所以这是消除分歧而非行为变更;
+    - **`RegisterContent`(按占位路径挂载被拒时的回退)容忍"内容已注册"**:与 `Register` 的判据统一,
+      否则同一包第二次安装会在这条回退路径上以 `0x805` 失败(参考实现靠"先删再注册"绕开同一问题)。
