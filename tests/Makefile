@@ -17,6 +17,7 @@ SOURCES := host_tests.cpp \
            ../source/install/nca.cpp \
            ../source/install/package.cpp \
            ../source/install/ncz.cpp \
+           ../source/install/ncz_decode.cpp \
            ../source/install/icon_file.cpp \
            ../source/install/title_name.cpp \
            ../source/util/qr_code.cpp \
@@ -27,6 +28,10 @@ SOURCES := host_tests.cpp \
 # binary, so the tests could "pass" against code that no longer exists.
 HEADERS := $(shell find ../source -name '*.hpp')
 BINARY := host-tests
+# The decoder of a compressed content (NSZ/XCZ) is the installer's own code and is tested here
+# too, against real zstd streams built by the test itself -- so the tests need the library, not
+# just the command line tool.  brew's /usr/local is in the compiler's default search path.
+LIBS := -lzstd
 # Vendored C (qrcodegen) is compiled as C, not as C++ -- the same way the NRO build compiles it.
 # It keeps the upstream warning level (no -Werror): we do not edit third-party sources, so a
 # warning here is upstream's to fix, not a reason to block our build.
@@ -46,7 +51,7 @@ check-i18n:
 	@python3 ../tools/check-i18n.py
 
 $(BINARY): $(SOURCES) $(HEADERS) $(VENDOR_OBJ)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SOURCES) $(VENDOR_OBJ) -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SOURCES) $(VENDOR_OBJ) -o $@ $(LIBS)
 
 $(VENDOR_OBJ): ../source/third_party/qrcodegen/qrcodegen.c
 	$(CC) $(CFLAGS) -c $< -o $@

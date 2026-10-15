@@ -1,7 +1,5 @@
 #include "install/content_install.hpp"
 
-#include <zstd.h>
-
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +8,7 @@
 
 #include "install/nca.hpp"
 #include "install/nca_crypto.hpp"
+#include "install/ncz_decode.hpp"
 #include "install/ncz.hpp"
 #include "util/fs_path.hpp"
 
@@ -699,10 +698,12 @@ bool ContentInstaller::InstallContentForRead(ContainerReader &reader, const Task
         }
     } else {
         /* A compressed entry (NSZ/XCZ): the placeholder holds the NCA, so the stream is decoded on
-           the way in.  The NCA header sits verbatim at the front of the `.ncz`, and the payload is
-           one zstd stream that decodes to the rest -- the same shape the install path reads.  The
-           sections that were stored decrypted are encrypted again with the key and counter the
-           file carries, so the console mounts exactly the bytes it would have written itself. */
+           the way in.  The NCA header sits verbatim at the front of the `.ncz`, the payload decodes
+           to the rest, and the blocks that were stored raw are copied -- the same decoder the
+           transfer path runs (install/ncz_decode.hpp), so a compressed meta or control content
+           cannot disagree with a compressed program.  The sections that were stored decrypted are
+           encrypted again with the key and counter the file carries, so the console mounts exactly
+           the bytes it would have written itself. */
         const auto write_at = [&](const std::uint8_t *data, std::size_t size) -> bool {
             const Result write_rc = ncmContentStorageWritePlaceHolder(
                 &m_storage, &placeholder, written, data, size);
@@ -725,84 +726,29 @@ bool ContentInstaller::InstallContentForRead(ContainerReader &reader, const Task
             ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
             return false;
         }
-        ZSTD_DStream *stream = ZSTD_createDStream();
-        if (stream == nullptr || ZSTD_isError(ZSTD_initDStream(stream))) {
-            ZSTD_freeDStream(stream);
-            *error = "cannot start the decoder for the compressed content";
-            ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
-            return false;
-        }
-        std::vector<std::uint8_t> input;
-        std::size_t input_pos = 0;
-        std::uint64_t payload_read = 0;
-        bool exhausted = false;
+        NczDecoder decoder(*ncz, reader, content.offset);
         bool ok = true;
-        std::vector<std::uint8_t> plain_out(buffer.size());
         while (ok && written < content.size) {
-            if (input_pos >= input.size() && !exhausted) {
-                const std::uint64_t left = ncz->payload_size - payload_read;
-                if (left == 0) {
-                    exhausted = true;
-                    continue;
-                }
-                const std::size_t chunk = static_cast<std::size_t>(
-                    std::min<std::uint64_t>(buffer.size(), left));
-                input.resize(chunk);
-                input_pos = 0;
-                if (!reader.Read(content.offset + ncz->payload_offset + payload_read, chunk,
-                                 input.data())) {
-                    *error = "the source stopped early while reading " + content.name;
-                    ok = false;
-                    break;
-                }
-                payload_read += chunk;
-            }
-            ZSTD_inBuffer in{input.data() + input_pos, input.size() - input_pos, 0};
-            ZSTD_outBuffer decoded{plain_out.data(), plain_out.size(), 0};
-            const std::size_t res = ZSTD_decompressStream(stream, &decoded, &in);
-            if (ZSTD_isError(res)) {
-                *error = "the compressed content could not be decoded";
+            const std::uint64_t want = std::min<std::uint64_t>(buffer.size(), content.size - written);
+            if (!decoder.DecodeUntil(written + want, error)) {
                 ok = false;
                 break;
             }
-            input_pos += in.pos;
-            if (decoded.pos > 0) {
-                /* The bytes go in where they belong in the *content*: the payload decodes to the
-                   content from kNczHeaderSize on. */
-                const std::uint64_t base = written;
-                for (const NczSection &section : ncz->sections) {
-                    if (!section.Encrypted()) {
-                        continue;
-                    }
-                    const std::uint64_t lo = std::max(section.offset, base);
-                    const std::uint64_t hi = std::min(section.End(), base + decoded.pos);
-                    if (lo >= hi) {
-                        continue;
-                    }
-                    const std::uint64_t aligned = lo & ~std::uint64_t{0xF};
-                    const std::array<std::uint8_t, 16> counter =
-                        NczSectionCounter(section, aligned);
-                    AesCtrRange(section.key.data(), counter.data(), lo,
-                                plain_out.data() + (lo - base),
-                                static_cast<std::size_t>(hi - lo));
-                }
-                if (!write_at(plain_out.data(), decoded.pos)) {
-                    ok = false;
-                    break;
-                }
-            } else if (exhausted && input_pos >= input.size()) {
-                *error = "the compressed content ended before the whole NCA was decoded";
+            std::size_t took = 0;
+            if (!decoder.Take(written, static_cast<std::size_t>(want), buffer.data(), &took,
+                              error) ||
+                took == 0) {
+                ok = false;
+                break;
+            }
+            /* The ranges the file stored decrypted go into the placeholder encrypted again. */
+            ReencryptNczRange(decoder.Info(), written, buffer.data(), took);
+            if (!write_at(buffer.data(), took)) {
                 ok = false;
                 break;
             }
         }
-        ZSTD_freeDStream(stream);
         if (!ok) {
-            ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
-            return false;
-        }
-        if (written != content.size) {
-            *error = "the compressed content did not produce the whole NCA";
             ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
             return false;
         }

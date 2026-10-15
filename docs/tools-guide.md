@@ -25,6 +25,8 @@
 | `tools/make-store-package.py` | 生成官方商店 `pkgbuild.json`、图标/横幅与本地测试仓库(`repo.json` + zip)。产物按**上游 spinarak 的格式**写(manifest 行 `U: <相对路径>`、`info.json` 九字段、`repo.json` 含 md5/sha256/binary/screens 等),可用上游构建器逐项比对(流程见 `docs/store-listing.md`) | 打包上架材料或验证商店流程时 |
 | `tools/device-tests.py` | 真机回归测试两组(判定页面用**页面自身特征**:首页那两个按钮的青色徽章、说明页左下的二维码块、确认/结果页的大按钮,因此页眉入口改名或换语言都不会误判)。**故障注入**:`t1a/t1b`(可清理 / 清不掉的 `.acnh-tmp` 残留)、`t2`(记录写不进去)、`restore`(清注入并重装),`all` 连跑;断言"要么全落位、要么卡片逐字节不变",用 `log.txt` 的 `collect:`/`cleanup:` 行 + 卡上逐文件哈希。**启停循环**:`cycles [--cycles N]` 连续"相册 → 应用 → 退出",每轮都要求日志有首帧与干净退出的两行(守相册黑屏那个回归)。截图落在 `build/scratch/device-tests/` | 改过 `source/install/engine.cpp` 的写盘/回滚逻辑、或改动退出路径(`__nx_applet_exit_mode` / 显示层)之后 |
 | `tools/ui-measure.py` | 像素尺子:`bbox`(窗口内墨迹外框与左右内缩)、`lines`(按文本行分段,每行的内缩/高度/宽度)、`runs`(某一行的墨迹段,看左边缘与居中)、`color`(某颜色的外框/中心/像素数)。背景可用 `--bg page\|card\|header\|border` 指名(与 `source/ui/app.cpp` 的调色板一致) | 改过任何排版(间距、居中、内缩)之后;把"看着有点歪"变成数字 |
+| `tools/ncz-probe.sh` | 在开发机上用**应用自己的解码代码**跑压缩包(NSZ/XCZ):链 `container.* / ncz.* / ncz_decode.* / util/sha256.*`(主机 C++,不需要 Docker 与真机;zstd 用 brew 的),列出容器里的内容、打印块表(块大小 / 块数 / 声明解压总量),整份解码后打印字节数与 sha256。`<容器> [条目序号]`,不给序号时取最大的那个 `.ncz`(通常是本体) | 怀疑"某个压缩包解不开 / 装完起不来"时,先在开发机上判定:它报错即代码问题,它成功而真机失败则问题在别处(占位、记录、目标存储) |
+| `tools/ncz-blocks.py` | 同一个问题的**独立**答案:自带 PFS0 与 HFS0(含 `secure` 分区)解析,按块表逐块解(zstd 命令行为主、python-zstandard 有则用),打印块表、每个块的"压缩 / 原样"、解码字节数与 sha256。与 `ncz-probe.sh` 对同一文件给出相同两个数字,才说明解码规则可信;不一致则指向读者而不是文件。`--entry` 选内容、`--limit N` 只看前几块(秒级) | `ncz-probe.sh` 报了错或改了任何解码逻辑之后;这也是"先在开发机上证明再上真机"的那份对照答案 |
 
 主机侧测试不在 `tools/` 下,单独放在 `tests/`:`make -C tests` 编译并运行清单解析、门控判定、
 安装决策与 `state.json` 往返的单元测试(不需要 Docker 与真机)。

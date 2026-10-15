@@ -663,7 +663,7 @@ bool GameInstall::Begin(std::string *error) {
         return false;
     }
     /* One decoder per compressed content.  The tables were read while the package was being read;
-       the stream itself starts here, and it is fed strictly in order (see NczStream). */
+       the decoder itself pulls the payload as the transfer asks for it, strictly forward. */
     /* resize, not assign: a vector of unique_ptr cannot be filled with a copied value. */
     m_ncz.clear();
     m_ncz.resize(m_task.contents.size());
@@ -679,17 +679,7 @@ bool GameInstall::Begin(std::string *error) {
             m_status.error = *error;
             return false;
         }
-        auto stream = std::make_unique<NczStream>();
-        stream->info = known->second;
-        stream->container_offset = content.offset;
-        stream->dstream = ZSTD_createDStream();
-        if (stream->dstream == nullptr || ZSTD_isError(ZSTD_initDStream(stream->dstream))) {
-            *error = "cannot start the decoder for the compressed content";
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-        m_ncz[i] = std::move(stream);
+        m_ncz[i] = std::make_unique<NczDecoder>(known->second, m_reader, content.offset);
     }
     /* The placeholder ids go into the task before the first byte: that is what makes a crash
        resumable into the same placeholder instead of a new one. */
@@ -702,12 +692,6 @@ bool GameInstall::Begin(std::string *error) {
     }
     RefreshStatus();
     return true;
-}
-
-GameInstall::NczStream::~NczStream() {
-    if (dstream != nullptr) {
-        ZSTD_freeDStream(dstream);
-    }
 }
 
 bool GameInstall::ReadMetaContent(const ContainerEntry &entry, Placeholder *out_placeholder,
@@ -846,82 +830,7 @@ bool GameInstall::ReadNczInfo(const ContainerEntry &entry, NczInfo *out, std::st
     return true;
 }
 
-bool GameInstall::DecodeUntil(NczStream &stream, std::uint64_t nca_size, std::uint64_t need_until,
-                              std::string *error) {
-    constexpr std::size_t kChunk = 512 * 1024;
-    if (stream.source_exhausted && stream.decoded_end < need_until) {
-        *error = "the compressed content ended before the whole NCA was decoded";
-        return false;
-    }
-    if (m_decode_buffer.size() < kChunk) {
-        m_decode_buffer.resize(kChunk);
-    }
-    while (stream.decoded_end < need_until) {
-        if (stream.input_pos >= stream.input.size() && !stream.source_exhausted) {
-            const std::uint64_t left = stream.info.payload_size - stream.payload_read;
-            if (left == 0) {
-                stream.source_exhausted = true;
-                continue;
-            }
-            const std::size_t chunk = static_cast<std::size_t>(left < kChunk ? left : kChunk);
-            stream.input.resize(chunk);
-            stream.input_pos = 0;
-            /* The payload's offsets are inside the `.ncz`, so the entry's own offset has to be
-               added here: reading without it fed the container's own header bytes to zstd, which
-               failed with "could not be decoded" on the first real package (measured). */
-            if (!m_reader.Read(stream.container_offset + stream.info.payload_offset +
-                                   stream.payload_read,
-                               chunk, stream.input.data())) {
-                *error = "the source stopped early (connection lost or file truncated)";
-                return false;
-            }
-            stream.payload_read += chunk;
-        }
-        ZSTD_inBuffer in{stream.input.data() + stream.input_pos,
-                         stream.input.size() - stream.input_pos, 0};
-        ZSTD_outBuffer out{m_decode_buffer.data(), m_decode_buffer.size(), 0};
-        const std::size_t result = ZSTD_decompressStream(stream.dstream, &out, &in);
-        if (ZSTD_isError(result)) {
-            *error = "the compressed content could not be decoded";
-            return false;
-        }
-        stream.input_pos += in.pos;
-        if (out.pos > 0) {
-            /* The bytes are encrypted again as they are decoded, before anything can hand them
-               out: the ranges that were stored decrypted have to reach the placeholder in the
-               shape the console expects. */
-            const std::uint64_t base = stream.decoded_end;
-            auto *bytes = m_decode_buffer.data();
-            for (const NczSection &section : stream.info.sections) {
-                if (!section.Encrypted()) {
-                    continue;
-                }
-                const std::uint64_t lo = std::max(section.offset, base);
-                const std::uint64_t hi = std::min(section.End(), base + out.pos);
-                if (lo >= hi) {
-                    continue;
-                }
-                const std::uint64_t aligned = lo & ~std::uint64_t{0xF};
-                const std::array<std::uint8_t, 16> counter = NczSectionCounter(section, aligned);
-                AesCtrRange(section.key.data(), counter.data(), lo, bytes + (lo - base),
-                            static_cast<std::size_t>(hi - lo));
-            }
-            stream.decoded.insert(stream.decoded.end(), bytes, bytes + out.pos);
-            stream.decoded_end += out.pos;
-        } else if (stream.source_exhausted && stream.input_pos >= stream.input.size()) {
-            *error = "the compressed content ended before the whole NCA was decoded";
-            return false;
-        }
-    }
-    /* A stream that decodes past the NCA it claims is a broken file, not a bigger install. */
-    if (stream.decoded_end > nca_size) {
-        *error = "the compressed content decodes to more than the NCA it claims";
-        return false;
-    }
-    return true;
-}
-
-bool GameInstall::ReadCompressed(const TaskContent &content, NczStream &stream,
+bool GameInstall::ReadCompressed(const TaskContent &content, NczDecoder &decoder,
                                  std::uint64_t content_offset, std::size_t size, std::uint8_t *out,
                                  std::string *error) {
     std::size_t done = 0;
@@ -939,27 +848,19 @@ bool GameInstall::ReadCompressed(const TaskContent &content, NczStream &stream,
             done += take;
             continue;
         }
-        if (!DecodeUntil(stream, content.size, at + 1, error)) {
+        if (!decoder.DecodeUntil(at + 1, error)) {
             return false;
         }
-        if (stream.decoded_base > at) {
-            *error = "the compressed content was asked for bytes already handed out";
+        std::size_t take = 0;
+        if (!decoder.Take(at, size - done, out + done, &take, error)) {
             return false;
         }
-        const std::uint64_t available = stream.decoded_end - at;
-        const std::size_t take =
-            static_cast<std::size_t>(std::min<std::uint64_t>(size - done, available));
         if (take == 0) {
             *error = "the compressed content ended before the whole NCA was decoded";
             return false;
         }
-        const std::size_t start = static_cast<std::size_t>(at - stream.decoded_base);
-        std::memcpy(out + done, stream.decoded.data() + start, take);
-        /* Drop what the caller took: the buffer then stays the size of one read, not of the whole
-           content. */
-        stream.decoded.erase(stream.decoded.begin(),
-                             stream.decoded.begin() + static_cast<std::ptrdiff_t>(start + take));
-        stream.decoded_base = at + take;
+        /* The ranges the file stored decrypted go into the placeholder encrypted again. */
+        ReencryptNczRange(decoder.Info(), at, out + done, take);
         done += take;
     }
     return true;

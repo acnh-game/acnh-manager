@@ -14,9 +14,17 @@
        0x4000 .. 0x4010        NCZ header: magic, then the number of sections
        0x4010 .. 0x4010 + 64N  the sections: the NCA's own file-system sections, each with the
                                key and counter its data was stored with
-       ...                     either a block table ("NCZBLOCK" + sizes; newer files) or straight
-                               into a zstd stream (the form this first real package uses)
-       ...                     the payload: a zstd stream that decodes to the NCA from 0x4000 on
+       ...                     either a block table ("NCZBLOCK" + one size per block) or straight
+                               into the payload
+       ...                     the payload: zstd, decoding to the NCA from 0x4000 on
+
+   The block table is not optional decoration, it is how the payload is *cut up*: with it, the
+   payload is a series of blocks of fixed decompressed size (the last one carrying the remainder
+   of `decompressed_size`), each held as a zstd stream -- except the ones compression did not
+   shrink, which the dumper stores as the plain bytes.  So a reader that hands the whole payload
+   to one zstd stream reads the raw blocks as if they were stream and fails on the first of them
+   with "could not be decoded" (measured on a real `.xcz`: its blocks alternate compressed and
+   raw).  Without the table the payload really is one stream, which is why both shapes exist.
 
    Sections whose `crypto_type` is AES-CTR (or above) hold their bytes **decrypted**: the original
    NCA stream is reproduced by encrypting those ranges again with the section's own key and a
@@ -82,10 +90,13 @@ struct NczInfo {
     /* The size of the NCA this stream rebuilds: the header plus everything the payload decodes to. */
     std::uint64_t nca_size{0};
     /* The newer layout carries a block table (a reader may seek block by block); this one is the
-       straight-stream form.  Both decode the same way without it. */
+       straight-stream form, where the payload is a single stream. */
     bool block_table{false};
     std::uint32_t block_size{0};
     std::vector<std::uint64_t> block_offsets; /* absolute inside the `.ncz`, one per block */
+    /* What the blocks decode to in total, as the block header declares it: the NCA minus the
+       0x4000 header the file stores verbatim (`decompressed_size` in the reference's reader). */
+    std::uint64_t block_decompressed_size{0};
 };
 
 /* Reads magic + section count out of the 16 bytes at kNczHeaderSize.  `bytes` must hold
@@ -102,6 +113,24 @@ bool ParseNczTables(const std::uint8_t *bytes, std::size_t size, const NczHeader
 /* The section that covers `nca_offset`, or nullptr when the position is outside every section
    (the NCA header itself, or a gap between sections -- such bytes are stored as they are). */
 const NczSection *FindNczSection(const NczInfo &info, std::uint64_t nca_offset);
+
+/* The block table, as the decode loop reads it.  How many blocks there are is
+   `info.block_offsets.size()`; these three answer the per-block questions. */
+
+/* How many bytes block `index` occupies in the `.ncz`: what has to be pulled from the source
+   before the block can be decoded.  The blocks are contiguous and immediately before them sits
+   the block table, so the last one ends where the entry's payload ends. */
+std::uint64_t NczBlockSourceSize(const NczInfo &info, std::uint64_t index);
+
+/* How many bytes block `index` decodes to: the declared block size, except for the last block,
+   which carries the remainder of `block_decompressed_size` (a whole block when it divides
+   evenly).  This is the reference's rule for the same question. */
+std::uint64_t NczBlockDecodedSize(const NczInfo &info, std::uint64_t index);
+
+/* Whether block `index` is a zstd stream.  It is not when compressing it did not help: the dumper
+   then writes the plain bytes, whose stored size is exactly what the block decodes to -- so a
+   stored size that is not smaller than the decoded size means "copy, do not decode". */
+bool NczBlockCompressed(const NczInfo &info, std::uint64_t index);
 
 /* The 16-byte AES counter for `nca_offset`: the section's stored high half, then the absolute
    block index (offset / 16) as a big-endian 64-bit number.  `offset % 16` is not part of the

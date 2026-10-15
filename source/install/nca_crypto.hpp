@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <string>
 
+#include "install/ncz.hpp"
+
 namespace acnh_manager::install {
 
 /* The decrypted header is 0xC00 bytes: 0x200 bytes of header plus the four file-system headers. */
@@ -41,5 +43,13 @@ bool EncryptNcaHeader(const void *in, void *out, std::string *error);
    counter come from the file itself and are never logged. */
 void AesCtrRange(const void *key, const void *counter, std::uint64_t nca_offset, void *data,
                  std::size_t size);
+
+/* Puts back, in place, the ranges an NSZ/XCZ stored decrypted: `data` is `size` bytes of the
+   content starting at `nca_offset` inside the NCA, and every section that covers part of it is
+   encrypted again with that section's own key and a counter continued from the absolute position
+   (install/ncz.hpp).  Both readers of a compressed content -- the transfer and the read-out that
+   mounts a meta or control content -- call this on the bytes they decoded. */
+void ReencryptNczRange(const NczInfo &info, std::uint64_t nca_offset, std::uint8_t *data,
+                       std::size_t size);
 
 }  // namespace acnh_manager::install

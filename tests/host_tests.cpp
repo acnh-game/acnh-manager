@@ -4,6 +4,7 @@
        make -C tests
    The numbers in the cases below come from real hardware (docs/architecture.md section 5). */
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -16,6 +17,8 @@
 #include <utility>
 #include <vector>
 
+#include <zstd.h>
+
 #include "env/cheat_file.hpp"
 #include "env/config_ini.hpp"
 #include "i18n/strings.hpp"
@@ -27,6 +30,7 @@
 #include "install/package.hpp"
 #include "install/icon_file.hpp"
 #include "install/ncz.hpp"
+#include "install/ncz_decode.hpp"
 #include "install/title_name.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
@@ -1865,6 +1869,176 @@ void TestNczTables() {
     CHECK(!ParseNczTables(file.data() + tables, 64, header, file.size(), &info, &error));
 }
 
+/* Decoding one compressed content (NSZ/XCZ).  Everything a real file combines is here: blocks that
+   are zstd streams of their own, blocks the dumper stored raw because compressing them did not
+   help, and a last block that is only part of a block.  That mix is what made the first real
+   `.xcz` fail with "could not be decoded" while every table check passed -- the reader fed the
+   whole payload to one stream, so a raw block reached zstd as if it were compressed data.  The
+   streams are built here with the library itself, so the case does not need a package on disk. */
+void TestNczDecode() {
+    using acnh_manager::install::kNczBlockMagic;
+    using acnh_manager::install::kNczCryptoNone;
+    using acnh_manager::install::kNczHeaderSize;
+    using acnh_manager::install::kNczSectionMagic;
+    using acnh_manager::install::kNczSectionSize;
+    using acnh_manager::install::NczBlockCompressed;
+    using acnh_manager::install::NczBlockDecodedSize;
+    using acnh_manager::install::NczBlockSourceSize;
+    using acnh_manager::install::NczDecoder;
+    using acnh_manager::install::NczHeaderInfo;
+    using acnh_manager::install::NczInfo;
+    using acnh_manager::install::ParseNczHeader;
+    using acnh_manager::install::ParseNczTables;
+
+    const auto compress = [](const std::vector<std::uint8_t> &plain) {
+        std::vector<std::uint8_t> out(ZSTD_compressBound(plain.size()));
+        const std::size_t size =
+            ZSTD_compress(out.data(), out.size(), plain.data(), plain.size(), 1);
+        CHECK(!ZSTD_isError(size));
+        out.resize(size);
+        return out;
+    };
+
+    /* The smallest block size the format allows, with a half block at the end. */
+    const std::size_t block_bytes = 1u << 16;
+    const std::size_t last_bytes = block_bytes / 2;
+    std::vector<std::uint8_t> first(block_bytes), second(block_bytes), last(last_bytes);
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        first[i] = static_cast<std::uint8_t>(i % 251);
+        second[i] = static_cast<std::uint8_t>((i * 7) % 256);
+    }
+    for (std::size_t i = 0; i < last.size(); ++i) {
+        last[i] = static_cast<std::uint8_t>(0xC3 ^ (i % 97));
+    }
+    const std::vector<std::uint8_t> packed_first = compress(first);
+    const std::vector<std::uint8_t> packed_last = compress(last);
+    CHECK(packed_first.size() < block_bytes);
+    CHECK(packed_last.size() < last_bytes);
+
+    /* The tables, the block header and one size per block, then the payload: the layout a real
+       `.ncz` has (the 0x4000-byte NCA header in front is not this reader's business, so it is
+       zeros here). */
+    const std::uint64_t tables = kNczHeaderSize + 16;
+    const std::uint64_t block_header = tables + kNczSectionSize;
+    const std::uint64_t block_sizes = block_header + 24;
+    const std::uint64_t payload = block_sizes + 3 * 4;
+    std::vector<std::uint8_t> file(
+        static_cast<std::size_t>(payload + packed_first.size() + second.size() + packed_last.size()),
+        0);
+    PutU64(file, kNczHeaderSize, kNczSectionMagic);
+    PutU64(file, kNczHeaderSize + 8, 1);
+    /* One section covering everything behind the header, stored as it is: sections and their crypto
+       belong to nca_crypto, and this case is about the payload's blocks. */
+    PutU64(file, tables, kNczHeaderSize);
+    PutU64(file, tables + 8, block_bytes * 2 + last_bytes);
+    PutU64(file, tables + 16, kNczCryptoNone);
+    PutU64(file, block_header, kNczBlockMagic);
+    file[block_header + 8] = 2;  /* version */
+    file[block_header + 9] = 1;  /* type */
+    file[block_header + 11] = 16; /* 64 KiB blocks */
+    PutU32(file, block_header + 12, 3);
+    PutU64(file, block_header + 16, block_bytes * 2 + last_bytes);
+    PutU32(file, block_sizes, static_cast<std::uint32_t>(packed_first.size()));
+    PutU32(file, block_sizes + 4, static_cast<std::uint32_t>(second.size()));
+    PutU32(file, block_sizes + 8, static_cast<std::uint32_t>(packed_last.size()));
+    std::memcpy(&file[payload], packed_first.data(), packed_first.size());
+    std::memcpy(&file[payload + packed_first.size()], second.data(), second.size());
+    std::memcpy(&file[payload + packed_first.size() + second.size()], packed_last.data(),
+                packed_last.size());
+
+    std::string error;
+    NczHeaderInfo header;
+    CHECK(ParseNczHeader(file.data(), file.size(), &header, &error));
+    NczInfo info;
+    CHECK(ParseNczTables(file.data() + tables, file.size() - tables, header, file.size(), &info,
+                         &error));
+    CHECK(info.block_table);
+    CHECK(info.block_size == block_bytes);
+    CHECK(info.block_offsets.size() == 3);
+    CHECK(info.payload_offset == payload);
+    CHECK(info.block_decompressed_size == block_bytes * 2 + last_bytes);
+    CHECK(NczBlockSourceSize(info, 0) == packed_first.size());
+    CHECK(NczBlockSourceSize(info, 1) == second.size());
+    CHECK(NczBlockSourceSize(info, 2) == packed_last.size());
+    CHECK(NczBlockDecodedSize(info, 0) == block_bytes);
+    CHECK(NczBlockDecodedSize(info, 1) == block_bytes);
+    CHECK(NczBlockDecodedSize(info, 2) == last_bytes);
+    /* What decides "stream" from "raw bytes" is the size, exactly like the reference's reader:
+       a block the dumper could not shrink is stored as it is. */
+    CHECK(NczBlockCompressed(info, 0));
+    CHECK(!NczBlockCompressed(info, 1));
+    CHECK(NczBlockCompressed(info, 2));
+
+    std::vector<std::uint8_t> expected = first;
+    expected.insert(expected.end(), second.begin(), second.end());
+    expected.insert(expected.end(), last.begin(), last.end());
+
+    /* The whole payload in one piece, and then the same bytes asked for in small pieces that
+       straddle the block boundaries -- the transfer path hands out from the buffer the decoder
+       keeps between calls, so both have to end up with the same bytes. */
+    MemoryReader reader(file);
+    NczDecoder decoder(info, reader, 0);
+    std::vector<std::uint8_t> got(expected.size(), 0);
+    CHECK(decoder.DecodeUntil(kNczHeaderSize + expected.size(), &error));
+    std::size_t took = 0;
+    CHECK(decoder.Take(kNczHeaderSize, got.size(), got.data(), &took, &error));
+    CHECK(took == got.size());
+    CHECK(got == expected);
+
+    NczDecoder piecewise(info, reader, 0);
+    std::vector<std::uint8_t> walked;
+    std::uint64_t at = kNczHeaderSize;
+    while (walked.size() < expected.size()) {
+        const std::size_t want = std::min<std::size_t>(4096, expected.size() - walked.size());
+        if (!piecewise.DecodeUntil(at + 1, &error)) {
+            CHECK(false);
+            break;
+        }
+        std::vector<std::uint8_t> chunk(want, 0);
+        std::size_t n = 0;
+        if (!piecewise.Take(at, want, chunk.data(), &n, &error) || n == 0) {
+            CHECK(false);
+            break;
+        }
+        walked.insert(walked.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(n));
+        at += n;
+    }
+    CHECK(walked == expected);
+
+    /* The other shape the format allows: no block table at all, so the payload really is one
+       stream from end to end.  The first real NSZ installed was of this shape, and it has to keep
+       working. */
+    const std::vector<std::uint8_t> single = compress(expected);
+    std::vector<std::uint8_t> plain(
+        static_cast<std::size_t>(tables + kNczSectionSize) + single.size(), 0);
+    PutU64(plain, kNczHeaderSize, kNczSectionMagic);
+    PutU64(plain, kNczHeaderSize + 8, 1);
+    PutU64(plain, tables, kNczHeaderSize);
+    PutU64(plain, tables + 8, expected.size());
+    PutU64(plain, tables + 16, kNczCryptoNone);
+    std::memcpy(&plain[tables + kNczSectionSize], single.data(), single.size());
+    NczInfo plain_info;
+    CHECK(ParseNczTables(plain.data() + tables, plain.size() - tables, header, plain.size(),
+                         &plain_info, &error));
+    CHECK(!plain_info.block_table);
+    MemoryReader plain_reader(plain);
+    NczDecoder plain_decoder(plain_info, plain_reader, 0);
+    std::vector<std::uint8_t> plain_got(expected.size(), 0);
+    CHECK(plain_decoder.DecodeUntil(kNczHeaderSize + expected.size(), &error));
+    CHECK(plain_decoder.Take(kNczHeaderSize, plain_got.size(), plain_got.data(), &took, &error));
+    CHECK(took == plain_got.size());
+    CHECK(plain_got == expected);
+
+    /* A payload that stops in the middle of a block: the decoder has to refuse it rather than hand
+       out a short NCA. */
+    std::vector<std::uint8_t> short_file = file;
+    short_file.resize(short_file.size() - last_bytes / 2);
+    MemoryReader short_reader(short_file);
+    NczDecoder short_decoder(info, short_reader, 0);
+    CHECK(!short_decoder.DecodeUntil(kNczHeaderSize + expected.size(), &error));
+    CHECK(!error.empty());
+}
+
 /* Which picture file inside a control content the confirm card shows.  The card used to have no
    picture whenever the game was not installed (the console then has no control data to hand out,
    and its cached one can be cleared by an install), so the package's own icon is what the choice
@@ -2181,6 +2355,7 @@ int main() {
     TestTitleNames();
     TestIconFile();
     TestNczTables();
+    TestNczDecode();
     TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

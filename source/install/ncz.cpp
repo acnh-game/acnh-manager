@@ -103,9 +103,16 @@ bool ParseNczTables(const std::uint8_t *bytes, std::size_t size, const NczHeader
         }
         out->block_table = true;
         out->block_size = 1u << exponent;
+        out->block_decompressed_size = ReadU64(block_header + 16);
         std::uint64_t offset = header.tables_offset + cursor + table_bytes;
         out->block_offsets.reserve(total_blocks);
         for (std::uint32_t i = 0; i < total_blocks; ++i) {
+            if (ReadU32(block_header + 24 + i * 4) == 0) {
+                if (error != nullptr) {
+                    *error = "the compressed content's block table has an empty block";
+                }
+                return false;
+            }
             out->block_offsets.push_back(offset);
             offset += ReadU32(block_header + 24 + i * 4);
         }
@@ -141,6 +148,27 @@ const NczSection *FindNczSection(const NczInfo &info, std::uint64_t nca_offset) 
         }
     }
     return nullptr;
+}
+
+std::uint64_t NczBlockSourceSize(const NczInfo &info, std::uint64_t index) {
+    const std::size_t at = static_cast<std::size_t>(index);
+    if (index + 1 < info.block_offsets.size()) {
+        return info.block_offsets[at + 1] - info.block_offsets[at];
+    }
+    /* The last block ends where the payload ends. */
+    return info.payload_offset + info.payload_size - info.block_offsets[at];
+}
+
+std::uint64_t NczBlockDecodedSize(const NczInfo &info, std::uint64_t index) {
+    if (index + 1 < info.block_offsets.size()) {
+        return info.block_size;
+    }
+    const std::uint64_t remainder = info.block_decompressed_size % info.block_size;
+    return remainder != 0 ? remainder : info.block_size;
+}
+
+bool NczBlockCompressed(const NczInfo &info, std::uint64_t index) {
+    return NczBlockSourceSize(info, index) < NczBlockDecodedSize(info, index);
 }
 
 std::array<std::uint8_t, 16> NczSectionCounter(const NczSection &section, std::uint64_t nca_offset) {

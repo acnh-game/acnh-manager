@@ -104,4 +104,27 @@ void AesCtrRange(const void *key, const void *counter, std::uint64_t nca_offset,
     }
 }
 
+void ReencryptNczRange(const NczInfo &info, std::uint64_t nca_offset, std::uint8_t *data,
+                       std::size_t size) {
+    if (data == nullptr || size == 0) {
+        return;
+    }
+    for (const NczSection &section : info.sections) {
+        if (!section.Encrypted()) {
+            continue;
+        }
+        const std::uint64_t lo = std::max(section.offset, nca_offset);
+        const std::uint64_t hi = std::min(section.End(), nca_offset + size);
+        if (lo >= hi) {
+            continue;
+        }
+        /* The counter belongs to the block the range starts in; AesCtrRange advances the keystream
+           itself for a range that does not start on a block boundary. */
+        const std::array<std::uint8_t, 16> counter =
+            NczSectionCounter(section, lo & ~std::uint64_t{0xF});
+        AesCtrRange(section.key.data(), counter.data(), lo, data + (lo - nca_offset),
+                    static_cast<std::size_t>(hi - lo));
+    }
+}
+
 }  // namespace acnh_manager::install
