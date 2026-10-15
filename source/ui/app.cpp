@@ -9,6 +9,7 @@
 #include "install/content_install.hpp"
 #include "install/container.hpp"
 #include "install/game_install.hpp"
+#include "install/range_probe.hpp"
 #include "install/source_local_file.hpp"
 #include "install/network_source.hpp"
 #include "ui/icon_image.hpp"
@@ -3381,13 +3382,22 @@ void App::RenderInstallUrl(Surface surface) {
                     m_font.Fit(m_download_url, kFontSmall, card_width - 72, 1).c_str());
     }
     if (!m_install_error.empty()) {
-        /* Two of these have wording of their own ("connect first", "this address cannot resume");
-           anything else is the downloader's own sentence, which is the honest thing to show. */
+        /* Three of these have wording of their own -- "connect first", "this address cannot be
+           resumed from" (a 200 or an unreadable Content-Range), and "the address answered with this
+           status" (404 and friends, where the number is the useful part); anything else is the
+           downloader's own sentence, which is the honest thing to show.  The strings come from the
+           download source, which is the only place that produces them. */
         const char *reason = m_install_error.c_str();
-        if (m_install_error == "no-network") {
+        std::string formatted;
+        if (m_install_error == install::kProbeErrorNoNetwork) {
             reason = Tr(i18n::StringId::InstallNoNetwork);
-        } else if (m_install_error == "range-unsupported") {
+        } else if (m_install_error == install::kProbeErrorNotRange) {
             reason = Tr(i18n::StringId::InstallRangeUnsupported);
+        } else if (m_install_error.rfind(install::kProbeErrorHttpStatusPrefix, 0) == 0) {
+            formatted = i18n::Format(
+                i18n::StringId::InstallHttpStatus,
+                m_install_error.substr(std::strlen(install::kProbeErrorHttpStatusPrefix)).c_str());
+            reason = formatted.c_str();
         }
         m_font.Draw(surface, card_x + 36, card_top + 190, kFontSmall, kWarn, reason,
                     card_width - 72);

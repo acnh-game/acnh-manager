@@ -6,6 +6,8 @@
 #include <cstring>
 #include <vector>
 
+#include "install/range_probe.hpp"
+
 namespace acnh_manager::install {
 namespace {
 
@@ -78,31 +80,6 @@ bool GlobalInit(std::string *error) {
     return true;
 }
 
-/* Content-Range: bytes 0-0/1234 -> 1234.  The header is the only place the total size is stated;
-   `Content-Length` would be 1 for the probe. */
-bool ParseContentRange(const std::string &value, std::uint64_t *total) {
-    const std::size_t slash = value.find('/');
-    if (slash == std::string::npos || slash + 1 >= value.size()) {
-        return false;
-    }
-    const std::string tail = value.substr(slash + 1);
-    if (tail == "*") {
-        return false;
-    }
-    std::uint64_t size = 0;
-    for (char c : tail) {
-        if (c < '0' || c > '9') {
-            return false;
-        }
-        size = size * 10 + static_cast<std::uint64_t>(c - '0');
-    }
-    if (size == 0) {
-        return false;
-    }
-    *total = size;
-    return true;
-}
-
 }  // namespace
 
 HttpSource::HttpSource() = default;
@@ -139,28 +116,42 @@ bool HttpSource::Open(const std::string &url, std::uint64_t *size, std::string *
     CURLcode code = curl_easy_perform(curl);
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    if (code != CURLE_OK) {
+    /* A reply that never arrived and a reply we refuse get different cards, and curl reports both
+       as a failure (a server that ignores the range streams the whole file at us and the write
+       callback cutting it off is an error).  So a status we did receive decides first; only when
+       there is none does the curl error speak. */
+    if (status == 0) {
         /* "no network" and "the address is wrong" are the same failure to curl when it cannot even
            connect: the screens have one line for it, and the log keeps the text. */
         *error = code == CURLE_COULDNT_RESOLVE_HOST || code == CURLE_COULDNT_CONNECT ||
                          code == CURLE_OPERATION_TIMEDOUT
-                     ? "no-network"
+                     ? kProbeErrorNoNetwork
                      : Describe(code);
         Close();
         return false;
     }
-    if (status != 206) {
-        *error = "range-unsupported";
+    std::uint64_t total = 0;
+    switch (JudgeRangeProbe(status, headers.content_range, &total)) {
+        case RangeProbe::Supported:
+            break;
+        case RangeProbe::NotRange:
+            *error = kProbeErrorNotRange;
+            Close();
+            return false;
+        case RangeProbe::BadStatus:
+            *error = HttpStatusError(status);
+            Close();
+            return false;
+    }
+    if (probe.got != 1 || probe.overflow) {
+        /* The header promised one byte and it did not arrive (the connection broke mid-answer):
+           the downloader's own sentence is the honest one. */
+        *error = code == CURLE_OK ? std::string("the download stopped before the first byte")
+                                  : Describe(code);
         Close();
         return false;
     }
-    if (!ParseContentRange(headers.content_range, &m_size)) {
-        /* A 206 without a usable Content-Range is as good as no range support: the size it carries
-           is what every later decision (progress, placeholder, resume) is based on. */
-        *error = "range-unsupported";
-        Close();
-        return false;
-    }
+    m_size = total;
     m_url = url;
     m_open = true;
     *size = m_size;

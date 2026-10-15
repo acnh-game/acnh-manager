@@ -176,6 +176,7 @@ enum class StringId {
     InstallNoNetwork,
     InstallGameRunning,
     InstallRangeUnsupported,
+    InstallHttpStatus,
     InstallRetry,
     InstallPending,
     ConfirmVersion,

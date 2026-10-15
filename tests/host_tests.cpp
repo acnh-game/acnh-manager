@@ -31,6 +31,7 @@
 #include "install/icon_file.hpp"
 #include "install/ncz.hpp"
 #include "install/ncz_decode.hpp"
+#include "install/range_probe.hpp"
 #include "install/title_name.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
@@ -1956,6 +1957,67 @@ void TestNczTables() {
     CHECK(!ParseNczTables(file.data() + tables, 64, header, file.size(), &info, &error));
 }
 
+/* The download source's hard gate: is this address answerable with ranges?  Every byte comes from
+   a `Range` request and the container's total size comes from this header, so an address that
+   cannot do ranges is refused before anything is written.
+
+   The case that made this a test: libcurl hands a header line over **with its CRLF**, and the
+   first version of the parser demanded digits to the end of the line -- so every normal 206 from
+   every real server was judged "this address cannot be resumed from".  Nothing on the device had
+   run that path yet (the download source's device acceptance is still pending), which is exactly
+   the kind of thing a host test is for. */
+void TestRangeProbe() {
+    using acnh_manager::install::JudgeRangeProbe;
+    using acnh_manager::install::ParseContentRangeTotal;
+    using acnh_manager::install::RangeProbe;
+
+    std::uint64_t total = 0;
+
+    /* The line as libcurl delivers it: a leading space after the colon, and CRLF at the end. */
+    CHECK(ParseContentRangeTotal(" bytes 0-0/4650239771\r\n", &total));
+    CHECK(total == 4650239771ULL);
+    /* Same value, written the other ways servers write it. */
+    total = 0;
+    CHECK(ParseContentRangeTotal("bytes 0-0/4650239771", &total));
+    CHECK(total == 4650239771ULL);
+    total = 0;
+    CHECK(ParseContentRangeTotal("0-0/123", &total)); /* a server that leaves the unit off */
+    CHECK(total == 123);
+    total = 0;
+    CHECK(ParseContentRangeTotal("bytes 0-1048575/5595285654\r\n", &total));
+    CHECK(total == 5595285654ULL);
+
+    /* Refusals: no slash, an unknown total (`*`), an empty or non-numeric total, zero, a stray
+       word after the number, no range before the slash, and a value that would overflow. */
+    CHECK(!ParseContentRangeTotal("", &total));
+    CHECK(!ParseContentRangeTotal("bytes 0-0", &total));
+    CHECK(!ParseContentRangeTotal("bytes 0-0/", &total));
+    CHECK(!ParseContentRangeTotal("bytes 0-0/*", &total));
+    CHECK(!ParseContentRangeTotal("bytes 0-0/0", &total));
+    CHECK(!ParseContentRangeTotal("bytes 0-0/12a", &total));
+    CHECK(!ParseContentRangeTotal("bytes 0-0/123 bytes\r\n", &total));
+    CHECK(!ParseContentRangeTotal("bytes */123", &total));
+    CHECK(!ParseContentRangeTotal("bytes 0-0/99999999999999999999999", &total));
+    CHECK(!ParseContentRangeTotal("bytes 0-0/18446744073709551616", &total)); /* 2^64 */
+
+    /* The verdict.  206 with a usable header is the only "yes", and it hands the size over. */
+    total = 0;
+    CHECK(JudgeRangeProbe(206, " bytes 0-0/4096\r\n", &total) == RangeProbe::Supported);
+    CHECK(total == 4096);
+    /* 200 means the server ignored the range: the file would have to be read from byte zero, which
+       is exactly what the address screen's "cannot be resumed" card is about. */
+    CHECK(JudgeRangeProbe(200, " bytes 0-4095/4096\r\n", &total) == RangeProbe::NotRange);
+    /* A 206 whose total cannot be read is no better: that number drives progress, the placeholder
+       size and every resume decision. */
+    CHECK(JudgeRangeProbe(206, " bytes 0-0/*\r\n", &total) == RangeProbe::NotRange);
+    CHECK(JudgeRangeProbe(206, "", &total) == RangeProbe::NotRange);
+    /* Anything else is "the address answered with this status", number included. */
+    CHECK(JudgeRangeProbe(404, "", &total) == RangeProbe::BadStatus);
+    CHECK(JudgeRangeProbe(403, " bytes 0-0/10\r\n", &total) == RangeProbe::BadStatus);
+    CHECK(JudgeRangeProbe(0, "", &total) == RangeProbe::BadStatus);
+    CHECK(acnh_manager::install::HttpStatusError(404) == std::string("http-status:404"));
+}
+
 /* Decoding one compressed content (NSZ/XCZ).  Everything a real file combines is here: blocks that
    are zstd streams of their own, blocks the dumper stored raw because compressing them did not
    help, and a last block that is only part of a block.  That mix is what made the first real
@@ -2455,6 +2517,7 @@ int main() {
     TestTitleNames();
     TestIconFile();
     TestNczTables();
+    TestRangeProbe();
     TestNczDecode();
     TestTextWrap();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);

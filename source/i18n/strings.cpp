@@ -160,6 +160,7 @@ constexpr Entry kStrings[] = {
     {"先在系统设置里连上网络(手机热点或同一个 Wi-Fi)", "Connect to a network first (phone hotspot or the same Wi-Fi)"},  /* InstallNoNetwork */
     {"请先完全退出游戏(主页上把游戏关掉)再试一次", "Close the game completely first (HOME screen, then X), then try again"},  /* InstallGameRunning */
     {"这个地址不支持断点续传,请换一个地址或用手机上传", "This address cannot be resumed; use another address or upload the file"},  /* InstallRangeUnsupported */
+    {"地址打不开(HTTP %s),检查一下地址是否写对", "The address answered HTTP %s; check that it is correct"},  /* InstallHttpStatus */
     {"重试", "Try again"},  /* InstallRetry */
     {"未完成的安装(已接收 %s)", "Unfinished install (%s received)"},  /* InstallPending */
     {"版本", "Version"},  /* ConfirmVersion */
