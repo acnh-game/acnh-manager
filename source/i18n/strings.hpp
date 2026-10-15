@@ -174,6 +174,7 @@ enum class StringId {
     InstallAddressHint,
     InstallTypeUrl,
     InstallNoNetwork,
+    InstallBadUrl,
     InstallGameRunning,
     InstallRangeUnsupported,
     InstallHttpStatus,

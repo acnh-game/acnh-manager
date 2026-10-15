@@ -16,9 +16,11 @@
    Not a pure module: it is libcurl, so it belongs to the device side of the installer. */
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "install/container.hpp"
+#include "net/socket_session.hpp"
 
 namespace acnh_manager::install {
 
@@ -43,6 +45,10 @@ private:
     std::uint64_t m_size{0};
     bool m_open{false};
     void *m_curl{nullptr}; /* CURL*, kept alive so the connection is reused across reads */
+    /* The console's socket service, held from the probe until Close().  libcurl's Switch port never
+       brings it up itself, and without it every connection fails with "couldn't connect" -- which is
+       what this source did on hardware before this existed (see net/socket_session.hpp). */
+    std::unique_ptr<net::SocketSession> m_sockets;
 };
 
 }  // namespace acnh_manager::install

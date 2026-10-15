@@ -158,6 +158,7 @@ constexpr Entry kStrings[] = {
     {"在网页里粘贴下载网址,或直接选一个安装包文件", "Paste a download address there, or pick a package file"},  /* InstallAddressHint */
     {"输入网址", "Enter address"},  /* InstallTypeUrl */
     {"连不上这个地址,检查地址与端口是否正确", "Cannot connect to this address; check the address and port"},  /* InstallNoNetwork */
+    {"这个地址不完整或格式不对,请填写完整网址", "This address is incomplete or malformed; enter a full URL"},  /* InstallBadUrl */
     {"请先完全退出游戏(主页上把游戏关掉)再试一次", "Close the game completely first (HOME screen, then X), then try again"},  /* InstallGameRunning */
     {"这个地址不支持断点续传,请换一个地址或用手机上传", "This address cannot be resumed; use another address or upload the file"},  /* InstallRangeUnsupported */
     {"地址打不开(HTTP %s),检查一下地址是否写对", "The address answered HTTP %s; check that it is correct"},  /* InstallHttpStatus */

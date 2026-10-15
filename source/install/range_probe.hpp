@@ -43,6 +43,10 @@ inline constexpr const char *kProbeErrorNotRange = "range-unsupported";
    the number, which is the difference between "the address is wrong" and "the address cannot be
    resumed from". */
 inline constexpr const char *kProbeErrorHttpStatusPrefix = "http-status:";
+/* The address itself is not usable (nothing but the scheme, or a scheme this build cannot speak):
+   the screen has wording for it, because the downloader's own sentence is in English and says
+   "URL using bad/illegal format", which is not an answer for a player. */
+inline constexpr const char *kProbeErrorBadUrl = "bad-url";
 std::string HttpStatusError(long status);
 
 }  // namespace acnh_manager::install

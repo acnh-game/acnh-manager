@@ -5,23 +5,10 @@
 #include <switch.h>
 #include <curl/curl.h>
 
+#include "net/socket_session.hpp"
+
 namespace acnh_manager::net {
 namespace {
-
-/* RAII pair for socketInitializeDefault()/socketExit(): every early return still releases the
-   service.  libcurl's Switch port only calls the BSD socket layer (libcurl.a references
-   socket/socketpair but never socketInitialize*), so bringing the service up is the caller's
-   job -- and it belongs here, next to the code that needs it, not in the global environment
-   setup. */
-struct SocketGuard {
-    bool active{false};
-
-    ~SocketGuard() {
-        if (active) {
-            socketExit();
-        }
-    }
-};
 
 struct Body {
     std::string text;
@@ -56,13 +43,14 @@ HttpResult Get(const std::string &url, std::size_t max_bytes, long timeout_secon
         return result;
     }
 
-    SocketGuard sockets;
-    const Result rc_socket = socketInitializeDefault();
-    if (R_FAILED(rc_socket)) {
-        result.detail = Describe("socketInitializeDefault", rc_socket);
+    /* The socket service, held for the length of this request: libcurl's Switch port does not bring
+       it up itself (see net/socket_session.hpp -- the download source connected to nothing at all
+       for exactly this reason). */
+    SocketSession sockets;
+    if (!sockets.Ok()) {
+        result.detail = Describe("socketInitializeDefault", sockets.Error());
         return result;
     }
-    sockets.active = true;
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     CURL *curl = curl_easy_init();

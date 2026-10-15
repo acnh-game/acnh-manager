@@ -3484,6 +3484,9 @@ std::string App::InstallErrorText() const {
     if (m_install_error == install::kProbeErrorNoNetwork) {
         return Tr(i18n::StringId::InstallNoNetwork);
     }
+    if (m_install_error == install::kProbeErrorBadUrl) {
+        return Tr(i18n::StringId::InstallBadUrl);
+    }
     if (m_install_error == install::kProbeErrorNotRange) {
         return Tr(i18n::StringId::InstallRangeUnsupported);
     }
