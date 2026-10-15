@@ -28,8 +28,11 @@ struct PackageInfo {
     std::vector<std::uint8_t> certificate;
 };
 
-/* Reads the directory, the meta NCA's header (decrypted through spl) and its CNMT payload, plus
-   the ticket pair.  After this the caller knows what the package is; nothing is written yet. */
+/* Reads the container's directory and the ticket pair, and points at the meta content by name
+   (`meta_content_name`; a container that stores it compressed names it `.cnmt.ncz`).  The CNMT
+   itself is *not* read here: it lives inside that content, which only the system's own file layer
+   can open, so the device side installs that one content and mounts it (GameInstall::Prepare).
+   After this the caller knows what the container holds; nothing is written yet. */
 bool ReadPackage(ContainerReader &reader, std::string_view name, std::uint64_t container_size,
                  PackageInfo *out, std::string *error);
 

@@ -18,6 +18,7 @@
 
 #include "install/container.hpp"
 #include "install/install_task.hpp"
+#include "install/ncz.hpp"
 #include "install/nx_services.hpp"
 #include "install/options.hpp"
 
@@ -75,9 +76,14 @@ public:
        This exists because the meta (CNMT) and control (NACP) contents have to be *readable*, and
        the only reader that understands how they are encrypted is the system's own file layer --
        the reference implementation does exactly this: install the content, ask ncm for the
-       placeholder's path, mount it, read the file out.  Nothing here decrypts anything. */
+       placeholder's path, mount it, read the file out.  Nothing here decrypts anything.
+
+       `ncz` is that entry's NCZ table when the container stores it compressed (NSZ/XCZ): the
+       placeholder has to hold the *NCA*, so the stream is decoded on the way in -- the reference
+       implementation runs every collection through its decompressor, including this one.  A null
+       table means the entry is a plain NCA and its bytes are copied. */
     bool InstallContentForRead(ContainerReader &reader, const TaskContent &content,
-                               Placeholder *out, std::string *error);
+                               const NczInfo *ncz, Placeholder *out, std::string *error);
 
     /* The file-system path of a placeholder, which is what gets mounted. */
     bool PlaceholderFilePath(const Placeholder &placeholder, std::string *out, std::string *error);

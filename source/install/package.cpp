@@ -184,7 +184,10 @@ bool ReadPackage(ContainerReader &reader, std::string_view name, std::uint64_t c
        it, and it saves decrypting headers until the right one is found. */
     const ContainerEntry *meta = nullptr;
     for (const auto &entry : out->container.contents) {
-        if (EndsWith(entry.name, ".cnmt.nca")) {
+        /* Both spellings: a container that stores its meta content compressed (an NSZ/XCZ made by
+           a tool that compresses more than the reference's own dumper does) names it `.cnmt.ncz`,
+           and the reference implementation looks for both. */
+        if (EndsWith(entry.name, ".cnmt.nca") || EndsWith(entry.name, ".cnmt.ncz")) {
             meta = &entry;
             break;
         }

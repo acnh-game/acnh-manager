@@ -788,6 +788,20 @@ void TestContainer() {
     CHECK(nsz.compressed);
     CHECK(nsz.contents.size() == 2);
 
+    /* A container whose *meta content* is compressed too: a tool that compresses more than the
+       reference's own dumper does names it `<id>.cnmt.ncz`, and the package read has to find it --
+       otherwise the install reports "this package has no meta content" on a package that plainly
+       has one (the reference implementation looks for both spellings). */
+    {
+        auto packed_meta = MakePfs0({{"3c38f213ac463876a7cb515ae54d7599.cnmt.ncz", 0x200},
+                                     {"80cbc793d37b6f493ba53561106bb5c6.ncz", 0x100}});
+        const std::uint64_t packed_size = packed_meta.size();
+        MemoryReader packed_reader(std::move(packed_meta));
+        acnh_manager::install::PackageInfo package;
+        CHECK(ReadPackage(packed_reader, "game.nsz", packed_size, &package, &error));
+        CHECK(package.meta_content_name == "3c38f213ac463876a7cb515ae54d7599.cnmt.ncz");
+    }
+
     /* A card dump: "HEAD" header, root HFS0, secure partition. */
     auto xci = MakeXci({{"aaa.nca", 0x200}, {"bbb.nca", 0x100}});
     const std::uint64_t xci_size = xci.size();
@@ -805,6 +819,40 @@ void TestContainer() {
     CHECK(OpenContainer(xci_reader, "card.xcz", xci_size, &xcz, &error));
     CHECK(xcz.kind == ContainerKind::Xcz);
     CHECK(xcz.compressed);
+
+    /* The contents of a compressed container are `.ncz` entries, and the parser has to hand them
+       over as compressed contents carrying the bytes they occupy on the card -- the decoded size
+       only becomes known when the NCZ tables are read (host side: TestNczTables; on the device:
+       GameInstall::Prepare, which is the same path the NSZ install verified).  Both container
+       families are checked, because an XCZ compresses inside its partitions exactly like an NSZ
+       does at the top level (the reference's own dumper only compresses the Program and PublicData
+       NCAs and copies every table verbatim). */
+    const char *kNczName = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ncz";
+    const char *kNcaName = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.nca";
+    auto nsz_contents = MakePfs0({{kNczName, 0x200}, {kNcaName, 0x100}});
+    const std::uint64_t nsz_size = nsz_contents.size();
+    MemoryReader nsz_reader(std::move(nsz_contents));
+    ContainerInfo packed;
+    CHECK(OpenContainer(nsz_reader, "game.nsz", nsz_size, &packed, &error));
+    CHECK(packed.compressed);
+    CHECK(packed.contents.size() == 2);
+    CHECK(packed.contents[0].name == kNczName);
+    CHECK(packed.contents[0].compressed);
+    CHECK(packed.contents[0].packed_size == 0x200);
+    CHECK(!packed.contents[1].compressed);
+    CHECK(packed.contents[1].size == packed.contents[1].packed_size);
+
+    auto xcz_contents = MakeXci({{kNczName, 0x200}, {kNcaName, 0x100}});
+    const std::uint64_t xcz_size = xcz_contents.size();
+    MemoryReader xcz_reader(std::move(xcz_contents));
+    ContainerInfo compressed_card;
+    CHECK(OpenContainer(xcz_reader, "card.xcz", xcz_size, &compressed_card, &error));
+    CHECK(compressed_card.kind == ContainerKind::Xcz);
+    CHECK(compressed_card.compressed);
+    CHECK(compressed_card.contents.size() == 2);
+    CHECK(compressed_card.contents[0].compressed);
+    CHECK(compressed_card.contents[0].packed_size == 0x200);
+    CHECK(!compressed_card.contents[1].compressed);
 
     /* Rejections.  Each one has to fail with an explanation, never with a half-filled result. */
     auto mod_in_disguise = MakePfs0({{"romfs/Model/Item.bin", 0x20}});

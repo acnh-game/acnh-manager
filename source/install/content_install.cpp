@@ -1,5 +1,7 @@
 #include "install/content_install.hpp"
 
+#include <zstd.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -7,6 +9,8 @@
 #include <cstring>
 
 #include "install/nca.hpp"
+#include "install/nca_crypto.hpp"
+#include "install/ncz.hpp"
 #include "util/fs_path.hpp"
 
 namespace acnh_manager::install {
@@ -645,7 +649,8 @@ bool ContentInstaller::DropPlaceholders(const std::vector<Placeholder> &placehol
 }
 
 bool ContentInstaller::InstallContentForRead(ContainerReader &reader, const TaskContent &content,
-                                             Placeholder *out, std::string *error) {
+                                             const NczInfo *ncz, Placeholder *out,
+                                             std::string *error) {
     if (!EnsureOpen(error)) {
         return false;
     }
@@ -673,22 +678,134 @@ bool ContentInstaller::InstallContentForRead(ContainerReader &reader, const Task
        serves the control content and any future "read one file out of a big content" case. */
     std::vector<std::uint8_t> buffer(4 * 1024 * 1024);
     std::uint64_t written = 0;
-    while (written < content.size) {
-        const std::uint64_t chunk =
-            std::min<std::uint64_t>(buffer.size(), content.size - written);
-        if (!reader.Read(content.offset + written, static_cast<std::size_t>(chunk), buffer.data())) {
+    if (ncz == nullptr) {
+        while (written < content.size) {
+            const std::uint64_t chunk =
+                std::min<std::uint64_t>(buffer.size(), content.size - written);
+            if (!reader.Read(content.offset + written, static_cast<std::size_t>(chunk),
+                             buffer.data())) {
+                *error = "the source stopped early while reading " + content.name;
+                ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+                return false;
+            }
+            rc = ncmContentStorageWritePlaceHolder(&m_storage, &placeholder, written, buffer.data(),
+                                                   static_cast<std::size_t>(chunk));
+            if (R_FAILED(rc)) {
+                *error = Describe("writing into the placeholder", rc);
+                ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+                return false;
+            }
+            written += chunk;
+        }
+    } else {
+        /* A compressed entry (NSZ/XCZ): the placeholder holds the NCA, so the stream is decoded on
+           the way in.  The NCA header sits verbatim at the front of the `.ncz`, and the payload is
+           one zstd stream that decodes to the rest -- the same shape the install path reads.  The
+           sections that were stored decrypted are encrypted again with the key and counter the
+           file carries, so the console mounts exactly the bytes it would have written itself. */
+        const auto write_at = [&](const std::uint8_t *data, std::size_t size) -> bool {
+            const Result write_rc = ncmContentStorageWritePlaceHolder(
+                &m_storage, &placeholder, written, data, size);
+            if (R_FAILED(write_rc)) {
+                *error = Describe("writing into the placeholder", write_rc);
+                return false;
+            }
+            written += size;
+            return true;
+        };
+        const std::size_t header = static_cast<std::size_t>(
+            std::min<std::uint64_t>(kNczHeaderSize, content.size));
+        std::vector<std::uint8_t> plain(header);
+        if (header > 0 && !reader.Read(content.offset, header, plain.data())) {
             *error = "the source stopped early while reading " + content.name;
             ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
             return false;
         }
-        rc = ncmContentStorageWritePlaceHolder(&m_storage, &placeholder, written, buffer.data(),
-                                               static_cast<std::size_t>(chunk));
-        if (R_FAILED(rc)) {
-            *error = Describe("writing into the placeholder", rc);
+        if (!write_at(plain.data(), plain.size())) {
             ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
             return false;
         }
-        written += chunk;
+        ZSTD_DStream *stream = ZSTD_createDStream();
+        if (stream == nullptr || ZSTD_isError(ZSTD_initDStream(stream))) {
+            ZSTD_freeDStream(stream);
+            *error = "cannot start the decoder for the compressed content";
+            ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+            return false;
+        }
+        std::vector<std::uint8_t> input;
+        std::size_t input_pos = 0;
+        std::uint64_t payload_read = 0;
+        bool exhausted = false;
+        bool ok = true;
+        std::vector<std::uint8_t> plain_out(buffer.size());
+        while (ok && written < content.size) {
+            if (input_pos >= input.size() && !exhausted) {
+                const std::uint64_t left = ncz->payload_size - payload_read;
+                if (left == 0) {
+                    exhausted = true;
+                    continue;
+                }
+                const std::size_t chunk = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(buffer.size(), left));
+                input.resize(chunk);
+                input_pos = 0;
+                if (!reader.Read(content.offset + ncz->payload_offset + payload_read, chunk,
+                                 input.data())) {
+                    *error = "the source stopped early while reading " + content.name;
+                    ok = false;
+                    break;
+                }
+                payload_read += chunk;
+            }
+            ZSTD_inBuffer in{input.data() + input_pos, input.size() - input_pos, 0};
+            ZSTD_outBuffer decoded{plain_out.data(), plain_out.size(), 0};
+            const std::size_t res = ZSTD_decompressStream(stream, &decoded, &in);
+            if (ZSTD_isError(res)) {
+                *error = "the compressed content could not be decoded";
+                ok = false;
+                break;
+            }
+            input_pos += in.pos;
+            if (decoded.pos > 0) {
+                /* The bytes go in where they belong in the *content*: the payload decodes to the
+                   content from kNczHeaderSize on. */
+                const std::uint64_t base = written;
+                for (const NczSection &section : ncz->sections) {
+                    if (!section.Encrypted()) {
+                        continue;
+                    }
+                    const std::uint64_t lo = std::max(section.offset, base);
+                    const std::uint64_t hi = std::min(section.End(), base + decoded.pos);
+                    if (lo >= hi) {
+                        continue;
+                    }
+                    const std::uint64_t aligned = lo & ~std::uint64_t{0xF};
+                    const std::array<std::uint8_t, 16> counter =
+                        NczSectionCounter(section, aligned);
+                    AesCtrRange(section.key.data(), counter.data(), lo,
+                                plain_out.data() + (lo - base),
+                                static_cast<std::size_t>(hi - lo));
+                }
+                if (!write_at(plain_out.data(), decoded.pos)) {
+                    ok = false;
+                    break;
+                }
+            } else if (exhausted && input_pos >= input.size()) {
+                *error = "the compressed content ended before the whole NCA was decoded";
+                ok = false;
+                break;
+            }
+        }
+        ZSTD_freeDStream(stream);
+        if (!ok) {
+            ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+            return false;
+        }
+        if (written != content.size) {
+            *error = "the compressed content did not produce the whole NCA";
+            ncmContentStorageDeletePlaceHolder(&m_storage, &placeholder);
+            return false;
+        }
     }
     rc = ncmContentStorageFlushPlaceHolder(&m_storage);
     if (R_FAILED(rc)) {

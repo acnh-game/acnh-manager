@@ -109,20 +109,22 @@ bool GameInstall::Prepare(std::string *error) {
     /* An NSZ/XCZ carries its large NCAs as NCZ streams, so the size an entry stands for is not the
        bytes on the card.  Read each stream's tables now: everything after this point (the
        placeholder size, the progress numbers, the decoders) works with the NCA's own size. */
-    if (m_package.container.compressed) {
-        for (auto &entry : m_package.container.contents) {
-            if (!entry.compressed) {
-                continue;
-            }
-            NczInfo info;
-            if (!ReadNczInfo(entry, &info, error)) {
-                m_status.stage = InstallStage::Failed;
-                m_status.error = *error;
-                return false;
-            }
-            entry.size = info.nca_size;
-            m_ncz_info[entry.name.substr(0, 32)] = std::move(info);
+    /* Driven by the entries, not by the file name: a `.ncz` inside a container called `.nsp` (a
+       renamed file, or a container a future tool compresses differently) still has to be decoded,
+       and its size in the table is the *packed* one -- treating it as an NCA would write a short
+       placeholder and a title that cannot launch. */
+    for (auto &entry : m_package.container.contents) {
+        if (!entry.compressed) {
+            continue;
         }
+        NczInfo info;
+        if (!ReadNczInfo(entry, &info, error)) {
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+        entry.size = info.nca_size;
+        m_ncz_info[entry.name.substr(0, 32)] = std::move(info);
     }
     /* The CNMT and the NACP live *inside* their contents, and how those contents are encrypted is
        the system's business: write the meta content first, ask ncm where its placeholder lives,
@@ -391,7 +393,11 @@ bool GameInstall::Prepare(std::string *error) {
             Placeholder placeholder;
             std::string path;
             std::string nacp_error;
-            if (!m_installer.InstallContentForRead(m_reader, control, &placeholder, &nacp_error)) {
+            const auto control_ncz = m_ncz_info.find(control.content_id);
+            if (!m_installer.InstallContentForRead(
+                    m_reader, control,
+                    control_ncz == m_ncz_info.end() ? nullptr : &control_ncz->second, &placeholder,
+                    &nacp_error)) {
                 nacp_note = "install-failed: " + nacp_error;
             } else if (!m_installer.PlaceholderFilePath(placeholder, &path, &nacp_error)) {
                 nacp_note = "path-failed: " + nacp_error;
@@ -732,7 +738,11 @@ bool GameInstall::ReadMetaContent(const ContainerEntry &entry, Placeholder *out_
     content.content_id = entry.name.substr(0, 32);
     content.kind = ContentKind::Meta;
     Placeholder placeholder;
-    if (!m_installer.InstallContentForRead(m_reader, content, &placeholder, error)) {
+    const auto meta_ncz = m_ncz_info.find(content.content_id);
+    if (!m_installer.InstallContentForRead(m_reader, content,
+                                           meta_ncz == m_ncz_info.end() ? nullptr
+                                                                        : &meta_ncz->second,
+                                           &placeholder, error)) {
         return false;
     }
     std::string path;
@@ -804,7 +814,36 @@ bool GameInstall::ReadNczInfo(const ContainerEntry &entry, NczInfo *out, std::st
         *error = "cannot read the compressed content's tables";
         return false;
     }
-    return ParseNczTables(tables.data(), tables.size(), header, entry.packed_size, out, error);
+    if (!ParseNczTables(tables.data(), tables.size(), header, entry.packed_size, out, error)) {
+        return false;
+    }
+    /* The NCA's own header is verbatim at the front of the `.ncz`, and it also states the NCA's
+       size.  The sections' end is the fallback (and what a real package's tables agree with), but
+       the header is authoritative: a package whose last section stops short of the file would
+       otherwise get a short placeholder, which the console answers with "cannot start the
+       software" -- the same class of failure as the record naming a content nobody installed. */
+    {
+        std::vector<std::uint8_t> encrypted(kNcaHeaderSize);
+        std::vector<std::uint8_t> decrypted(kNcaHeaderSize);
+        std::string header_error;
+        if (m_reader.Read(entry.offset, encrypted.size(), encrypted.data()) &&
+            DecryptNcaHeader(encrypted.data(), decrypted.data(), &header_error)) {
+            NcaHeaderInfo nca_header;
+            if (ParseNcaHeader(decrypted.data(), decrypted.size(), &nca_header, &header_error)) {
+                if (nca_header.size > out->nca_size) {
+                    Note("install: %s decodes to %llu bytes (sections end at %llu)",
+                         entry.name.c_str(),
+                         static_cast<unsigned long long>(nca_header.size),
+                         static_cast<unsigned long long>(out->nca_size));
+                    out->nca_size = nca_header.size;
+                }
+            } else {
+                Note("install: %s has no readable NCA header: %s", entry.name.c_str(),
+                     header_error.c_str());
+            }
+        }
+    }
+    return true;
 }
 
 bool GameInstall::DecodeUntil(NczStream &stream, std::uint64_t nca_size, std::uint64_t need_until,
