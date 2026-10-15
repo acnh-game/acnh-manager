@@ -58,12 +58,8 @@ std::string ProbeErrorText(CURLcode code) {
 /* The response headers, captured so `Content-Range` can be read: libcurl exposes the reply's own
    length through CURLINFO_CONTENT_LENGTH_DOWNLOAD, which for the probe is 1, and the *container's*
    length only lives in that header. */
-struct Headers {
-    std::string content_range;
-};
-
 std::size_t OnHeader(char *data, std::size_t size, std::size_t count, void *user) {
-    auto *headers = static_cast<Headers *>(user);
+    auto *headers = static_cast<HttpSourceHeaders *>(user);
     const std::size_t bytes = size * count;
     std::string line(data, bytes);
     constexpr const char *kKey = "content-range:";
@@ -147,15 +143,18 @@ bool HttpSource::Open(const std::string &url, std::uint64_t *size, std::string *
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-    /* The probe: one byte, and only a 206 with a Content-Range counts. */
+    /* The probe: one byte, and only a 206 with a Content-Range counts.  The *body* target is a stack
+       local here and in Read(); unlike the header sink that is fine, because every request sets it
+       again right before its own perform -- the header pointer, by contrast, libcurl keeps for the
+       life of the handle, which is why that one is a member. */
     std::uint8_t byte = 0;
     Body probe{&byte, 1, 0, false};
-    Headers headers;
+    m_headers.content_range.clear();
     curl_easy_setopt(curl, CURLOPT_RANGE, "0-0");
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, OnBody);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &probe);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, OnHeader);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &headers);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &m_headers);
     CURLcode code = curl_easy_perform(curl);
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
@@ -176,7 +175,7 @@ bool HttpSource::Open(const std::string &url, std::uint64_t *size, std::string *
         return false;
     }
     std::uint64_t total = 0;
-    switch (JudgeRangeProbe(status, headers.content_range, &total)) {
+    switch (JudgeRangeProbe(status, m_headers.content_range, &total)) {
         case RangeProbe::Supported:
             break;
         case RangeProbe::NotRange:

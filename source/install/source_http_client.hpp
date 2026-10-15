@@ -24,6 +24,16 @@
 
 namespace acnh_manager::install {
 
+/* The response headers libcurl hands back, kept alive for as long as the curl handle holds the
+   pointer we give it (`CURLOPT_HEADERDATA`) -- that is the whole download, not just the call that
+   set the option.  A stack local in `Open()` was the console crash of 2026-10-15: the *next*
+   request (the first ranged read of the transfer) had libcurl write `Content-Range` into a dead
+   frame, and Atmosphere's crash report shows exactly that -- a data abort inside
+   `Curl_http_readwrite_headers`, with the header text still in the registers. */
+struct HttpSourceHeaders {
+    std::string content_range;
+};
+
 class HttpSource final : public ContainerReader {
 public:
     HttpSource();
@@ -45,6 +55,8 @@ private:
     std::uint64_t m_size{0};
     bool m_open{false};
     void *m_curl{nullptr}; /* CURL*, kept alive so the connection is reused across reads */
+    /* Ours, not a local in Open(): libcurl keeps the pointer we hand it (see the struct's note). */
+    HttpSourceHeaders m_headers;
     /* The console's socket service, held from the probe until Close().  libcurl's Switch port never
        brings it up itself, and without it every connection fails with "couldn't connect" -- which is
        what this source did on hardware before this existed (see net/socket_session.hpp). */

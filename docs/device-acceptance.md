@@ -880,9 +880,28 @@ http-status:404>`,以及成功那次的 `install: download <地址> (range probe
 | https(TLS) | 服务端 `--redirect` 302 跳到**用户自己的 nginx(8443,自签名证书)**:主机跟随后取到 206 区间;`nginx access.log` 里是主机(192.168.8.160)、`User-Agent: ACNH-Manager`、一串 `206` |
 | 失败条文案 | 连接被拒时显示 `连不上这个地址,检查地址与端口是否正确`(不再是"先在系统设置里连上网络") |
 
-**还差的**:一次**完整的下载安装**(真正把包传进占位并落地)—— 手头这份 337 MB 的包机器上已经装了,
-所以走的是"已安装,跳过";要跑完整的传输需要一个机器上**没有**的包(把它的地址挂上去即可)。
-传输本身与来源无关(下载来源只是另一个 `ContainerReader`),而本机文件来源的完整传输早已验过。
+**完整传输:先崩了一次,修好后走通(同一天)**。把这份包从机器上删掉(这样不会再走"已安装,跳过"),
+再次下载安装 —— 主机**整机崩溃**(Atmosphere 的崩溃提示屏)。取证与结论:
+
+- `sdmc:/atmosphere/crash_reports/01792057938_010000000000100d.log`:进程 `hbloader`(就是我们这栋
+  NRO)、`Data Abort`、fault address `0x1`,寄存器里赫然是 `Content-Range` 的文本
+  (`" bytes 337…/337152800` + CRLF);把 PC/LR 与调用栈在本地 ELF 上符号化
+  (`aarch64-none-elf-addr2line`)得到:
+  `GameInstall::Step → ReadCompressed → curl_easy_perform → Curl_http_readwrite_headers →
+  Curl_client_write → 我们的 OnHeader → std::string::assign`。
+- **根因**:`CURLOPT_HEADERDATA` 被设成 `Open()` 里的**栈局部对象**,而 libcurl 会在**这个 handle 的
+  每一次请求**上都调用它(传输期间每一次区间读都要重新解析响应头)。`Open()` 一返回那对象就死了,
+  于是 libcurl 一直往一个野指针写 `Content-Range` —— 栈被写坏,最终数据异常。跳过态之所以前几次都没炸,
+  是因为读的次数少、野指针恰好落在还"能用"的栈上;这次读得多了就踩爆。
+- **修法**:把响应头的接收目标做成 `HttpSource` 的成员,活到 `Close()` 为止(提交 `installer: the header sink must outlive Open`);
+  同族教训记在设计文档第 11 节:`libcurl 会长期持有我们交给它的指针`。
+- **复验(与崩溃时同一套配置:主机 → 本机 302 → 用户的 nginx(8443,自签名)→ 同一个包)**:确认页
+  「开始安装 / Lost Twins 2 / 1.0.1 / 本体 / 0.4 GB / microSD」→ 按 `A` →「正在接收 / 第 2/3 个内容 /
+  28%」→ **「安装完成 / 已写入 microSD · 3 个内容 · 0.4 GB」**;桌面上出现 Lost Twins 2 的方块;
+  `log.txt` 里 `finish tickets 1 of 1 imported`、`record read-back rc=0x0 contents=4`、
+  `finished stage=4` 齐全,**没有再崩**。
+- 顺带确认:`/Nintendo/Contents/placehld` 在成功安装后是空的 —— 崩溃那次的占位**随重启被系统清掉**
+  (占位不跨重启),所以没有留下空间泄漏;这也说明"中断续传"真正要覆盖的是**不重启**的情形(第 10 节)。
 
 ## XCI(卡带镜像)的安装:解析与安装通过,启动待解决(2026-10-15 凌晨)
 
