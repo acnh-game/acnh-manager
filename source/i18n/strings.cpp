@@ -183,7 +183,6 @@ constexpr Entry kStrings[] = {
     {"结果", "Result"},  /* ResultWhy */
     {"现在", "Now"},  /* ResultNow */
     {"可以安装 agent 了(首页按 A)", "The agent can be installed now (press A on the home screen)"},  /* ResultAgentReady */
-    {"完整记录在 log.txt 里", "The full record is in log.txt"},  /* ResultMoreInDetails */
     {"--.--", "--.--"},  /* StorageUnavailable */
     {"microSD", "microSD"},  /* StorageSdCard */
     {"系统", "System"},  /* StorageSystem */
@@ -213,6 +212,12 @@ constexpr Entry kStrings[] = {
     /* "<type> xN": one piece of a dump that carries more than one meta ("更新 ×1 · 追加内容 ×2").
        The word order works in both languages because the count follows the type. */
     {"%s ×%d", "%s x%d"},  /* MetaCount */
+    /* Short names for the "what comes along" summary on the confirm card: the row's own values
+       stay spelled out ("Base game", "Add-on"), but the summary shares its line with the type and
+       has to stay clear of the cover -- the English long forms push it under the picture. */
+    {"本体", "Base"},  /* MetaTypeBaseShort */
+    {"更新", "Update"},  /* MetaTypeUpdateShort */
+    {"追加内容", "DLC"},  /* MetaTypeDlcShort */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

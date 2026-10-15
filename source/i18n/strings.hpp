@@ -199,7 +199,6 @@ enum class StringId {
     ResultWhy,
     ResultNow,
     ResultAgentReady,
-    ResultMoreInDetails,
     StorageUnavailable,
     StorageSdCard,
     StorageSystem,
@@ -223,6 +222,9 @@ enum class StringId {
     ResultAgentFollowUpInstalled,
     ResultAgentFollowUpFailed,
     MetaCount,
+    MetaTypeBaseShort,
+    MetaTypeUpdateShort,
+    MetaTypeDlcShort,
 };
 
 const char *Text(StringId id, Language language);

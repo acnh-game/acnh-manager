@@ -250,12 +250,13 @@ bool GameInstall::Prepare(std::string *error) {
         std::string parts;
         if (updates > 0) {
             parts = i18n::Format(i18n::StringId::MetaCount,
-                                 i18n::Text(i18n::StringId::TypeUpdate, i18n::Current()), updates);
+                                 i18n::Text(i18n::StringId::MetaTypeUpdateShort, i18n::Current()),
+                                 updates);
         }
         if (addons > 0) {
             const std::string addon = i18n::Format(
-                i18n::StringId::MetaCount, i18n::Text(i18n::StringId::TypeDlc, i18n::Current()),
-                addons);
+                i18n::StringId::MetaCount,
+                i18n::Text(i18n::StringId::MetaTypeDlcShort, i18n::Current()), addons);
             parts += parts.empty() ? addon : " · " + addon;
         }
         m_status.extra_summary = parts;

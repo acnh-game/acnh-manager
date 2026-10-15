@@ -3438,10 +3438,15 @@ void App::RenderInstallConfirm(Surface surface) {
 
     const int row_x = card_x + 36;
     const int value_x = card_x + 296;
+    /* The values live between the label column and the cover, and one of them can be long -- the
+       type row carries what rides along ("Base + Update x1 · DLC x2"), whose English spelling used
+       to run under the picture.  Fitted to that room, whichever language it is in. */
+    const int value_width = card_x + 36 + text_width - value_x;
     int y = card_top + 136 + name_block;
     const auto row = [&](i18n::StringId label, const std::string &text) {
         m_font.Draw(surface, row_x, y, kFontBody, kSubtle, Tr(label));
-        m_font.Draw(surface, value_x, y, kFontBody, kText, text.c_str());
+        m_font.Draw(surface, value_x, y, kFontBody, kText,
+                    m_font.Fit(text, kFontBody, value_width, 1).c_str());
         y += 46;
     };
     if (!m_install_status.game_version.empty()) {
@@ -3692,10 +3697,10 @@ void App::RenderInstallResult(Surface surface) {
             m_font.Draw(surface, card_x + 40, now_y, kFontBody, kWarn, note, text_width);
         }
     }
-    if (status.modified) {
-        m_font.Draw(surface, card_x + 40, card_top + card_height - 40, kFontSmall, kWarn,
-                    Tr(i18n::StringId::ResultMoreInDetails));
-    }
+    /* A package whose content we had to transform (a cartridge dump's distribution bit) used to
+       carry a "the full record is in log.txt" line here.  It told the player nothing they could
+       act on -- the transformation is what makes the install work at all -- and the log keeps the
+       record either way, so the line is gone. */
 }
 
 void App::RenderProgress(Surface surface) {
