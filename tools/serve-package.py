@@ -9,6 +9,9 @@ can also break it on purpose, because the interesting cases are the refusals:
     tools/serve-package.py <package> --port 8000              # ranges: the "it works" case (T4)
     tools/serve-package.py <package> --no-range               # 200 + whole file: T37
     tools/serve-package.py <package> --status 404             # the address is wrong: T38
+    tools/serve-package.py --redirect <url> --port 8000       # 302 to it: lets a short address
+                                                              # (typed on the console) reach a long
+                                                              # one, e.g. your own https server
 
 It prints the URLs to type on the console (every non-loopback address of this machine, since the
 console needs one it can reach) and logs each request with its status and byte count, so the
@@ -152,7 +155,8 @@ def local_addresses(port: int) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("package", type=pathlib.Path)
+    parser.add_argument("package", type=pathlib.Path, nargs="?",
+                        help="the file to serve (not needed with --redirect)")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--no-range", action="store_true",
@@ -164,12 +168,19 @@ def main() -> int:
                              "address reach a target that is not (TLS, long paths)")
     args = parser.parse_args()
 
-    if not args.package.is_file():
-        print("not a file: %s" % args.package, file=sys.stderr)
-        return 2
-
-    Handler.file_path = args.package.resolve()
-    Handler.file_size = args.package.stat().st_size
+    if args.redirect:
+        # Nothing is served from disk in this mode, so no file is needed: any path redirects.
+        Handler.file_path = pathlib.Path("/dev/null")
+        Handler.file_size = 0
+    else:
+        if args.package is None:
+            print("give a package file, or use --redirect", file=sys.stderr)
+            return 2
+        if not args.package.is_file():
+            print("not a file: %s" % args.package, file=sys.stderr)
+            return 2
+        Handler.file_path = args.package.resolve()
+        Handler.file_size = args.package.stat().st_size
     if args.redirect:
         Handler.mode = "redirect"
         Handler.redirect_to = args.redirect
@@ -182,11 +193,21 @@ def main() -> int:
         Handler.mode = "range"
 
     server = http.server.ThreadingHTTPServer((args.bind, args.port), Handler)
-    print("serving %s (%d bytes) in %s mode" % (args.package.name, Handler.file_size,
-                                                Handler.mode))
-    for address in local_addresses(args.port):
-        print("  http://%s:%d/%s" % (address, args.port, args.package.name))
-    if not local_addresses(args.port):
+    if args.redirect:
+        print("mode redirect -> %s" % args.redirect)
+    else:
+        print("serving %s (%d bytes) in %s mode" % (args.package.name, Handler.file_size,
+                                                    Handler.mode))
+    addresses = local_addresses(args.port)
+    if args.redirect:
+        # The address to type on the console: shortest possible, any path redirects.
+        print("type this on the console:")
+        for address in addresses:
+            print("  %s:%d" % (address, args.port))
+    else:
+        for address in addresses:
+            print("  http://%s:%d/%s" % (address, args.port, args.package.name))
+    if not addresses:
         print("  (no non-loopback address found: check the machine's network)")
     print("stop with Ctrl-C")
     try:
