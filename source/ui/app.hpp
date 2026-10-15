@@ -203,6 +203,10 @@ private:
        confirm / progress / result screens join them next. */
     enum class InstallScreen { Choose, Files, Url, Confirm, Progress, Result };
     InstallScreen m_install_screen{InstallScreen::Choose};
+    /* The address screen offers two ways in (the system keyboard now, the browser page that can
+       submit an address once the server exists).  Neither works without a network, so the screen
+       asks first and says so instead of letting a download fail a minute later. */
+    bool m_install_no_network{false};
     ui::ListView m_file_list;
     std::string m_file_dir{"/"};
     /* Reads the current directory into the list: directories first, then the files this app can
@@ -212,6 +216,17 @@ private:
     /* The download source's own screen: the address to type, and the reason it was refused when
        the address or the network did not hold up. */
     void RenderInstallUrl(Surface surface);
+    /* Enters that screen: clears the last reason and asks the network question. */
+    void EnterInstallUrl();
+    /* Re-asks it (the screen's A while the "connect first" card is up, and the retry path). */
+    void RefreshNetworkState();
+    /* The small print under the addresses: the rule an address has to satisfy, and what this app
+       installs.  `with_range` is false in the failure state, where the strip above already says it. */
+    void DrawInstallUrlNotes(Surface surface, int y, bool with_range);
+    /* The failure the address screen is showing, in the player's language: the download source
+       hands over short codes ("no-network", "range-unsupported", "http-status:404"), and anything
+       else is its own sentence. */
+    std::string InstallErrorText() const;
     /* Two footer hints side by side, each of them a control: what is drawn as pressable has to be
        pressable.  The confirm screen and the address screen both use it. */
     void DrawFooterHintPair(Surface surface, int y, i18n::StringId first, int first_action,

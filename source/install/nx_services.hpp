@@ -95,4 +95,10 @@ private:
     bool m_avm_open{false};
 };
 
+/* True when the console has an IP address.  Both ways of getting a download address need a
+   network -- fetching one, and serving the browser page that can submit one -- so the installer
+   asks before it offers either, and the answer is worth a line in the log.  False with an error
+   when the network service cannot be opened at all (which is also "no address to show"). */
+bool HasNetworkAddress(bool *out, std::string *error);
+
 }  // namespace acnh_manager::install

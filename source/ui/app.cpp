@@ -132,6 +132,7 @@ constexpr int kActionInstallPickRow = 19; /* a row of the installer's file list 
 constexpr int kActionInstallStart = 20;   /* "start" on the confirm screen (A) */
 constexpr int kActionInstallBack = 21;    /* the installer's footer "Ⓑ 返回" hint (same as the key) */
 constexpr int kActionInstallUrl = 22;     /* the address screen's "type it on the console" (A) */
+constexpr int kActionInstallRecheck = 23; /* the same screen, when there is no network: ask again */
 
 /* Where each header entry's key badge sits (the layout needs the same answer for the drawn pill
    and for the touch target -- see RenderHeader).  Same order as the tabs there: + installer,
@@ -1081,10 +1082,15 @@ void App::HandleKeys(u32 down) {
                 break;
             }
             if (m_install_screen == InstallScreen::Url) {
-                /* A opens the system keyboard; B (handled above) leaves the screen, and from the
-                   source screen that leaves the installer. */
+                /* A opens the system keyboard -- or, when there is no network to download over,
+                   asks again whether there is one now.  B (handled above) leaves the screen, and
+                   from the source screen that leaves the installer. */
                 if ((down & HidNpadButton_A) != 0) {
-                    StartDownload();
+                    if (m_install_no_network) {
+                        RefreshNetworkState();
+                    } else {
+                        StartDownload();
+                    }
                 }
                 break;
             }
@@ -1243,11 +1249,10 @@ void App::ActivateAction(int id) {
         case kActionInstallDownload:
             /* The address screen: nothing is downloaded until the player has typed an address,
                because this app does not host or hand out any. */
-            m_install_origin = InstallScreen::Url;
-            m_install_error.clear();
-            m_install_screen = InstallScreen::Url;
+            EnterInstallUrl();
             break;
         case kActionInstallUrl: StartDownload(); break;
+        case kActionInstallRecheck: RefreshNetworkState(); break;
         case kActionInstallUpload: Trace("install: source = upload"); break;
         case kActionUninstall:
             if (m_page == Page::Home && m_have_state) {
@@ -1591,9 +1596,16 @@ void App::RenderFooter(Surface surface) {
         return;
     }
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Url) {
-        /* The address screen: the keyboard is the one control, next to "leave". */
-        DrawFooterHintPair(surface, y, i18n::StringId::InstallTypeUrl, kActionInstallUrl,
-                           i18n::StringId::LabelBack, kActionInstallBack);
+        /* The address screen: one control, next to "leave".  Which control depends on whether
+           there is a network -- with none, typing an address cannot lead anywhere, so A asks
+           again instead. */
+        if (m_install_no_network) {
+            DrawFooterHintPair(surface, y, i18n::StringId::InstallRecheck, kActionInstallRecheck,
+                               i18n::StringId::LabelBack, kActionInstallBack);
+        } else {
+            DrawFooterHintPair(surface, y, i18n::StringId::InstallTypeUrl, kActionInstallUrl,
+                               i18n::StringId::LabelBack, kActionInstallBack);
+        }
         const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
                     kBuildStamp);
@@ -2931,7 +2943,7 @@ void App::StartDownload() {
        network first" is a one-step fix, and making the player type the whole address again after it
        would be the kind of thing this app is not allowed to do. */
     const std::string initial = m_download_url.empty() ? std::string("http://") : m_download_url;
-    if (!util::AskForLine(initial, Tr(i18n::StringId::InstallOpenAddress), &address, &error)) {
+    if (!util::AskForLine(initial, Tr(i18n::StringId::InstallTypeUrl), &address, &error)) {
         Trace("install: no address was entered (%s)", error.c_str());
         return;
     }
@@ -3361,46 +3373,149 @@ void App::RenderInstallFiles(Surface surface) {
 /* The download screen: one instruction, one control (the system keyboard), and the reason when an
    address was refused.  Nothing here invents an address -- the design is explicit that this app
    does not host or recommend one -- so the screen is the player's own address, typed or pasted. */
+/* The address screen.  Its shape is the one the mockups fixed: a line of context, the way in as a
+   whole clickable card, the rule the address has to satisfy as small print, and -- only when
+   something went wrong -- a strip that names the reason and the address it belongs to.
+
+   The second way in (open the console's page on a phone and paste the address there, which saves
+   typing every character) needs the HTTP server, so it lands with it; this screen is laid out so
+   that adding it below the card changes nothing else (design section 8). */
 void App::RenderInstallUrl(Surface surface) {
     m_actions.clear();
-    const int card_x = 200;
-    const int card_top = kHeaderHeight + 74;
-    const int card_width = surface.width - card_x * 2;
-    const int card_height = 260;
-    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
-    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+    const int card_x = kMargin;
+    const int card_w = surface.width - kMargin * 2;
 
-    m_font.Draw(surface, card_x + 36, card_top + 30, kFontHeading, kText,
-                Tr(i18n::StringId::InstallDownload));
-    m_font.Draw(surface, card_x + 36, card_top + 76, kFontBody, kSubtle,
-                Tr(i18n::StringId::InstallDownloadSub), card_width - 72);
-    m_font.Draw(surface, card_x + 36, card_top + 118, kFontSmall, kSubtle,
-                Tr(i18n::StringId::InstallTypeUrl));
-    /* The address that was tried, so a typo is visible without opening the keyboard again. */
-    if (!m_download_url.empty()) {
-        m_font.Draw(surface, card_x + 36, card_top + 150, kFontSmall, kText,
-                    m_font.Fit(m_download_url, kFontSmall, card_width - 72, 1).c_str());
+    m_font.Draw(surface, kMargin, kHeaderHeight + 22, kFontSmall, kSubtle,
+                Tr(i18n::StringId::InstallDownloadSub));
+
+    if (m_install_no_network) {
+        /* No network: say what to do about it, and nothing else.  An address or a page nobody can
+           reach would be worse than none at all, so neither is drawn. */
+        const int card_y = kHeaderHeight + 52;
+        const int card_h = 148;
+        FillRoundedRect(surface, card_x, card_y, card_w, card_h, 18, kBorder);
+        FillRoundedRect(surface, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 15, kCard);
+        DrawKeyBadge(surface, m_font, card_x + 46, card_y + 42, 22, "!", kWarn, kOnHeader);
+        m_font.DrawBold(surface, card_x + 82, card_y + 24, kFontHeading, kText,
+                        Tr(i18n::StringId::InstallNoNetworkTitle));
+        m_font.Draw(surface, card_x + 82, card_y + 72, kFontSmall, kSubtle,
+                    Tr(i18n::StringId::InstallNoNetworkHint), card_w - 120);
+        DrawInstallUrlNotes(surface, card_y + card_h + 20, true);
+        return;
     }
+
+    const int card_y = kHeaderHeight + 112;
+    const int card_h = 140;
+    const Rect rect{card_x, card_y, card_w, card_h};
+    FillRoundedRect(surface, rect.x, rect.y, rect.w, rect.h, 18, kBorder);
+    FillRoundedRect(surface, rect.x + 3, rect.y + 3, rect.w - 6, rect.h - 6, 15, kCard);
+    DrawKeyBadge(surface, m_font, card_x + 46, card_y + 42, 22, "A", kHeader, kOnHeader);
+    /* Centred, like the home page's main button: the badge on the left says "this is a key", and
+       centred text is what the app's other full-width buttons do. */
+    const int centre = surface.width / 2;
+    const auto centred = [&](i18n::StringId id, int size, Color color, int y) {
+        const std::string line = Tr(id);
+        m_font.Draw(surface, centre - m_font.Measure(line, size) / 2, y, size, color,
+                    line.c_str());
+    };
+    centred(i18n::StringId::InstallTypeUrl, kFontHeading, kText, card_y + 20);
+    centred(i18n::StringId::InstallUrlHint, kFontSmall, kSubtle, card_y + 62);
+    if (!m_download_url.empty()) {
+        /* The address that was tried: retrying is then a one-character job instead of typing the
+           whole thing again. */
+        const std::string last = m_font.Fit(
+            i18n::Format(i18n::StringId::InstallUrlLast, m_download_url.c_str()), kFontSmall,
+            card_w - 200, 1);
+        m_font.Draw(surface, centre - m_font.Measure(last, kFontSmall) / 2, card_y + 92,
+                    kFontSmall, kSubtle, last.c_str());
+    }
+    m_actions.push_back({kActionInstallUrl, rect, true});
+
+    /* The failure strip: the reason, and the address it belongs to. */
+    int y = card_y + card_h;
     if (!m_install_error.empty()) {
-        /* Three of these have wording of their own -- "connect first", "this address cannot be
-           resumed from" (a 200 or an unreadable Content-Range), and "the address answered with this
-           status" (404 and friends, where the number is the useful part); anything else is the
-           downloader's own sentence, which is the honest thing to show.  The strings come from the
-           download source, which is the only place that produces them. */
-        const char *reason = m_install_error.c_str();
-        std::string formatted;
-        if (m_install_error == install::kProbeErrorNoNetwork) {
-            reason = Tr(i18n::StringId::InstallNoNetwork);
-        } else if (m_install_error == install::kProbeErrorNotRange) {
-            reason = Tr(i18n::StringId::InstallRangeUnsupported);
-        } else if (m_install_error.rfind(install::kProbeErrorHttpStatusPrefix, 0) == 0) {
-            formatted = i18n::Format(
-                i18n::StringId::InstallHttpStatus,
-                m_install_error.substr(std::strlen(install::kProbeErrorHttpStatusPrefix)).c_str());
-            reason = formatted.c_str();
+        /* The reason is player-facing wording and can wrap (English is longer than Chinese), so the
+           strip is measured from what it has to hold rather than fixed: a clamped line would draw
+           outside its own border. */
+        const std::string reason = InstallErrorText();
+        const int reason_lines = m_font.LineCount(reason, kFontBody, card_w - 48);
+        const int address_lines = m_download_url.empty()
+                                      ? 0
+                                      : m_font.LineCount(m_download_url, kFontSmall, card_w - 48);
+        const int strip_h = 12 + reason_lines * m_font.LineHeight(kFontBody) + 4 +
+                            address_lines * m_font.LineHeight(kFontSmall) + 12;
+        y += 20;
+        FillRoundedRect(surface, card_x, y, card_w, strip_h, 12, kWarnTint);
+        StrokeRect(surface, card_x, y, card_w, strip_h, 2, kWarnBright);
+        m_font.DrawBold(surface, card_x + 24, y + 10, kFontBody, kWarn, reason.c_str(),
+                        card_w - 48);
+        if (!m_download_url.empty()) {
+            m_font.Draw(surface, card_x + 24,
+                        y + 12 + reason_lines * m_font.LineHeight(kFontBody) + 2, kFontSmall,
+                        kSubtle, m_font.Fit(m_download_url, kFontSmall, card_w - 48, 1).c_str());
         }
-        m_font.Draw(surface, card_x + 36, card_top + 190, kFontSmall, kWarn, reason,
-                    card_width - 72);
+        y += strip_h;
+        /* The rule the address had to satisfy is what the strip just said; only the format line
+           is worth the room here. */
+        DrawInstallUrlNotes(surface, y + 24, false);
+        return;
+    }
+    DrawInstallUrlNotes(surface, y + 44, true);
+}
+
+void App::DrawInstallUrlNotes(Surface surface, int y, bool with_range) {
+    /* Small print at the bottom of the screen: what an address has to satisfy, and what this app
+       installs.  Both are known before anything is typed -- the alternative was telling the player
+       after the address had already been refused. */
+    if (with_range) {
+        m_font.Draw(surface, kMargin, y, kFontSmall, kSubtle,
+                    Tr(i18n::StringId::InstallUrlRangeNote));
+    }
+    const std::string formats = Tr(i18n::StringId::InstallFormats);
+    m_font.Draw(surface, surface.width - kMargin - m_font.Measure(formats, kFontSmall), y,
+                kFontSmall, kSubtle, formats.c_str());
+}
+
+std::string App::InstallErrorText() const {
+    /* Three of the download source's codes have wording of their own -- "connect first", "this
+       address cannot be resumed from" (a 200, or a Content-Range we cannot read), and "the address
+       answered with this status" (404 and friends, where the number is the useful part); anything
+       else is the downloader's own sentence, which is the honest thing to show. */
+    if (m_install_error == install::kProbeErrorNoNetwork) {
+        return Tr(i18n::StringId::InstallNoNetwork);
+    }
+    if (m_install_error == install::kProbeErrorNotRange) {
+        return Tr(i18n::StringId::InstallRangeUnsupported);
+    }
+    if (m_install_error.rfind(install::kProbeErrorHttpStatusPrefix, 0) == 0) {
+        return i18n::Format(
+            i18n::StringId::InstallHttpStatus,
+            m_install_error.substr(std::strlen(install::kProbeErrorHttpStatusPrefix)).c_str());
+    }
+    return m_install_error;
+}
+
+void App::EnterInstallUrl() {
+    m_install_origin = InstallScreen::Url;
+    m_install_error.clear();
+    m_install_screen = InstallScreen::Url;
+    RefreshNetworkState();
+}
+
+void App::RefreshNetworkState() {
+    bool has = false;
+    std::string error;
+    if (!install::HasNetworkAddress(&has, &error) || !has) {
+        /* Either the service would not open or the console has no address: both close the two ways
+           in, so the screen says "connect first" and the log keeps the reason. */
+        has = false;
+    }
+    m_install_no_network = !has;
+    m_install_error.clear();
+    if (error.empty()) {
+        Trace("install: address screen network=%d", has ? 1 : 0);
+    } else {
+        Trace("install: address screen network=%d (%s)", has ? 1 : 0, error.c_str());
     }
 }
 

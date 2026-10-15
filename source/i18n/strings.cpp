@@ -149,18 +149,24 @@ constexpr Entry kStrings[] = {
     {"本机文件", "This console"},  /* InstallPickFile */
     {"从 SD 卡选一个文件安装", "Install a file from the SD card"},  /* InstallPickFileSub */
     {"下载安装", "Download and install"},  /* InstallDownload */
-    {"填写网址,下载安装", "Paste an address, download and install"},  /* InstallDownloadSub */
+    {"填写网址,下载安装 —— 边下边装", "Paste an address; it installs as it downloads"},  /* InstallDownloadSub */
     {"上传安装", "Upload and install"},  /* InstallUpload */
     {"通过手机/电脑浏览器上传安装", "Upload from a phone or computer browser"},  /* InstallUploadSub */
     {"支持 nsp / nsz / xci / xcz", "nsp / nsz / xci / xcz"},  /* InstallFormats */
     {"正在等待连接……", "Waiting for a connection..."},  /* InstallWaiting */
     {"用手机或电脑的浏览器打开下面的地址", "Open this address in a phone or computer browser"},  /* InstallOpenAddress */
     {"在网页里粘贴下载网址,或直接选一个安装包文件", "Paste a download address there, or pick a package file"},  /* InstallAddressHint */
-    {"在主机上输入网址", "Type the address on the console"},  /* InstallTypeUrl */
-    {"先在系统设置里连上网络(手机热点或同一个 Wi-Fi)", "Connect to a network first (phone hotspot or the same Wi-Fi)"},  /* InstallNoNetwork */
+    {"输入网址", "Enter address"},  /* InstallTypeUrl */
+    {"连不上这个地址,检查地址与端口是否正确", "Cannot connect to this address; check the address and port"},  /* InstallNoNetwork */
     {"请先完全退出游戏(主页上把游戏关掉)再试一次", "Close the game completely first (HOME screen, then X), then try again"},  /* InstallGameRunning */
     {"这个地址不支持断点续传,请换一个地址或用手机上传", "This address cannot be resumed; use another address or upload the file"},  /* InstallRangeUnsupported */
     {"地址打不开(HTTP %s),检查一下地址是否写对", "The address answered HTTP %s; check that it is correct"},  /* InstallHttpStatus */
+    {"用系统软键盘输入下载网址", "Type the download address on the system keyboard"},  /* InstallUrlHint */
+    {"上次:%s", "Last: %s"},  /* InstallUrlLast */
+    {"地址要支持断点续传(HTTP Range),不支持会被拒绝", "The address must support range requests, or it is refused"},  /* InstallUrlRangeNote */
+    {"请先在系统设置中连接网络", "Connect to a network in system settings first"},  /* InstallNoNetworkTitle */
+    {"连接到手机热点,或者与手机/电脑连接到同一个 Wi-Fi 下即可", "A phone hotspot, or the same Wi-Fi as your phone or computer, works"},  /* InstallNoNetworkHint */
+    {"重新检测", "Check again"},  /* InstallRecheck */
     {"重试", "Try again"},  /* InstallRetry */
     {"未完成的安装(已接收 %s)", "Unfinished install (%s received)"},  /* InstallPending */
     {"版本", "Version"},  /* ConfirmVersion */

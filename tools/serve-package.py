@@ -35,8 +35,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # request's path) and an attribute of ours on the instance would shadow it.
     file_path: pathlib.Path
     file_size: int
-    mode: str  # "range" | "no-range" | "status"
+    mode: str  # "range" | "no-range" | "status" | "redirect"
     forced_status: int
+    redirect_to: str
 
     def log_message(self, fmt: str, *args: object) -> None:  # noqa: A003 (stdlib signature)
         sys.stderr.write("[serve-package] %s\n" % (fmt % args))
@@ -48,6 +49,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.answer(send_body=True)
 
     def answer(self, send_body: bool) -> None:
+        if self.mode == "redirect":
+            # Everything redirects to `--redirect`: libcurl follows it and re-sends the Range
+            # header, so a short address that is easy to type on the console can exercise a target
+            # that would be painful to type (an https URL with a long percent-encoded path).
+            self.send_response(302)
+            self.send_header("Location", self.redirect_to)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            self.log_message("GET %s -> 302 %s", self.path, self.redirect_to)
+            return
         if self.mode == "status":
             body = b"serve-package: forced status\n"
             self.send_response(self.forced_status)
@@ -55,6 +66,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             if send_body:
                 self.wfile.write(body)
+            return
+
+        # `/` serves the package as well as its own file name: the address typed on the console
+        # then needs digits, a dot and a colon only -- no letters at all, which is the difference
+        # between a one-minute test and a five-minute one with the d-pad keyboard.
+        if self.path.split("?")[0] not in ("/", "/" + self.file_path.name):
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            self.log_message("GET %s -> 404 (only / and /%s are served)", self.path,
+                             self.file_path.name)
             return
 
         header = self.headers.get("Range", "")
@@ -137,6 +159,9 @@ def main() -> int:
                         help="ignore Range and always answer 200 with the whole file (T37)")
     parser.add_argument("--status", type=int, default=0,
                         help="answer every request with this status (T38, e.g. 404)")
+    parser.add_argument("--redirect", metavar="URL", default="",
+                        help="answer every request with 302 to URL: lets a short, typeable "
+                             "address reach a target that is not (TLS, long paths)")
     args = parser.parse_args()
 
     if not args.package.is_file():
@@ -145,7 +170,10 @@ def main() -> int:
 
     Handler.file_path = args.package.resolve()
     Handler.file_size = args.package.stat().st_size
-    if args.status:
+    if args.redirect:
+        Handler.mode = "redirect"
+        Handler.redirect_to = args.redirect
+    elif args.status:
         Handler.mode = "status"
         Handler.forced_status = args.status
     elif args.no_range:

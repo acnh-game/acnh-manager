@@ -271,4 +271,25 @@ bool NxServices::GetDisplayVersion(std::uint64_t application_id, std::string *ve
     return true;
 }
 
+bool HasNetworkAddress(bool *out, std::string *error) {
+    *out = false;
+    const Result rc = nifmInitialize(NifmServiceType_User);
+    if (R_FAILED(rc)) {
+        *error = "opening the network service failed (0x" + ToHex(&rc, sizeof(std::uint32_t)) + ")";
+        return false;
+    }
+    /* An address of zero is how a console with no connection answers; the screens say "connect
+       first" rather than letting a download fail a minute later. */
+    std::uint32_t address = 0;
+    const Result ip_rc = nifmGetCurrentIpAddress(&address);
+    nifmExit();
+    if (R_FAILED(ip_rc)) {
+        *error = "asking for the console's address failed (0x" + ToHex(&ip_rc, sizeof(ip_rc)) +
+                 ")";
+        return false;
+    }
+    *out = address != 0;
+    return true;
+}
+
 }  // namespace acnh_manager::install
