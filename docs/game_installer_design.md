@@ -928,12 +928,24 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
     本体内容被删、更新记录还在时,装本体会被判成"已有更高版本"而跳过,**标题永远修不回来**。跳过的
     第二种情形(同一个版本已经装好且控制台可用)仍然对四种类型都生效,这是"重复安装不重传"的那条。
 
-    有意保留的一处差异:**票的"转公共票"(`convert_to_common_ticket`)不做**。它需要用
-    `/switch/prod.keys` 里的标题密钥与公共密钥重新签名票据(RSA-2048 + AES-CBC),本 App 的定位是
-    "不需要任何密钥文件"(第 6 节),而**官方渠道下载的包带的是公共票,原样导入即可用**(ACNH 的更新
-    包就是这么装的,实机可运行)。带**个人票**(本机专属票据,自制 dump 常见)的包仍会装完、但控制台
-    拿不到标题密钥,启动会被拒;这类包需要 sphaira 那套 `PatchTicket` 才能用,日志里的
-    `tickets N of M imported` 与 "a content needs title key …" 两行就是判别依据。
+    有意保留的一处差异:**票的"转公共票"(`convert_to_common_ticket`,参考实现默认开)不做**。它到底
+    做什么、需要什么,值得写清楚,因为它常被误传为"必须有 prod.keys":
+    - 拿到一张票先**判断要不要改**(`ShouldPatchTicket`):公共票 → 用随包的证书链里的公钥验一次
+      RSA-2048-SHA256 签名,**验得过就原样保留**(官方渠道下载的包走的就是这条路,整步是空操作);
+      验不过(被改过的票)→ 改;个人票 → 按开关改(默认开)。
+    - 改的时候取标题密钥:公共票直接从票里拿(已经是 titlekek 加密态);**个人票用本机 setcal 的设备
+      密钥** RSA-OAEP 解(先核对 device id 是否本机),而 setcal 交出来的设备密钥本身是被
+      `eticket_rsa_kek` **加密**的——那把 kek 在 `prod.keys` 里。
+    - 新票不重签:issuer 改成 `Root-CA00000003-XS00000020`,签名块填 0xFF 占位,标题密钥块、格式版本、
+      key generation 与 rights id 照搬,issuer 变了就去控制台自己的证书库取配套证书链,然后照常
+      `esImportTicket`。
+    - 因此:**官方公共票与 prod.keys 无关**;**个人票**这条路才需要 prod.keys(缺文件时不是"开局就报",
+      而是翻到取标题密钥那一步才失败);`convert_to_standard_crypto` / `lower_master_key` 这两个开关
+      才是真正离不开 prod.keys 的(titlekek / key_area_key / master_key),而它们的默认值是关。
+    本 App 的选择是**原样导入票**并交给 `es` 判断:官方包与参考实现结果一致(ACNH 的更新包就是这么装
+    的,实机可运行);个人票若本就是为本机签发,原样导入通常即可用,若来自别的主机则谁都救不了——转公共
+    票用的也是**本机**设备密钥,device id 不匹配同样失败。日志里的 `tickets N of M imported` 与
+    "a content needs title key …" 两行就是判别依据。
 
 37. **与参考实现逐步骤的对照清单(2026-10-15 第二轮,按 `InstallInternal` / `InstallNcaInternal` /
     `RegisterNcasAndPushRecord` / `RemoveInstalledNcas` 的顺序)**:下表是"这条我们做了没有"的答案,
@@ -954,7 +966,8 @@ CNMT → 跳过判定 → 确认页 → 检查(keygen / 游戏是否在运行 / 
     | NCA 哈希校验 / RSA fixed-key 校验,默认**跳过** | 同(默认跳过;两项都不做) |
     | 收尾,每个 meta 一次:导入票 → 删同 title 旧版本(保留本次复用的内容)→ 写 meta 记录 → 推 application record → `avmPushLaunchVersion` | 同 |
     | 记录 blob:8 字节 ContentMetaHeader + 扩展头 + 各 content info(meta 自己排第一)+ content meta infos;`content_count = 内容数 + 1` | 同(另加"所需系统版本清零",第 36 条) |
-    | `convert_to_common_ticket` / `convert_to_standard_crypto` / `lower_master_key` | **不做**(需要 `prod.keys`;三者的默认值里只有公共票转换是开的,见第 36 条) |
+    | `convert_to_common_ticket`(默认**开**) | **不做**:官方公共票这一步本来就是空操作(验签通过即不改),只有个人票才需要本机 setcal 设备密钥 + `prod.keys` 里的 `eticket_rsa_kek`;我们原样导入票,交给 `es` 判断(见第 36 条) |
+    | `convert_to_standard_crypto` / `lower_master_key`(默认**关**) | **不做**:要把标题密钥写进 NCA 头的 key area,确实需要 `prod.keys` 的 titlekek / key_area_key / master_key |
     | 流式安装(它们的 FTP/MTP 路径)关掉"已安装就跳过" | 我们**保留**跳过:重复安装同一个包应当秒完成并明确告知,这是产品要的行为 |
     | 计数 / 版本查询只按目标存储做跳过 | 我们**两种存储都查**(SD + 机身),并按存储分别记录版本,便于解释"记录写到了系统不读的那一边" |
     | (参考实现没有) | 我们额外做:内容缓存失效(ns 404)、记录可用性自检与修复、结果页与日志的逐步 trace |
