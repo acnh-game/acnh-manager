@@ -508,6 +508,18 @@ bool WriteTextFile(FsFileSystem &sd, const std::string &path, const std::string 
     return WriteFileVerified(sd, path, data, util::Sha256Hex(data.data(), data.size()), error);
 }
 
+bool RemoveFileIfPresent(FsFileSystem &sd, const std::string &path, std::string *error) {
+    const util::FsPath arg(AbsolutePath(path));
+    const Result rc = TraceFs("delete", arg.c_str(), fsFsDeleteFile(&sd, arg.c_str()));
+    if (R_SUCCEEDED(rc) || rc == 0x00000202 /* PathNotFound */) {
+        return true;
+    }
+    if (error != nullptr) {
+        *error = Describe("deleting " + path, rc);
+    }
+    return false;
+}
+
 bool VerifyInstalledFiles(FsFileSystem &sd, const InstallState &state, std::string *error) {
     /* A record that names nothing describes no installation; saying "incomplete" is the honest
        answer, and it also means the caller never treats a stub record as a healthy install. */

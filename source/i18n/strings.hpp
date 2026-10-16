@@ -185,7 +185,6 @@ enum class StringId {
     InstallNoNetworkHint,
     InstallRecheck,
     InstallRetry,
-    InstallPending,
     ConfirmVersion,
     ConfirmType,
     ConfirmSize,
@@ -235,6 +234,16 @@ enum class StringId {
     MetaTypeDlcShort,
     InstallToLabel,
     FooterInstallTargetHint,
+    PendingTitle,
+    PendingResume,
+    PendingAbandon,
+    PendingPickNew,
+    PendingUnresumable,
+    PendingGone,
+    PendingProgress,
+    PendingReserved,
+    ConfirmResumeNote,
+    ResultTaskKept,
 };
 
 const char *Text(StringId id, Language language);

@@ -148,6 +148,9 @@ constexpr int kActionInstallUrl = 22;     /* the address screen's "type it on th
 constexpr int kActionInstallRecheck = 23; /* the same screen, when there is no network: ask again */
 constexpr int kActionInstallTargetSd = 24;   /* the header's microSD block (L, or a tap) */
 constexpr int kActionInstallTargetNand = 25; /* the header's system block (R, or a tap) */
+constexpr int kActionPendingResume = 26;   /* "continue" on the unfinished-install screen (A) */
+constexpr int kActionPendingAbandon = 27;  /* "give up and clean up" on that screen (X) */
+constexpr int kActionPendingPickNew = 28;  /* "pick something else" on that screen (Y) */
 
 /* Where each header entry's key badge sits (the layout needs the same answer for the drawn pill
    and for the touch target -- see RenderHeader).  Same order as the tabs there: + installer,
@@ -158,6 +161,9 @@ constexpr acnh_manager::ui::TabBadge kHeaderTabBadgePos[acnh_manager::ui::kHeade
 
 /* Player settings (language today).  Separate from state.json because uninstall deletes that. */
 constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
+/* The install in flight, if any: written by the engine before its first byte, read here to offer
+   "continue" (design section 10).  It survives an interrupted run on purpose. */
+constexpr const char *kTaskPath = "/switch/ACNH-Manager/install-task.json";
 
 /* Header tab layout lives in ui/header_tabs.hpp so the host tests can pin it; these two
    constants have to agree with it. */
@@ -328,6 +334,9 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     }
     Trace("ui: collecting environment ...");
     Collect();
+    /* The install an interruption left behind is part of the state of this console, so the details
+       page can answer "where did those gigabytes go?" from the first frame on. */
+    RefreshPendingTask();
     if (m_log != nullptr) {
         install::dev::LogStartup(*m_log, "environment + plan ready");
     }
@@ -1245,6 +1254,17 @@ void App::HandleKeys(u32 down) {
                 InstallStepBack();
                 break;
             }
+            if (m_install_screen == InstallScreen::Pending) {
+                /* The unfinished install's own screen: the three entries are the only ways on. */
+                if ((down & HidNpadButton_A) != 0) {
+                    ActivateAction(kActionPendingResume);
+                } else if ((down & HidNpadButton_X) != 0) {
+                    ActivateAction(kActionPendingAbandon);
+                } else if ((down & HidNpadButton_Y) != 0) {
+                    ActivateAction(kActionPendingPickNew);
+                }
+                break;
+            }
             if (m_install_screen == InstallScreen::Confirm) {
                 if ((down & HidNpadButton_A) != 0) {
                     RunGameInstall();
@@ -1423,6 +1443,13 @@ void App::ActivateAction(int id) {
         case kActionInstallTargetNand:
             SetInstallTarget(install::TargetStorage::Nand);
             break;
+        /* The unfinished install's three entries. */
+        case kActionPendingResume: ResumePendingInstall(); break;
+        case kActionPendingAbandon: AbandonPendingInstall(); break;
+        case kActionPendingPickNew:
+            m_install_error.clear();
+            m_install_screen = InstallScreen::Choose;
+            break;
         case kActionInstallDownload:
             /* The address screen: nothing is downloaded until the player has typed an address,
                because this app does not host or hand out any. */
@@ -1475,6 +1502,19 @@ void App::Run() {
     /* The game installer writes its diagnostics through this sink (one line each); it has nothing
        to do with the agent install path, so it is set here, once, rather than in RunInstall. */
     install::SetGameInstallLog(m_log);
+    /* Where the installer's task file lives.  The engine decides when it has to be on the card; the
+       card itself is ours (the app owns the SD handle), so the two operations are handed over here
+       rather than the path being threaded through the engine. */
+    if (m_sd != nullptr) {
+        FsFileSystem *sd = m_sd;
+        install::SetGameInstallTaskStore(
+            [sd](const std::string &json, std::string *error) {
+                return install::WriteTextFile(*sd, kTaskPath, json, error);
+            },
+            [sd](std::string *error) {
+                return install::RemoveFileIfPresent(*sd, kTaskPath, error);
+            });
+    }
     m_focus = FirstEnabled(m_actions);
     int frames_drawn = 0;
     while (appletMainLoop() && !m_should_exit) {
@@ -2449,6 +2489,19 @@ void App::RenderDetails(Surface surface) {
          m_report.build.content_id.empty() ? kWarn : kGood, 2});
     version_rows.push_back({Tr(i18n::StringId::LabelEmbeddedAgent), agent, kText, 1});
     version_rows.push_back({Tr(i18n::StringId::LabelInstallRecord), record, kText, 1});
+    /* The unfinished install, when there is one: the placeholders it holds are invisible on the SD
+       card *and* in "free space", so this row is the only place the number is explained.  The two
+       actions that resolve it live on the install page (`＋`), which the row points at. */
+    if (m_have_pending_task) {
+        const std::string pending =
+            i18n::Format(i18n::StringId::PendingProgress,
+                         util::FormatSize(m_pending_live_bytes).c_str(),
+                         util::FormatSize(install::TotalBytes(m_pending_task)).c_str()) +
+            " · " +
+            i18n::Format(i18n::StringId::PendingReserved,
+                         util::FormatSize(m_pending_live_reserved).c_str());
+        version_rows.push_back({Tr(i18n::StringId::PendingTitle), pending, kWarn, 2});
+    }
     version_rows.push_back({Tr(i18n::StringId::LabelOverrideConfig), m_report.advice.text,
                             m_report.advice.never_applies ? kWarn : kGood, 2});
     version_rows.push_back({Tr(i18n::StringId::LabelLogPath), "/switch/ACNH-Manager/log.txt",
@@ -2932,7 +2985,10 @@ void App::OpenGameInstall() {
     }
     m_game_install_return = m_page;
     m_page = Page::GameInstall;
-    m_install_screen = InstallScreen::Choose; /* always start at "pick a source" */
+    /* An interrupted install comes first: it holds space on one of the storages, and the only two
+       ways to get that space back (or to finish what was started) are on that screen. */
+    RefreshPendingTask();
+    m_install_screen = m_have_pending_task ? InstallScreen::Pending : InstallScreen::Choose;
     m_install_origin = InstallScreen::Choose;
     m_file_dir = "/";
     m_focus = FirstEnabled(m_actions);
@@ -3203,11 +3259,11 @@ void App::OpenPickedPackage() {
         m_install_screen = InstallScreen::Result;
         return;
     }
-    OpenPackage(*m_file_source, m_picked_file, size);
+    OpenPackage(*m_file_source, m_picked_file, size, install::TaskSource::LocalFile, std::string());
 }
 
 void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
-                      std::uint64_t size) {
+                      std::uint64_t size, install::TaskSource source, const std::string &url) {
     m_install_status = install::InstallStatus{};
     m_install_error.clear();
     m_game_install.reset();
@@ -3220,6 +3276,10 @@ void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
     options.target = m_install_target;
     m_game_install =
         std::make_unique<install::GameInstall>(reader, name, size, options.target, options);
+    /* Where the bytes come from, for the task file: a resume reads it out of that file, and only
+       this layer knows which source opened the package (the engine just reads a reader). */
+    m_game_install->MutableTask().source = source;
+    m_game_install->MutableTask().url = url;
     std::string error;
     if (!m_game_install->Prepare(&error)) {
         m_install_error = error;
@@ -3243,6 +3303,28 @@ void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
         return;
     }
     m_install_status = m_game_install->Status();
+    /* A resume: this run knows where the interrupted one stopped (the task file it was opened
+       from), and the engine takes over whatever the console still holds.  It happens *after*
+       Prepare, because the contents have to be known before any of them can be matched. */
+    if (m_resume_task != nullptr && m_install_status.stage != install::InstallStage::Skipped) {
+        std::string resume_error;
+        if (m_game_install->AdoptResume(*m_resume_task, &resume_error)) {
+            m_install_status = m_game_install->Status();
+            m_resumed_bytes = install::DoneBytes(m_game_install->Task());
+            Trace("install: resumed from the task file (%s, %llu bytes in)",
+                  m_resume_task->name.c_str(),
+                  static_cast<unsigned long long>(m_resumed_bytes));
+        } else {
+            /* Not the same package: start fresh, and leave the old task file alone -- it describes
+               a different install, and throwing it away is the player's call. */
+            Trace("install: the task file does not describe this package (%s)", resume_error.c_str());
+        }
+    }
+    /* A package the console already has makes the task file moot: nothing will be continued. */
+    if (m_resume_task != nullptr && m_install_status.stage == install::InstallStage::Skipped) {
+        AbandonPendingInstall();
+    }
+    m_resume_task = nullptr;
     /* The cover is decoded once per opened package, not per frame: `ns` hands out a JPEG, and the
        confirm page is redrawn on every key and touch event. */
     if (!m_game_install->IconJpeg().empty()) {
@@ -3305,7 +3387,7 @@ bool App::OpenDownloadPackage(const std::string &address) {
     Trace("install: download %s (range probe ok, container %llu bytes)", address.c_str(),
           static_cast<unsigned long long>(size));
     m_install_origin = InstallScreen::Url;
-    OpenPackage(*m_http_source, address, size);
+    OpenPackage(*m_http_source, address, size, install::TaskSource::HttpDownload, address);
     return true;
 }
 
@@ -3342,7 +3424,14 @@ void App::RunGameInstall() {
         /* The failure has to reach log.txt in full: the screen may wrap or clip it, and a
            diagnostic that only exists on a 1280-pixel card is not a diagnostic. */
         Trace("install: transfer failed: %s", m_install_error.c_str());
-        m_game_install->Abandon(&error);
+        /* A transfer that failed is *not* a cancelled install: the bytes that arrived are still in
+           their placeholders, and the task file still describes them, so the player can pick this up
+           again instead of watching a few gigabytes go to waste (design section 10).  Only the
+           placeholders that merely served reading (meta/control) go away with the package. */
+        m_game_install->CleanupAfterFailure(&error);
+        /* The task file (and the bytes it describes) is still there: the next entry into the install
+           page offers to continue, and the result page says so below. */
+        RefreshPendingTask();
         m_install_screen = InstallScreen::Result;
         Render();
         return;
@@ -3392,10 +3481,20 @@ void App::LeaveInstallScreen() {
            read created; a run that got as far as registering owns nothing to take back (the
            content and the record are the player's), which is why the stage is checked before
            `Abandon` -- that call also rolls a registered run back. */
-        if (stage != install::InstallStage::Done && stage != install::InstallStage::Skipped) {
+        if (m_game_install->KeepsTask()) {
+            /* The run failed *after* its task file went down, so its placeholders are what a
+               "continue" would pick up: leaving this screen is not a cancel (design section 10).
+               Only the placeholders that merely served reading go away; the next run re-creates
+               them.  Dropping everything here is exactly how a resumable failure became
+               unrecoverable -- measured on hardware. */
+            std::string ignored;
+            m_game_install->CleanupAfterFailure(&ignored);
+        } else if (stage != install::InstallStage::Done && stage != install::InstallStage::Skipped) {
             std::string ignored;
             m_game_install->Abandon(&ignored);
         }
+        Trace("install: left the screen (stage=%d, task kept=%d)", static_cast<int>(stage),
+              m_game_install->KeepsTask() ? 1 : 0);
     }
     m_game_install.reset();
     m_file_source.reset();
@@ -3463,6 +3562,170 @@ void App::SetInstallTarget(install::TargetStorage target) {
     } else {
         OpenPickedPackage();
     }
+}
+
+/* The install the last run left behind.  Reading it is cheap (one small JSON), so it happens
+   wherever the answer can change: when the install page opens, and when a run ends.  A file we
+   cannot parse is not a pending install -- it is deleted, because a task nobody can act on would
+   only hold space forever. */
+void App::RefreshPendingTask() {
+    m_have_pending_task = false;
+    m_pending_restarts = false;
+    if (m_sd == nullptr) {
+        return;
+    }
+    std::string text;
+    bool found = false;
+    std::string error;
+    if (!install::ReadTextFile(*m_sd, kTaskPath, &text, &found, &error)) {
+        Trace("install: the task file could not be read: %s", error.c_str());
+        return;
+    }
+    if (!found) {
+        return;
+    }
+    install::InstallTask parsed;
+    std::string parse_error;
+    if (!install::ParseTask(text, &parsed, &parse_error)) {
+        Trace("install: the task file is unusable (%s); removing it", parse_error.c_str());
+        std::string ignored;
+        install::RemoveFileIfPresent(*m_sd, kTaskPath, &ignored);
+        return;
+    }
+    /* A task whose source cannot be opened again is not actionable either -- the browser upload of
+       1.1.0 does not exist yet (M4), and a local file the player deleted is gone.  Both cases keep
+       the file (the player may put it back) but must not offer a "continue" that cannot work. */
+    m_pending_task = std::move(parsed);
+    m_have_pending_task = true;
+    /* What the *file* claims, and then what the console really holds: a reboot clears placeholders,
+       so a resumed install would start over while the file still says "1.0 GB in".  The screens
+       show the live numbers, and say so when the two disagree. */
+    const std::uint64_t claimed = install::DoneBytes(m_pending_task);
+    m_pending_live_bytes = 0;
+    m_pending_live_reserved = 0;
+    m_pending_restarts = false;
+    std::uint64_t reserved_from_file = 0;
+    for (const auto &content : m_pending_task.contents) {
+        if (!content.placeholder_id.empty()) {
+            reserved_from_file += content.size;
+        }
+    }
+    install::ContentInstaller installer(m_pending_task.target, install::InstallOptions{});
+    std::string probe_error;
+    bool probed = false;
+    if (installer.Open(&probe_error)) {
+        probed = true;
+        for (const auto &content : m_pending_task.contents) {
+            if (content.placeholder_id.empty()) {
+                continue;
+            }
+            bool exists = false;
+            if (!installer.HasPlaceHolder(content.placeholder_id, &exists, &probe_error) || !exists) {
+                /* The file says these bytes are in, and the console says the placeholder is gone:
+                   the one case where "continue" cannot continue (a reboot clears placeholders).
+                   A content that is *complete* in the file does not count: the meta and control
+                   contents are read through a placeholder of their own, which is dropped after the
+                   read, and the next run re-creates it anyway -- warning about those would put the
+                   note on every failed download. */
+                if (content.written > 0 && content.written < content.size) {
+                    m_pending_restarts = true;
+                }
+                continue;
+            }
+            m_pending_live_bytes += content.written;
+            m_pending_live_reserved += content.size;
+        }
+    } else {
+        Trace("install: could not ask the console about the unfinished install (%s); showing the "
+              "file's numbers",
+              probe_error.c_str());
+        m_pending_live_bytes = claimed;
+        m_pending_live_reserved = reserved_from_file;
+    }
+    if (!probed) {
+        m_pending_restarts = false; /* the console could not be asked: do not claim it is gone */
+    }
+    Trace("install: unfinished install found (%s, %zu contents, file says %llu bytes, console holds "
+          "%llu)",
+          m_pending_task.name.c_str(), m_pending_task.contents.size(),
+          static_cast<unsigned long long>(claimed),
+          static_cast<unsigned long long>(m_pending_live_bytes));
+}
+
+/* Continue: the same source, opened exactly the way a fresh run would open it.  What makes it a
+   resume is `m_resume_task`, which OpenPackage hands to the engine after the package has been read
+   (the engine then adopts whatever the console still holds). */
+void App::ResumePendingInstall() {
+    if (!m_have_pending_task) {
+        m_install_screen = InstallScreen::Choose;
+        return;
+    }
+    m_resume_task = &m_pending_task;
+    switch (m_pending_task.source) {
+        case install::TaskSource::LocalFile:
+            m_picked_file = m_pending_task.name;
+            OpenPickedPackage();
+            return;
+        case install::TaskSource::HttpDownload:
+            if (m_pending_task.url.empty()) {
+                Trace("install: the task file names no address; dropping the resume");
+                break;
+            }
+            OpenDownloadPackage(m_pending_task.url);
+            return;
+        case install::TaskSource::HttpUpload:
+            /* 1.1.0 has no upload source yet (M4), so no task can come from one: if one is there
+               anyway, say so instead of pretending to continue. */
+            Trace("install: the task came from a browser upload, which this build cannot resume");
+            break;
+        case install::TaskSource::None:
+        default:
+            break;
+    }
+    m_resume_task = nullptr;
+    m_install_error = Tr(i18n::StringId::PendingUnresumable);
+    m_install_screen = InstallScreen::Pending;
+}
+
+/* Give up: delete what the interrupted run created.  Only our own placeholder ids go away -- the
+   ids in the task file, nothing else (no CleanupAllPlaceHolder, which would empty other tools'
+   placeholders too).  Contents the interrupted run had already *registered* are not deleted here:
+   a crash between Register and the record is the one case the installer's own "install again"
+   repair path handles, and deleting a title the console already had is not ours to do. */
+void App::AbandonPendingInstall() {
+    if (!m_have_pending_task) {
+        m_install_screen = InstallScreen::Choose;
+        return;
+    }
+    std::vector<install::Placeholder> placeholders;
+    for (const auto &content : m_pending_task.contents) {
+        if (content.content_id.empty() || content.placeholder_id.empty()) {
+            continue;
+        }
+        placeholders.push_back({content.content_id, content.placeholder_id});
+    }
+    bool ok = true;
+    std::string error;
+    if (!placeholders.empty()) {
+        install::ContentInstaller installer(m_pending_task.target, install::InstallOptions{});
+        if (!installer.Open(&error)) {
+            ok = false;
+        } else if (!installer.DropPlaceholders(placeholders, &error)) {
+            ok = false;
+        }
+    }
+    if (ok) {
+        std::string remove_error;
+        if (!install::RemoveFileIfPresent(*m_sd, kTaskPath, &remove_error)) {
+            ok = false;
+            error = remove_error;
+        }
+    }
+    Trace("install: gave up the unfinished install (%zu placeholders) ok=%d%s%s", placeholders.size(),
+          ok ? 1 : 0, error.empty() ? "" : " error=", error.c_str());
+    m_install_error = ok ? std::string() : error;
+    RefreshPendingTask();
+    m_install_screen = m_have_pending_task ? InstallScreen::Pending : InstallScreen::Choose;
 }
 
 bool App::InstallTargetSelectable() const {
@@ -3612,10 +3875,81 @@ void App::RenderInstallProgress(Surface surface) {
 }
 
 
+/* The install an interruption left behind, as its own screen.  It is the first thing the install
+   page shows while a task file exists, because the space its placeholders hold is otherwise
+   invisible: "continue" finishes what was started, "give up" hands the space back, and "pick
+   something else" leaves the task alone for later (the details page keeps listing it). */
+void App::RenderInstallPending(Surface surface) {
+    m_actions.clear();
+    const int card_x = kMargin;
+    const int card_top = kHeaderHeight + 24;
+    const int card_width = surface.width - kMargin * 2;
+    const int card_height = 214;
+    FillRoundedRect(surface, card_x, card_top, card_width, card_height, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_width - 6, card_height - 6, 15, kCard);
+
+    const std::uint64_t total = install::TotalBytes(m_pending_task);
+    m_font.DrawBold(surface, card_x + 36, card_top + 22, kFontHeading, kWarn,
+                    Tr(i18n::StringId::PendingTitle));
+    /* The container's own name is what says *which* install this is: the package's title is not in
+       the task file, and a name the player recognises beats a content id. */
+    m_font.Draw(surface, card_x + 36, card_top + 68, kFontBody, kText,
+                m_font.Fit(m_pending_task.name, kFontBody, card_width - 72, 1).c_str());
+    const std::string progress =
+        i18n::Format(i18n::StringId::PendingProgress, util::FormatSize(m_pending_live_bytes).c_str(),
+                     util::FormatSize(total).c_str());
+    m_font.Draw(surface, card_x + 36, card_top + 106, kFontBody, kText, progress.c_str());
+    const std::string reserved_text =
+        i18n::Format(i18n::StringId::PendingReserved,
+                     util::FormatSize(m_pending_live_reserved).c_str());
+    m_font.Draw(surface, card_x + 36, card_top + 140, kFontSmall, kSubtle, reserved_text.c_str());
+    if (m_pending_restarts) {
+        /* The console has nothing left of it: saying that now is kinder than letting the player press
+           "continue" and watch the same gigabytes download twice. */
+        m_font.Draw(surface, card_x + 36, card_top + 172, kFontSmall, kWarn,
+                    m_font.Fit(Tr(i18n::StringId::PendingGone), kFontSmall, card_width - 72, 1)
+                        .c_str());
+    } else if (!m_install_error.empty()) {
+        m_font.Draw(surface, card_x + 36, card_top + 172, kFontSmall, kWarn,
+                    m_font.Fit(m_install_error, kFontSmall, card_width - 72, 1).c_str());
+    }
+
+    /* Three entries, the same card shape as the source screen: they are the only ways forward from
+       here, and each one says what it does to the task. */
+    struct Entry {
+        const char *key;
+        i18n::StringId label;
+        int action;
+    };
+    const Entry entries[3] = {{"A", i18n::StringId::PendingResume, kActionPendingResume},
+                              {"X", i18n::StringId::PendingAbandon, kActionPendingAbandon},
+                              {"Y", i18n::StringId::PendingPickNew, kActionPendingPickNew}};
+    const int row_top = card_top + card_height + 26;
+    constexpr int kRowHeight = 92;
+    constexpr int kRowGap = 16;
+    for (int i = 0; i < 3; ++i) {
+        const Rect rect{card_x, row_top + i * (kRowHeight + kRowGap), card_width, kRowHeight};
+        FillRoundedRect(surface, rect.x, rect.y, rect.w, rect.h, 16, kBorder);
+        FillRoundedRect(surface, rect.x + 3, rect.y + 3, rect.w - 6, rect.h - 6, 13,
+                        m_focus == entries[i].action ? kCardDisabled : kCard);
+        DrawKeyBadge(surface, m_font, rect.x + 46, rect.y + rect.h / 2, 20, entries[i].key,
+                     kHeader, kOnHeader);
+        m_font.Draw(surface, rect.x + 92,
+                    rect.y + (rect.h - m_font.LineHeight(kFontHeading)) / 2, kFontHeading,
+                    i == 1 ? kWarn : kText, Tr(entries[i].label));
+        m_actions.push_back({entries[i].action, rect, true});
+    }
+    m_focus = m_actions.empty() ? -1 : 0;
+}
+
 /* The installer's own page.  Which of its screens shows is one variable, so the dispatcher is a
    switch and each screen draws itself; nothing else in the app is allowed to draw while this page
    is up (see AddChromeActions), which is what makes "install is exclusive" true on screen too. */
 void App::RenderGameInstall(Surface surface) {
+    if (m_install_screen == InstallScreen::Pending) {
+        RenderInstallPending(surface);
+        return;
+    }
     if (m_install_screen == InstallScreen::Files) {
         RenderInstallFiles(surface);
         return;
@@ -3631,6 +3965,7 @@ void App::RenderGameInstall(Surface surface) {
     switch (m_install_screen) {
         case InstallScreen::Progress: RenderInstallProgress(surface); return;
         case InstallScreen::Result: RenderInstallResult(surface); return;
+        case InstallScreen::Pending: /* handled above, before the switch */ break;
         case InstallScreen::Choose:
         case InstallScreen::Files:
         case InstallScreen::Url:
@@ -4017,6 +4352,15 @@ void App::RenderInstallConfirm(Surface surface) {
     row(i18n::StringId::ConfirmTarget,
         Tr(m_install_target == install::TargetStorage::Nand ? i18n::StringId::StorageSystem
                                                            : i18n::StringId::StorageSdCard));
+    /* Continuing an interrupted run changes what pressing A means, so the card says it: the bytes
+       already on the console are not moved again, and the player is not looking at a fresh start. */
+    if (m_resumed_bytes > 0) {
+        const std::string resumed = i18n::Format(i18n::StringId::ConfirmResumeNote,
+                                                util::FormatSize(m_resumed_bytes).c_str());
+        m_font.Draw(surface, row_x, y + 10, kFontSmall, kGood,
+                    m_font.Fit(resumed, kFontSmall, text_width, 1).c_str());
+        y += 28;
+    }
 
     if (TitleIsOurs(package.cnmt.title_id) &&
         install::MetaTypeCarriesGameVersion(package.cnmt.type)) {
@@ -4190,6 +4534,16 @@ void App::RenderInstallResult(Surface surface) {
     const int happened_lines = std::max(1, m_font.LineCount(happened, kFontBody, text_width));
     const int now_y = std::max(card_top + 236,
                                card_top + 176 + happened_lines * m_font.LineHeight(kFontBody) + 10);
+
+    /* A failure that kept its work: the bytes are still in their placeholders and the task file
+       still describes them, so the one useful thing to say is that nothing is lost.  (Only a
+       *transfer* failure keeps them -- a structural failure cleaned up after itself, and the file
+       is gone by the time this card is drawn.) */
+    if (status.stage != install::InstallStage::Done &&
+        status.stage != install::InstallStage::Skipped && m_have_pending_task) {
+        m_font.Draw(surface, card_x + 40, now_y, kFontBody, kWarn,
+                    Tr(i18n::StringId::ResultTaskKept), text_width);
+    }
 
     /* What now: only about the agent, and only when it is true.  An add-on or a data patch is not
        a version question at all -- it leaves the game's version where it was -- so this run has

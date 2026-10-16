@@ -192,6 +192,33 @@ bool MatchesSourceFile(const InstallTask &task, std::string_view name, std::uint
     return task.container_size == 0 || size == 0 || task.container_size == size;
 }
 
+ResumePlan PlanResume(const TaskContent &recorded, const TaskContent &fresh,
+                      bool placeholder_present) {
+    ResumePlan plan;
+    /* The file has to be talking about this very content: same id (all 32 hex digits) and same
+       size.  A repacked package can reuse an id for different bytes, and the size is the cheapest
+       honest check we have without hashing the whole content. */
+    if (recorded.content_id.empty() || recorded.content_id != fresh.content_id) {
+        return plan;
+    }
+    if (recorded.size != fresh.size) {
+        return plan;
+    }
+    if (!placeholder_present || recorded.placeholder_id.empty()) {
+        return plan;
+    }
+    if (fresh.compressed) {
+        /* Rule 2: a zstd stream cannot be entered in the middle. */
+        return plan;
+    }
+    /* Rule 1: the bytes are there, the content is the same one.  A `written` past the end is a
+       corrupt file, not a licence to skip: clamp it. */
+    plan.restart = false;
+    plan.written = recorded.written > fresh.size ? fresh.size : recorded.written;
+    plan.placeholder_id = recorded.placeholder_id;
+    return plan;
+}
+
 std::string DumpTask(const InstallTask &task) {
     json::Value root;
     root.type = json::Type::Object;
@@ -203,6 +230,8 @@ std::string DumpTask(const InstallTask &task) {
     root.object.emplace_back(
         "containerSize",
         json::Value::MakeNumber(static_cast<double>(task.container_size)));
+    root.object.emplace_back("target", json::Value::MakeString(
+                                           task.target == TargetStorage::Nand ? "nand" : "sd"));
     root.object.emplace_back("stage", json::Value::MakeString(StageName(task.stage)));
     root.object.emplace_back("error", json::Value::MakeString(task.error));
 
@@ -258,6 +287,9 @@ bool ParseTask(std::string_view text, InstallTask *out, std::string *error) {
     out->name = string_of("name", "");
     out->url = string_of("url", "");
     out->container_size = number_of("containerSize");
+    /* Older files have no target: SD is the default the settings carry as well, and a task whose
+       storage is wrong is refused by the resume probe anyway (the placeholders are not there). */
+    out->target = string_of("target", "sd") == "nand" ? TargetStorage::Nand : TargetStorage::SdCard;
     out->stage = StageFromName(string_of("stage", "idle"));
     out->error = string_of("error", "");
 

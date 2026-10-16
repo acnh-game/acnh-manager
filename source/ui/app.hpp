@@ -172,6 +172,17 @@ private:
        the target locked in, and the result screen reports a run that is over -- a selectable-*looking*
        control there would be a control that does nothing. */
     bool InstallTargetSelectable() const;
+    /* The install an interruption left behind: read from `install-task.json` (the engine writes it,
+       see SetGameInstallTaskStore), and offered as "continue" or "give up" rather than silently
+       holding space.  Design section 10 calls this the answer to "where did my gigabytes go?". */
+    void RefreshPendingTask();
+    void RenderInstallPending(Surface surface);
+    /* Picks the recorded run up again: the same source, opened the same way, and then adopted into
+       the engine's task before any byte moves (see GameInstall::AdoptResume). */
+    void ResumePendingInstall();
+    /* Deletes what the interrupted run created -- its placeholders, and the task file itself --
+       without touching anything another tool owns (no CleanupAllPlaceHolder). */
+    void AbandonPendingInstall();
     /* Open the game installer, remembering where we came from (it is modal: B returns there). */
     void OpenGameInstall();
     bool TitleIsOurs(const std::string &title_id) const;
@@ -248,7 +259,7 @@ private:
     Page m_game_install_return{Page::Home};
     /* The installer has its own little screens: today "pick a source" and "pick a file"; the
        confirm / progress / result screens join them next. */
-    enum class InstallScreen { Choose, Files, Url, Confirm, Progress, Result };
+    enum class InstallScreen { Choose, Files, Url, Confirm, Progress, Result, Pending };
     InstallScreen m_install_screen{InstallScreen::Choose};
     /* The address screen offers two ways in (the system keyboard now, the browser page that can
        submit an address once the server exists).  Neither works without a network, so the screen
@@ -288,7 +299,10 @@ private:
     /* The part of opening a package that does not care where its bytes come from: the CNMT/NACP
        read, the confirm screen, or the result screen when the package turns out to be pointless.
        The local file and the download address both land here. */
-    void OpenPackage(install::ContainerReader &reader, const std::string &name, std::uint64_t size);
+    /* `source` and `url` are recorded in install-task.json: a resume has to know *where* the bytes
+       came from, and only the app knows that (the engine just reads whatever reader it was given). */
+    void OpenPackage(install::ContainerReader &reader, const std::string &name, std::uint64_t size,
+                     install::TaskSource source, const std::string &url);
     /* Asks for an address (system keyboard), probes it and opens the package it names. */
     void StartDownload();
     /* Opens the package an address names (the same path for a freshly typed address and for the
@@ -365,6 +379,23 @@ private:
     /* The address the run in hand was started from, shown back on the address screen so a typo is
        visible without opening the keyboard again. */
     std::string m_download_url;
+    /* The run in hand when it is a *resume*: the recorded task, adopted into the engine right after
+       the package has been read (its ids and byte counts are what pick up where the interruption
+       stopped).  Cleared with the package. */
+    const install::InstallTask *m_resume_task{nullptr};
+    /* Bytes the interrupted run had already put in when this one picked it up: 0 for a fresh run.
+       The confirm card says so (the player has to know they are continuing, not starting over). */
+    std::uint64_t m_resumed_bytes{0};
+    /* What `install-task.json` says, refreshed when the install page opens and when a run ends. */
+    bool m_have_pending_task{false};
+    install::InstallTask m_pending_task;
+    /* What the console still *holds*, asked of ncm rather than read from the file: a reboot clears
+       content-storage placeholders (measured 2026-10-16), so the file's byte counts can describe
+       bytes nobody has.  These are the numbers the screens show. */
+    std::uint64_t m_pending_live_bytes{0};
+    std::uint64_t m_pending_live_reserved{0};
+    /* The file says an install had started, but nothing of it is left: continuing will start over. */
+    bool m_pending_restarts{false};
     std::unique_ptr<install::GameInstall> m_game_install;
     install::InstallStatus m_install_status;
     std::string m_install_error;

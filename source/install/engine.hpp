@@ -39,6 +39,10 @@ bool ReadTextFile(FsFileSystem &sd, const std::string &path, std::string *out, b
 bool WriteTextFile(FsFileSystem &sd, const std::string &path, const std::string &text,
                    std::string *error);
 
+/* Removes a file we may or may not have written: "it was not there" is not an error (the caller
+   cleans up state that outlived its purpose, and a second cleanup must not fail on that). */
+bool RemoveFileIfPresent(FsFileSystem &sd, const std::string &path, std::string *error);
+
 /* True when every file the install record names is still on the card, byte for byte.
 
    `Plan()` compares the record against the manifest *only*, so without this the app keeps

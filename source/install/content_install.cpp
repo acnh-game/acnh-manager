@@ -475,6 +475,30 @@ bool ContentInstaller::Begin(InstallTask *task, std::vector<Placeholder> *out, s
             *error = "a content in the task has no usable content id";
             return false;
         }
+        /* A resume: the task file named this content's placeholder, and the bytes in it are what
+           the file says they are (see PlanResume, which only continues when the id *and* the size
+           matched).  The placeholder is reused exactly as it stands -- creating a second one for
+           the same content is refused by the system anyway, and the whole point of recording the id
+           is that the bytes already written survive the interruption. */
+        if (!content.placeholder_id.empty()) {
+            bool exists = false;
+            std::string probe_error;
+            if (HasPlaceHolder(content.placeholder_id, &exists, &probe_error) && exists) {
+                Placeholder entry;
+                entry.content_id = content.content_id;
+                entry.placeholder_id = content.placeholder_id;
+                out->push_back(std::move(entry));
+                m_finish_trace.push_back("begin resumed content " + content.content_id + " at " +
+                                         std::to_string(content.written) + " bytes");
+                continue;
+            }
+            /* Recorded but gone: the `written` count describes bytes nobody has, so this content
+               starts over rather than leaving a hole in the middle of it. */
+            m_finish_trace.push_back("begin placeholder for " + content.content_id +
+                                     " is gone, starting it over");
+            content.written = 0;
+            content.placeholder_id.clear();
+        }
         /* The placeholder is what the bytes land in; it is created once and then written to
            across resumes, which is why the id goes into the task file.  The id has to be
            *generated*: an all-zero uuid is accepted once and refused afterwards ("creating a
@@ -510,12 +534,6 @@ bool ContentInstaller::Begin(InstallTask *task, std::vector<Placeholder> *out, s
         entry.content_id = content.content_id;
         entry.placeholder_id = ToHex(placeholder.uuid.uuid, sizeof(placeholder.uuid.uuid));
         out->push_back(std::move(entry));
-        if (content.written == 0) {
-            /* Nothing wrote into it yet, so the console's copy is authoritative: a stale
-               `written` from a task file whose placeholder was cleaned up must not make us skip
-               the beginning of the content. */
-            continue;
-        }
     }
     return true;
 }
@@ -623,6 +641,25 @@ bool ContentInstaller::Register(const InstallTask &task, const std::vector<TaskC
                have it is a title that will not launch. */
             m_finish_trace.push_back("meta content registered " + content.content_id);
         }
+    }
+    return true;
+}
+
+bool ContentInstaller::HasPlaceHolder(const std::string &placeholder_id, bool *exists,
+                                      std::string *error) {
+    *exists = false;
+    if (!EnsureOpen(error)) {
+        return false;
+    }
+    NcmPlaceHolderId placeholder{};
+    if (!PlaceholderIdFromHex(placeholder_id, &placeholder)) {
+        *error = "a placeholder id in the task file is not 16 hex digits";
+        return false;
+    }
+    const Result rc = ncmContentStorageHasPlaceHolder(&m_storage, exists, &placeholder);
+    if (R_FAILED(rc)) {
+        *error = Describe("asking about a placeholder", rc);
+        return false;
     }
     return true;
 }

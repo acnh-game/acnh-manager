@@ -169,7 +169,6 @@ constexpr Entry kStrings[] = {
     {"连接到手机热点,或者与手机/电脑连接到同一个 Wi-Fi 下即可", "A phone hotspot, or the same Wi-Fi as your phone or computer, works"},  /* InstallNoNetworkHint */
     {"重新检测", "Check again"},  /* InstallRecheck */
     {"重试", "Try again"},  /* InstallRetry */
-    {"未完成的安装(已接收 %s)", "Unfinished install (%s received)"},  /* InstallPending */
     {"版本", "Version"},  /* ConfirmVersion */
     {"类型", "Type"},  /* ConfirmType */
     {"大小", "Size"},  /* ConfirmSize */
@@ -232,6 +231,20 @@ constexpr Entry kStrings[] = {
     /* The footer note on the install page.  The tabs are hidden there, so the "L / R switch
        pages" note has no meaning and this one takes its place. */
     {"L / R 切换存储", "L / R switch storage"},  /* FooterInstallTargetHint */
+    /* The install an interruption left behind (design section 10): the install page opens on it, and
+       the details page lists it, so the space its placeholders hold is never invisible. */
+    {"未完成的安装", "Unfinished install"},  /* PendingTitle */
+    {"继续", "Continue"},  /* PendingResume */
+    {"放弃并清理", "Give up and clean up"},  /* PendingAbandon */
+    {"选择新的安装内容", "Pick something else"},  /* PendingPickNew */
+    {"这条任务不能继续(来源是浏览器上传),可以放弃并清理", "This one cannot be continued here (it came from a browser upload) - give up and clean up instead"},  /* PendingUnresumable */
+    {"占位已被系统清理(重启会清空占位):继续会从头开始", "The placeholders are gone (a reboot clears them): continuing starts over"},  /* PendingGone */
+    {"已接收 %s / %s", "%s of %s received"},  /* PendingProgress */
+    {"占位 %s", "%s reserved"},  /* PendingReserved */
+    /* On the confirm card, when this run is picking up where an interrupted one stopped. */
+    {"继续上次未完成的安装(已接收 %s)", "Continuing the unfinished install (%s received)"},  /* ConfirmResumeNote */
+    /* The transfer failed but the work is not lost: the task file and its placeholders stay. */
+    {"未完成的安装已保留,下次进安装页可以继续", "The unfinished install was kept - continue it from the install page"},  /* ResultTaskKept */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

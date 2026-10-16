@@ -23,6 +23,8 @@
 #include <string_view>
 #include <vector>
 
+#include "install/options.hpp"
+
 namespace acnh_manager::install {
 
 /* Where the bytes come from.  One task has exactly one source at a time: a page that submits a
@@ -84,6 +86,10 @@ struct InstallTask {
     std::string name;      /* the file as the player sees it (SD browser / browser upload) */
     std::string url;       /* download source only */
     std::uint64_t container_size{0}; /* 0 = unknown (a source that cannot tell) */
+    /* Which storage this run writes to.  The task file needs it because the placeholders live
+       *there*: without it, "give up and clean up" after a restart would have to guess which storage
+       to empty, and the player may well have switched the target in the meantime. */
+    TargetStorage target{TargetStorage::SdCard};
     std::vector<TaskContent> contents; /* container order */
     TaskStage stage{TaskStage::Idle};
     std::string error;     /* player-facing wording for the Failed stage */
@@ -124,6 +130,28 @@ bool TransferComplete(const InstallTask &task);
    it (it never sees our offsets), so the file name and the total size are checked -- and the
    content-level verification behind the installer is the real backstop. */
 bool MatchesSourceFile(const InstallTask &task, std::string_view name, std::uint64_t size);
+
+/* What happens to one content when an interrupted install is picked up again.
+
+   `recorded` is the entry from `install-task.json`, `fresh` the entry this run built from the
+   package, and `placeholder_present` the console's answer to "are those bytes still there?".
+   Three rules, in the order they matter:
+
+   1. the bytes are still on the console (the placeholder exists) **and** the content is the same
+      one (same id and size) -> continue where the file says it stopped;
+   2. a *compressed* content starts over even then: the NCZ stream can only be decoded forward
+      from its first block, so resuming inside one would mean re-reading (and re-downloading) the
+      payload anyway -- doing it honestly is cheaper than pretending;
+   3. anything else -- no placeholder, a different size, a content the file does not mention --
+      starts from zero, because a `written` that describes bytes nobody has would leave a hole in
+      the middle of the content. */
+struct ResumePlan {
+    bool restart{true};       /* start this content over (create a fresh placeholder) */
+    std::uint64_t written{0}; /* bytes already in the placeholder, when `restart` is false */
+    std::string placeholder_id;
+};
+ResumePlan PlanResume(const TaskContent &recorded, const TaskContent &fresh,
+                      bool placeholder_present);
 
 /* `install-task.json` (same shape as the in-memory struct; the caller owns the file IO). */
 std::string DumpTask(const InstallTask &task);

@@ -37,6 +37,14 @@ namespace acnh_manager::install {
    lines beat one long one: the log truncates a line, which is how a useful self-check was lost. */
 void SetGameInstallLog(acnh_manager::Log *log);
 
+/* Where `install-task.json` lives.  The engine decides *when* the task has to be on disk -- before
+   the first byte, every few dozen megabytes, and at the moments that decide whether it is deleted
+   or kept -- but it knows ncm, not the SD card, so the app supplies the two operations: write this
+   text, delete the file.  Neither is set in the host tests, and a null store simply means "this run
+   keeps no task file". */
+void SetGameInstallTaskStore(std::function<bool(const std::string &json, std::string *error)> save,
+                             std::function<bool(std::string *error)> remove);
+
 /* The one failure the installer reports as a *code* instead of a sentence: the console has a game
    running, and the screens have wording of their own for it ("close the game first, then try
    again").  It is a constant because three screens can show it, and a literal in four places is
@@ -133,6 +141,16 @@ public:
     const InstallTask &Task() const { return m_task; }
     InstallTask &MutableTask() { return m_task; }
     const InstallStatus &Status() const { return m_status; }
+    /* Picks up an interrupted run: every content this package has is matched against the one the
+       task file describes, and adopted when the console still holds those bytes (see PlanResume);
+       the rest start from zero.  Call it after Prepare() and before Begin().  False means the file
+       is about a different package: the caller should start fresh and leave that file alone. */
+    bool AdoptResume(const InstallTask &recorded, std::string *error);
+    /* Whether this run has a task file of its own that must survive leaving the screen: it is
+       written before the first byte, and only Finish (the console has it) or Abandon (the player
+       gave up) takes it away.  A *failed* run keeps it, which is what makes the next entry into the
+       install page able to continue -- so "leave the screen" must not abandon it. */
+    bool KeepsTask() const { return m_task_kept; }
     /* The cover the console has for this package's game, as the JPEG it hands out (empty when the
        game is not installed, or when `ns` would not tell us).  The confirm screen draws it; the
        decode lives in the UI layer, because the installer has no business knowing about pixels. */
@@ -210,6 +228,17 @@ private:
        with no control data at all).  Either way the answer is "install again": every content is
        already in the storage, so only the finish step runs. */
     bool ConsoleCanUseInstalledVersion();
+    /* Writes the task file (when this run has one and the app set a store).  Called before the
+       first byte, after each content completes, and every kTaskFlushBytes of progress: the file is
+       what an interrupted run is picked up from, so it must never promise bytes that are not
+       there. */
+    bool SaveTask(std::string *error);
+    /* Removes it again: an install that finished, or one the player cancelled, leaves no task
+       behind.  A run that merely *failed* keeps it -- that is the resumable case. */
+    void RemoveTask();
+    /* Writes the task file when enough progress has gone by (or a content just finished) to be
+       worth a write: a flush per range would spend more time in the card than in the transfer. */
+    void FlushTaskIfDue();
 
     ContainerReader &m_reader;
     std::string m_name;
@@ -240,6 +269,10 @@ private:
     /* Development aid (install/dev_stats.*): when Begin() started this run's clock, 0 when no run
        is in flight.  Kept unconditional so the call sites need no #if. */
     std::uint64_t m_transfer_begin_ms{0};
+    /* Progress at the last task-file write: a flush per few dozen megabytes, not per range. */
+    std::uint64_t m_task_flushed_bytes{0};
+    int m_task_flushed_contents{0};
+    bool m_task_kept{false};
     ContentInstaller m_installer;
     std::vector<Placeholder> m_placeholders;
 };

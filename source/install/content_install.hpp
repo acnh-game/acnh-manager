@@ -153,6 +153,12 @@ public:
     /* Removes placeholders (the cancel path, and rolling back what a failed run created). */
     bool DropPlaceholders(const std::vector<Placeholder> &placeholders, std::string *error);
 
+    /* Whether the console still holds the bytes of a placeholder an interrupted run left behind.
+       This is the question a resume turns on: a reboot or another tool's cleanup can take the
+       placeholder away, and a task file that says "60% of this content is in" would then describe
+       bytes nobody has.  `placeholder_id` is the 16 hex digits the task file records. */
+    bool HasPlaceHolder(const std::string &placeholder_id, bool *exists, std::string *error);
+
     NxServices &Services() { return m_services; }
     NcmContentStorage &Storage() { return m_storage; }
     NcmContentMetaDatabase &MetaDatabase() { return m_meta; }

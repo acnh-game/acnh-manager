@@ -23,6 +23,10 @@ namespace {
 
 acnh_manager::Log *g_log = nullptr;
 
+/* The task file's two operations, handed over by the app (see SetGameInstallTaskStore). */
+std::function<bool(const std::string &, std::string *)> g_task_save;
+std::function<bool(std::string *)> g_task_remove;
+
 /* One diagnostic line; the app passes its log in at startup, and nothing here is dropped when it
    is absent (the tests run without one). */
 void Note(const char *format, ...) {
@@ -57,6 +61,11 @@ constexpr int kQueuePollMs = 8;
    enough for the reader to stay a range ahead of the writer. */
 constexpr std::size_t kQueueSlots = 3;
 
+/* How much progress goes by between two writes of install-task.json.  Sixty-four megabytes is a
+   few seconds of transfer on this link and costs one ~37 ms write (measured 2026-10-16): the file
+   is never more than that far behind, and the card is touched a handful of times per gigabyte. */
+constexpr std::uint64_t kTaskFlushBytes = 64ull * 1024 * 1024;
+
 std::string EntryName(const NacpLanguageEntry *entry) {
     if (entry == nullptr) {
         return std::string();
@@ -85,12 +94,21 @@ std::array<std::string, kNacpLangCount> EntryNames(const NacpStruct *nacp) {
 
 void SetGameInstallLog(acnh_manager::Log *log) { g_log = log; }
 
+void SetGameInstallTaskStore(std::function<bool(const std::string &, std::string *)> save,
+                             std::function<bool(std::string *)> remove) {
+    g_task_save = std::move(save);
+    g_task_remove = std::move(remove);
+}
+
 GameInstall::GameInstall(ContainerReader &reader, std::string name, std::uint64_t container_size,
                          TargetStorage target, const InstallOptions &options)
     : m_reader(reader), m_name(std::move(name)), m_target(target), m_options(options),
       m_installer(target, options) {
     m_task.name = m_name;
     m_task.container_size = container_size;
+    /* The task file records where the placeholders live: "give up and clean up" after a restart has
+       to know which storage to empty, and the player may have switched the target since. */
+    m_task.target = target;
     m_status.needs_keys = options.MayNeedKeys();
 }
 
@@ -810,6 +828,20 @@ bool GameInstall::Begin(std::string *error) {
             }
         }
     }
+    /* And the task file goes out before the first byte too: from here on, an interruption is
+       resumable.  A store that cannot be written is worth a line, not a failed install -- the run
+       still works, it just cannot be picked up later. */
+    m_task.stage = TaskStage::Fetching;
+    {
+        std::string task_error;
+        if (SaveTask(&task_error)) {
+            m_task_kept = true;
+        } else if (g_log != nullptr) {
+            Note("install: the task file could not be written: %s", task_error.c_str());
+        }
+        m_task_flushed_bytes = DoneBytes(m_task);
+        m_task_flushed_contents = DoneContents(m_task);
+    }
     /* The task is complete now (order, sizes and placeholder ids), so the fetch thread can start
        filling the queue while this thread starts writing.  It walks the contents itself and keeps
        its own cursors (`m_fetch`): the task counters belong to the writer. */
@@ -1145,6 +1177,121 @@ std::uint8_t *GameInstall::AcquireSlotOrFinish() {
     return slot;
 }
 
+/* The task file, as the app's store sees it: the engine formats, the app writes.  Reading it back
+   is the app's job too (it owns the card and the screen that offers "continue"). */
+bool GameInstall::SaveTask(std::string *error) {
+    if (!g_task_save) {
+        return false; /* no store: this run keeps no task file (the host tests run like this) */
+    }
+    return g_task_save(DumpTask(m_task), error);
+}
+
+void GameInstall::RemoveTask() {
+    if (!g_task_remove) {
+        return;
+    }
+    std::string ignored;
+    if (!g_task_remove(&ignored) && g_log != nullptr) {
+        Note("install: the task file could not be removed: %s", ignored.c_str());
+    }
+}
+
+void GameInstall::FlushTaskIfDue() {
+    if (!g_task_save) {
+        return;
+    }
+    const std::uint64_t done = DoneBytes(m_task);
+    const int finished = DoneContents(m_task);
+    /* Two reasons to write, and no others: a content finished (that is progress a resume cannot
+       reconstruct, and the cheapest moment to record it), or enough bytes have gone by that losing
+       them would hurt.  Writing per range would spend more time in the card than in the transfer. */
+    const bool content_finished = finished != m_task_flushed_contents;
+    if (!content_finished && done < m_task_flushed_bytes + kTaskFlushBytes) {
+        return;
+    }
+    std::string error;
+    if (SaveTask(&error)) {
+        m_task_flushed_bytes = done;
+        m_task_flushed_contents = finished;
+    } else if (g_log != nullptr) {
+        Note("install: the task file could not be updated: %s", error.c_str());
+    }
+}
+
+/* Picking up an interrupted run.  Every decision is made here and none of them is a guess: the
+   content ids and sizes have to match the file, and the console has to still hold the placeholder
+   (a reboot or another tool's cleanup can take it away).  What is adopted goes into the task's
+   `written` / `placeholder_id`, which is exactly the pair `NextRange` and `ContentInstaller::Begin`
+   work from -- so a resume is the same code path as a fresh start, one that begins further in. */
+bool GameInstall::AdoptResume(const InstallTask &recorded, std::string *error) {
+    /* The file has to be about this container: a task that names a different file may describe
+       contents that have nothing to do with the one in hand. */
+    if (recorded.container_size != 0 && m_task.container_size != 0 &&
+        recorded.container_size != m_task.container_size) {
+        *error = "the task file was written for a different container";
+        return false;
+    }
+    std::size_t continued = 0;
+    std::size_t restarted = 0;
+    std::size_t completed = 0;
+    for (auto &content : m_task.contents) {
+        /* Contents this run does not install (already on the console) have nothing to resume. */
+        if (content.skipped) {
+            continue;
+        }
+        /* A content this run has *already* read in full (the meta and control contents, which
+           Prepare installs into a placeholder of its own to read them): it is complete in this run,
+           and adopting the file's older numbers for it would clear `written` and make Begin create a
+           second placeholder for a content that already has one -- which the system refuses. */
+        if (content.written >= content.size && content.size > 0) {
+            ++completed;
+            continue;
+        }
+        const TaskContent *was = nullptr;
+        for (const auto &entry : recorded.contents) {
+            if (entry.content_id == content.content_id) {
+                was = &entry;
+                break;
+            }
+        }
+        if (was == nullptr) {
+            ++restarted;
+            continue;
+        }
+        /* The one question only the console can answer. */
+        bool present = false;
+        std::string probe_error;
+        if (!m_installer.HasPlaceHolder(was->placeholder_id, &present, &probe_error)) {
+            Note("install: resume could not ask about %s (%s): starting it over",
+                 content.content_id.c_str(), probe_error.c_str());
+            present = false;
+        }
+        const ResumePlan plan = PlanResume(*was, content, present);
+        if (plan.restart) {
+            ++restarted;
+            content.written = 0;
+            content.placeholder_id.clear();
+            if (was->written > 0) {
+                Note("install: %s is started over (compressed stream, or its bytes are gone)",
+                     content.content_id.c_str());
+            }
+            continue;
+        }
+        content.written = plan.written;
+        content.placeholder_id = plan.placeholder_id;
+        if (content.written >= content.size) {
+            ++completed;
+        } else {
+            ++continued;
+        }
+    }
+    m_task_flushed_bytes = DoneBytes(m_task);
+    Note("install: resume: %zu continued, %zu finished, %zu started over (%llu of %llu bytes in)",
+         continued, completed, restarted, static_cast<unsigned long long>(DoneBytes(m_task)),
+         static_cast<unsigned long long>(TotalBytes(m_task)));
+    return true;
+}
+
 bool GameInstall::Step(std::string *error) {
     /* The writer half: take whatever the reader has ready and put it in the placeholder.  An empty
        queue is not a failure -- it means the reader is still fetching -- so the caller keeps
@@ -1194,6 +1341,7 @@ bool GameInstall::Step(std::string *error) {
         } else if (WriteDecoded(prepared.range.index, *decoder, &decode_error)) {
             m_queue->Release();
             RefreshStatus();
+            FlushTaskIfDue();
             return true;
         }
         m_queue->Release();
@@ -1211,6 +1359,7 @@ bool GameInstall::Step(std::string *error) {
         return false;
     }
     RefreshStatus();
+    FlushTaskIfDue();
     return true;
 }
 
@@ -1338,6 +1487,10 @@ bool GameInstall::Finish(std::string *error) {
         Note("install: finish %s", line.c_str());
     }
     m_status.stage = InstallStage::Done;
+    m_task.stage = TaskStage::Done;
+    /* The console has it: there is nothing left to continue. */
+    RemoveTask();
+    m_task_kept = false;
     RefreshStatus();
     return true;
 }
@@ -1362,6 +1515,10 @@ bool GameInstall::Abandon(std::string *error) {
         }
         m_installer.Rollback(inputs, error);
     }
+    /* Cancelling means "pretend this never started": the placeholders are gone, so a task file that
+       points at them would only offer a resume into nothing. */
+    RemoveTask();
+    m_task_kept = false;
     return ok;
 }
 

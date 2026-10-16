@@ -1602,8 +1602,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::FooterInstallTargetHint) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::FooterInstallTargetHint); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::ResultTaskKept) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ResultTaskKept); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -1853,6 +1853,80 @@ void TestHeaderTabs() {
     }
     CHECK(ring_layout.hit[0].x >= 0);
     CHECK(ring_layout.hit[kHeaderTabCount - 1].x + ring_layout.hit[kHeaderTabCount - 1].w <= 1280);
+}
+
+/* Picking up an interrupted install (design section 10).  The rules are pure on purpose: the
+   console's answer ("is that placeholder still there?") is the only fact from outside, and what
+   follows from it decides whether hours of transfer are kept or thrown away. */
+void TestResumePlan() {
+    using acnh_manager::install::PlanResume;
+    using acnh_manager::install::TaskContent;
+
+    const auto content = [](const char *id, std::uint64_t size, bool compressed, std::uint64_t done,
+                            const char *placeholder) {
+        TaskContent c;
+        c.content_id = id;
+        c.size = size;
+        c.compressed = compressed;
+        c.written = done;
+        /* An empty id, never a null pointer: `std::string(nullptr)` is undefined and took this test
+           binary down the first time it ran. */
+        c.placeholder_id = placeholder != nullptr ? placeholder : "";
+        return c;
+    };
+    const std::string id = "0123456789ABCDEF0123456789ABCDEF";
+    const std::string other = "FEDCBA9876543210FEDCBA9876543210";
+
+    /* The bytes are there, the content is the same one: continue where the file stopped. */
+    {
+        const auto plan = PlanResume(content(id.c_str(), 1000, false, 400, "AABBCCDDEEFF0011"),
+                                    content(id.c_str(), 1000, false, 0, nullptr), true);
+        CHECK(!plan.restart);
+        CHECK(plan.written == 400);
+        CHECK(plan.placeholder_id == "AABBCCDDEEFF0011");
+    }
+    /* A compressed content starts over even with its placeholder in place: a zstd stream cannot be
+       entered in the middle, so "continue" would mean decoding from its first block anyway. */
+    {
+        const auto plan = PlanResume(content(id.c_str(), 1000, true, 400, "AABBCCDDEEFF0011"),
+                                    content(id.c_str(), 1000, true, 0, nullptr), true);
+        CHECK(plan.restart);
+        CHECK(plan.written == 0);
+        CHECK(plan.placeholder_id.empty());
+    }
+    /* No placeholder on the console (a reboot, another tool's cleanup): the recorded byte count
+       describes bytes nobody has, so this content starts over rather than leaving a hole. */
+    {
+        const auto plan = PlanResume(content(id.c_str(), 1000, false, 400, "AABBCCDDEEFF0011"),
+                                    content(id.c_str(), 1000, false, 0, nullptr), false);
+        CHECK(plan.restart);
+    }
+    /* A different content id, or a different size: not the same bytes, so not a resume. */
+    {
+        CHECK(PlanResume(content(other.c_str(), 1000, false, 400, "AABBCCDDEEFF0011"),
+                         content(id.c_str(), 1000, false, 0, nullptr), true)
+                  .restart);
+        CHECK(PlanResume(content(id.c_str(), 999, false, 400, "AABBCCDDEEFF0011"),
+                         content(id.c_str(), 1000, false, 0, nullptr), true)
+                  .restart);
+        /* A file with no id at all (an older or hand-edited task file) matches nothing. */
+        CHECK(PlanResume(content("", 1000, false, 400, "AABBCCDDEEFF0011"),
+                         content(id.c_str(), 1000, false, 0, nullptr), true)
+                  .restart);
+    }
+    /* A `written` past the end of the content is a corrupt file, not a licence to skip: clamp it. */
+    {
+        const auto plan = PlanResume(content(id.c_str(), 1000, false, 5000, "AABBCCDDEEFF0011"),
+                                    content(id.c_str(), 1000, false, 0, nullptr), true);
+        CHECK(!plan.restart);
+        CHECK(plan.written == 1000);
+    }
+    /* Nothing recorded for this content (a package whose meta list grew): start it over. */
+    {
+        const auto plan = PlanResume(TaskContent{}, content(id.c_str(), 1000, false, 0, nullptr),
+                                    true);
+        CHECK(plan.restart);
+    }
 }
 
 /* The install page's two storage blocks (design section 8.1): microSD left, the console's own
@@ -2787,6 +2861,7 @@ int main() {
     TestActions();
     TestHeaderTabs();
     TestStorageBars();
+    TestResumePlan();
     TestPeerRing();
     TestFormatSize();
     TestMetaTypeCarriesGameVersion();
