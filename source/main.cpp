@@ -4,11 +4,8 @@
 #include <cstdio>
 #include <unistd.h>
 
-#include "env/detect.hpp"
-#include "install/gate.hpp"
+#include "install/dev_stats.hpp"
 #include "log.hpp"
-#include "manifest/manifest.hpp"
-#include "payload/embedded.hpp"
 #include "ui/app.hpp"
 #include "util/fs_path.hpp"
 #include "version.hpp"
@@ -65,44 +62,6 @@ constexpr const char *kTouchProbeFlagPath = "/switch/ACNH-Manager/dev-touchprobe
 constexpr const char *kNetProbeFlagPath = "/switch/ACNH-Manager/dev-netprobe";
 constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
 #endif
-constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
-
-const char *AppletTypeName(int type) {
-    switch (type) {
-        case AppletType_Application: return "Application";
-        case AppletType_SystemApplication: return "SystemApplication";
-        case AppletType_LibraryApplet: return "LibraryApplet";
-        case AppletType_SystemApplet: return "SystemApplet";
-        case AppletType_OverlayApplet: return "OverlayApplet";
-        default: return "?";
-    }
-}
-
-const char *MetaTypeName(u8 type) {
-    switch (type) {
-        case 0x80: return "Application";
-        case 0x81: return "Patch";
-        case 0x82: return "AddOnContent";
-        case 0x83: return "Delta";
-        default: return "?";
-    }
-}
-
-const char *GateStatusName(acnh_manager::install::GateStatus status) {
-    using acnh_manager::install::GateStatus;
-    switch (status) {
-        case GateStatus::Supported: return "supported";
-        case GateStatus::NoManifest: return "no-manifest";
-        case GateStatus::TitleMissing: return "title-missing";
-        case GateStatus::TitleNotSupported: return "title-not-supported";
-        case GateStatus::VersionNotSupported: return "version-not-supported";
-        case GateStatus::ContentIdMissing: return "content-id-missing";
-        case GateStatus::ContentIdMismatch: return "content-id-mismatch";
-        case GateStatus::BuildIdMismatch: return "build-id-mismatch";
-    }
-    return "?";
-}
-
 /* Dev flags are the only way this is used, so the release build does not carry it either (an
    unused static function is a warning, and this build is kept at zero). */
 #if ACNH_DEV_AIDS
@@ -126,78 +85,14 @@ void PrepareEnvironment(acnh_manager::Log *log) {
     (void)log;
 }
 
-void ReportEnvironment(acnh_manager::Log &log,
-                       const acnh_manager::env::EnvironmentReport &report) {
-    using acnh_manager::install::Evaluate;
-    log.Line("== ACNH-Manager %s ==", acnh_manager::kAppVersion);
-    log.Line("HOS %s, applet=%s", report.hos_version.c_str(), AppletTypeName(report.applet_type));
-    log.Line("game running=%d, patch storage=%u", report.application_running ? 1 : 0,
-             report.patch_found ? report.patch_storage : 0xFF);
-    for (const auto &meta : report.metas) {
-        log.Line("  meta type=%s(%#04x) storage=%u version=%u(%#x)", MetaTypeName(meta.meta_type),
-                 meta.meta_type, meta.storage, meta.version, meta.version);
-    }
-    log.Line("detected build: title=%s version=%u contentId=%s", report.build.title_id.c_str(),
-             report.build.version,
-             report.build.content_id.empty() ? "(unavailable)" : report.build.content_id.c_str());
-    log.Line("game version: %s (NACP display version, from nsGetApplicationControlData)",
-             report.game_display_version.empty() ? "(unavailable)"
-                                                 : report.game_display_version.c_str());
-    if (report.build.module_id_known) {
-        log.Line("  running main ModuleId=%s (dmnt:cht)", report.build.module_id.c_str());
-    }
-    log.Line("override advice: %s", report.advice.text.c_str());
-    log.Line("exefs override files: %zu", report.exefs.size());
-    for (const auto &file : report.exefs) {
-        log.Line("  %s (%llu B)", file.name.c_str(), static_cast<unsigned long long>(file.size));
-    }
-    if (report.legacy_cheat_present) {
-        log.Line("legacy cheat present: %s entry=\"%s\" (same chat path as the agent)",
-                 report.legacy_cheat_path.c_str(),
-                 report.legacy_cheat_entry.empty() ? "(file unreadable)"
-                                                   : report.legacy_cheat_entry.c_str());
-    }
-    if (!report.problems.empty()) {
-        log.Line("problems: %s", report.problems.c_str());
-    }
-    for (const std::string &note : report.notes) {
-        log.Line("%s", note.c_str());
-    }
-
-    /* The manifest this build installs from: the embedded release channel, which the interface
-       calls "bundled with the app".  This block used to evaluate with a null manifest and print a
-       hard-coded "no embedded release manifest", written before the release import existed -- so
-       every real build logged a gate of `no-manifest` while its own screen said `supported`,
-       and log.txt is what support reads.  The network check runs later and may adopt a newer
-       manifest; what it adopted is reported by the details page and by the update-check rows, not
-       here (this line is about what the build carries). */
-    acnh_manager::manifest::Manifest active;
-    std::string manifest_line;
-    bool have_manifest = false;
-    if (acnh_manager::payload::EmbeddedAvailable()) {
-        const auto parsed = acnh_manager::manifest::Parse(
-            acnh_manager::payload::EmbeddedManifestJson(), acnh_manager::kAppVersion);
-        if (parsed.ok) {
-            active = parsed.manifest;
-            have_manifest = true;
-            manifest_line = "embedded, agent " + active.agent.version + " (commit " +
-                            active.agent.commit + ")";
-        } else {
-            manifest_line = "embedded manifest rejected: " + parsed.error;
-        }
-    } else {
-        manifest_line = "none embedded (this build carries no release import)";
-    }
-    const auto gate = Evaluate(have_manifest ? &active : nullptr, report.build);
-    log.Line("gate: %s (%s)", GateStatusName(gate.status), gate.reason.c_str());
-    log.Line("manifest: %s", manifest_line.c_str());
-}
-
 }  // namespace
 
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
+    /* Development aid: the start of the clock the "launch: +N ms" lines are measured against (a
+       no-op in a release build). */
+    acnh_manager::install::dev::MarkLaunch();
 
     /* libnx's console is deliberately not used: inside hbl it takes the default window and
        fights the UI framebuffer for the same state (crashed the loader process on real
@@ -210,9 +105,13 @@ int main(int argc, char **argv) {
     Result rc_log = rc_sd;
     if (R_SUCCEEDED(rc_sd)) {
         rc_dir = fsFsCreateDirectory(&sd, acnh_manager::util::FsPath(kAppDir).c_str());
-        rc_log = log.Open(sd, kLogPath, true);
+        /* The log switch is a runtime one (see source/log.hpp): read it here, once, before any line
+           is written.  A development build always writes; a release build only when `log-on` is on
+           the card, and then it writes a log the same as any other build. */
+        const bool want_log = acnh_manager::LogWanted(sd);
+        rc_log = log.Open(sd, kLogPath, true, want_log);
         if (R_SUCCEEDED(rc_log)) {
-            log.Open(sd, kLogHistoryPath, false);
+            log.Open(sd, kLogHistoryPath, false, want_log);
         }
     }
 
@@ -220,8 +119,10 @@ int main(int argc, char **argv) {
         log.Line("build: %s (ACNH-Manager %s)", kBuildStamp, acnh_manager::kAppVersion);
         log.Line("start: fsInitialize rc=0x%08X openSdmc rc=0x%08X mkdir rc=0x%08X", rc_fs, rc_sd,
                  rc_dir);
-        const auto report = acnh_manager::env::Collect(sd);
-        ReportEnvironment(log, report);
+        acnh_manager::install::dev::LogStartup(log, "fs + SD + log ready");
+        /* The environment block (HOS, metas, build, gate, manifest) is written by the UI, off the
+           one collection it does -- see App::TraceEnvironment.  It used to be collected here as
+           well, and doing the same work twice cost the launch about 1.6 s on hardware. */
 #if ACNH_DEV_AIDS
         if (FileExists(sd, kProbeFlagPath)) {
             log.Line("dev-probe flag present: running the M0 environment probe as well");
@@ -292,6 +193,9 @@ int main(int argc, char **argv) {
         if (app.Init(R_SUCCEEDED(rc_log) ? &log : nullptr, sd, &ui_error)) {
             if (R_SUCCEEDED(rc_log)) {
                 log.Line("ui: init ok (fonts + framebuffer ready)");
+                /* Init draws one frame of its own before returning (that is where the black screen
+                   ends), so this line is the tail of the startup, not the start of the loop. */
+                acnh_manager::install::dev::LogStartup(log, "init returned, entering the loop");
                 log.Sync();
             }
             /* Touch probe runs with the first frame already on screen, so the log tells us

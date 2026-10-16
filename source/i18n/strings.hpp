@@ -233,6 +233,8 @@ enum class StringId {
     MetaTypeBaseShort,
     MetaTypeUpdateShort,
     MetaTypeDlcShort,
+    InstallToLabel,
+    FooterInstallTargetHint,
 };
 
 const char *Text(StringId id, Language language);

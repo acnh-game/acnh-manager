@@ -9,10 +9,12 @@
 #include "install/content_install.hpp"
 #include "install/container.hpp"
 #include "install/game_install.hpp"
+#include "install/dev_stats.hpp"
 #include "install/range_probe.hpp"
 #include "install/source_local_file.hpp"
 #include "install/network_source.hpp"
 #include "ui/icon_image.hpp"
+#include "ui/storage_bars.hpp"
 #include "log.hpp"
 #include "net/update_policy.hpp"
 #include "version.hpp"
@@ -82,6 +84,17 @@ constexpr Color kWarnTint{0xFB, 0xF1, 0xCE, 0xFF};
 constexpr Color kOnHeader{0xFF, 0xFF, 0xFF, 0xFF};
 constexpr Color kHeaderSubtle{0xD5, 0xF2, 0xEC, 0xFF};
 constexpr Color kHeaderBadge{0x59, 0xCD, 0xB9, 0xFF};
+/* Face of the selected storage block in the install page's header: darker than the header, so the
+   block reads as chosen (the app's other selected faces are darker than their background too) and
+   the bar's lighter track stays visible inside it.  It is a *state* as much as an affordance: drawn
+   on every screen that shows the pair, including the ones where the choice can no longer be changed,
+   because "which storage this is going to" is worth knowing there too. */
+constexpr Color kHeaderPanel{0x25, 0x9B, 0x88, 0xFF};
+/* The same disc with no key in it: the storage selector's badges on the screens where the choice is
+   settled.  A dull grey reads as "nothing to press here" against both the header and the panel; the
+   chosen storage keeps the badge's own light mint, so the pair still says which one this run is
+   writing to -- the same colour that disc had when it carried its `L` / `R` letter. */
+constexpr Color kHeaderBadgeOff{0x84, 0xA9, 0xA2, 0xFF};
 constexpr Color kBad{0xC0, 0x39, 0x2B, 0xFF};
 constexpr Color kCardDisabled{0xF0, 0xEC, 0xE0, 0xFF};
 /* State colour for "nothing installed yet": purple, so it reads differently from the teal of
@@ -130,9 +143,11 @@ constexpr int kActionInstallDownload = 17; /* the installer's "download" card (X
 constexpr int kActionInstallUpload = 18;   /* the installer's "upload" card (A) */
 constexpr int kActionInstallPickRow = 19; /* a row of the installer's file list */
 constexpr int kActionInstallStart = 20;   /* "start" on the confirm screen (A) */
-constexpr int kActionInstallBack = 21;    /* the installer's footer "Ⓑ 返回" hint (same as the key) */
+constexpr int kActionInstallBack = 21;    /* the installer's footer "Ⓑ back" hint (same as the key) */
 constexpr int kActionInstallUrl = 22;     /* the address screen's "type it on the console" (A) */
 constexpr int kActionInstallRecheck = 23; /* the same screen, when there is no network: ask again */
+constexpr int kActionInstallTargetSd = 24;   /* the header's microSD block (L, or a tap) */
+constexpr int kActionInstallTargetNand = 25; /* the header's system block (R, or a tap) */
 
 /* Where each header entry's key badge sits (the layout needs the same answer for the drawn pill
    and for the touch target -- see RenderHeader).  Same order as the tabs there: + installer,
@@ -194,6 +209,43 @@ std::string FormatSize(u64 bytes) {
 }
 
 
+/* Names for the environment block of log.txt (see App::TraceEnvironment): the console's applet
+   kind, a meta's kind, and the gate's verdict, each as one short word a support reader knows. */
+const char *AppletTypeName(int type) {
+    switch (type) {
+        case AppletType_Application: return "Application";
+        case AppletType_SystemApplication: return "SystemApplication";
+        case AppletType_LibraryApplet: return "LibraryApplet";
+        case AppletType_SystemApplet: return "SystemApplet";
+        case AppletType_OverlayApplet: return "OverlayApplet";
+        default: return "?";
+    }
+}
+
+const char *MetaTypeName(u8 type) {
+    switch (type) {
+        case 0x80: return "Application";
+        case 0x81: return "Patch";
+        case 0x82: return "AddOnContent";
+        case 0x83: return "Delta";
+        default: return "?";
+    }
+}
+
+const char *GateStatusName(install::GateStatus status) {
+    switch (status) {
+        case install::GateStatus::Supported: return "supported";
+        case install::GateStatus::NoManifest: return "no-manifest";
+        case install::GateStatus::TitleMissing: return "title-missing";
+        case install::GateStatus::TitleNotSupported: return "title-not-supported";
+        case install::GateStatus::VersionNotSupported: return "version-not-supported";
+        case install::GateStatus::ContentIdMissing: return "content-id-missing";
+        case install::GateStatus::ContentIdMismatch: return "content-id-mismatch";
+        case install::GateStatus::BuildIdMismatch: return "build-id-mismatch";
+    }
+    return "?";
+}
+
 const char *PlanActionName(install::PlanAction action) {
     switch (action) {
         case install::PlanAction::Blocked: return "blocked";
@@ -219,6 +271,9 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
         return false;
     }
     Trace("ui: font init ok");
+    if (m_log != nullptr) {
+        install::dev::LogStartup(*m_log, "fonts ready");
+    }
     /* Same as EdiZon-SE: always ask for two buffers. */
     const u32 num_fbs = 2;
     Trace("ui: framebufferCreate ... (applet=%d num_fbs=%u)",
@@ -251,8 +306,14 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     }
     Trace("ui: framebufferMakeLinear ok (buf=%p linear=%p)", m_fb.buf, m_fb.buf_linear);
     m_fb_ready = true;
+    if (m_log != nullptr) {
+        install::dev::LogStartup(*m_log, "framebuffer ready");
+    }
     Trace("ui: collecting environment ...");
     Collect();
+    if (m_log != nullptr) {
+        install::dev::LogStartup(*m_log, "environment + plan ready");
+    }
     /* One silent look at the release host per launch: a newer agent shows up on the home screen
        on its own, and a failure only lands in the log/details. */
     StartUpdateCheck(/*silent=*/true);
@@ -398,6 +459,67 @@ void App::Collect() {
     Trace("collect: gate=%s plan=%s", m_gate.reason.c_str(), PlanActionName(m_plan.action));
 }
 
+/* The environment block of log.txt, written off the collection that just ran.  Same lines the
+   launcher used to write from its own collection -- one pass, one truth, and the gate line here is
+   the gate the screens used rather than a second evaluation of the embedded manifest. */
+void App::TraceEnvironment() {
+    if (m_log == nullptr) {
+        return;
+    }
+    const env::EnvironmentReport &report = m_report;
+    Trace("== ACNH-Manager %s ==", kAppVersion);
+    Trace("HOS %s, applet=%s", report.hos_version.c_str(), AppletTypeName(report.applet_type));
+    Trace("game running=%d, patch storage=%u", report.application_running ? 1 : 0,
+          report.patch_found ? report.patch_storage : 0xFF);
+    for (const auto &meta : report.metas) {
+        Trace("  meta type=%s(%#04x) storage=%u version=%u(%#x)", MetaTypeName(meta.meta_type),
+              meta.meta_type, meta.storage, meta.version, meta.version);
+    }
+    Trace("detected build: title=%s version=%u contentId=%s", report.build.title_id.c_str(),
+          report.build.version,
+          report.build.content_id.empty() ? "(unavailable)" : report.build.content_id.c_str());
+    Trace("game version: %s (NACP display version, from nsGetApplicationControlData)",
+          report.game_display_version.empty() ? "(unavailable)"
+                                              : report.game_display_version.c_str());
+    if (report.build.module_id_known) {
+        Trace("  running main ModuleId=%s (dmnt:cht)", report.build.module_id.c_str());
+    }
+    Trace("override advice: %s", report.advice.text.c_str());
+    Trace("exefs override files: %zu", report.exefs.size());
+    for (const auto &file : report.exefs) {
+        Trace("  %s (%llu B)", file.name.c_str(), static_cast<unsigned long long>(file.size));
+    }
+    if (report.legacy_cheat_present) {
+        Trace("legacy cheat present: %s entry=\"%s\" (same chat path as the agent)",
+              report.legacy_cheat_path.c_str(),
+              report.legacy_cheat_entry.empty() ? "(file unreadable)"
+                                                : report.legacy_cheat_entry.c_str());
+    }
+    if (!report.problems.empty()) {
+        Trace("problems: %s", report.problems.c_str());
+    }
+    for (const std::string &note : report.notes) {
+        Trace("%s", note.c_str());
+    }
+    /* Which manifest this build installs from.  The embedded release channel is the one the
+       interface calls "bundled with the app"; the SD channel only appears when the embedded one is
+       missing and the details page allows it, and saying which one won is the difference between
+       "my manifest is not being read" and "it is being read and rejected". */
+    std::string manifest_line;
+    if (m_manifest_embedded) {
+        manifest_line = "embedded, agent " + m_manifest.agent.version + " (commit " +
+                        m_manifest.agent.commit + ")";
+    } else if (m_have_manifest) {
+        manifest_line = "development channel (SD), agent " + m_manifest.agent.version;
+    } else if (!m_manifest_error.empty()) {
+        manifest_line = m_manifest_error;
+    } else {
+        manifest_line = "none embedded (this build carries no release import)";
+    }
+    Trace("gate: %s (%s)", GateStatusName(m_gate.status), m_gate.reason.c_str());
+    Trace("manifest: %s", manifest_line.c_str());
+}
+
 /* "0.11.0(c47d2b47)": the version alone cannot tell two builds of the same version apart, so
    the first bytes of the payload hash ride along.  Same hash the installer verifies. */
 std::string App::BuildLabel(const std::string &version, const std::string &sha256) const {
@@ -482,6 +604,11 @@ void App::LoadSettings() {
     }
     m_language = settings.language;
     i18n::SetLanguage(m_language);
+    /* The install target is a preference too: the page opens on whatever the player picked last
+       time, and the header's blocks show it as selected. */
+    m_install_target = settings.install_to_nand ? install::TargetStorage::Nand
+                                               : install::TargetStorage::SdCard;
+    Trace("settings: install target=%s", settings.install_to_nand ? "nand" : "sd");
 }
 
 void App::SaveSettings() {
@@ -490,6 +617,7 @@ void App::SaveSettings() {
     }
     Settings settings;
     settings.language = m_language;
+    settings.install_to_nand = m_install_target == install::TargetStorage::Nand;
     std::string error;
     if (!install::WriteTextFile(*m_sd, kSettingsPath, DumpSettings(settings), &error)) {
         Trace("settings: could not be saved: %s", error.c_str());
@@ -1071,6 +1199,18 @@ void App::HandleKeys(u32 down) {
             if (m_install_screen == InstallScreen::Progress) {
                 break; /* the engine owns the thread: no key does anything here */
             }
+            /* L / R pick the storage this run writes to: the tabs are hidden on this page, so the
+               "switch pages" meaning they have everywhere else would promise controls that are not
+               on the screen (design section 8.1).  SD is the left block, the console's memory the
+               right one, so the key on each side selects the block on that side. */
+            if ((down & HidNpadButton_L) != 0) {
+                SetInstallTarget(install::TargetStorage::SdCard);
+                break;
+            }
+            if ((down & HidNpadButton_R) != 0) {
+                SetInstallTarget(install::TargetStorage::Nand);
+                break;
+            }
             if ((down & HidNpadButton_B) != 0) {
                 InstallStepBack();
                 break;
@@ -1246,6 +1386,13 @@ void App::ActivateAction(int id) {
         case kActionInstallPickRow: PickFocusedFile(); break;
         case kActionInstallStart: RunGameInstall(); break;
         case kActionInstallBack: InstallStepBack(); break;
+        /* The header's two storage blocks: a tap selects, exactly like L / R does. */
+        case kActionInstallTargetSd:
+            SetInstallTarget(install::TargetStorage::SdCard);
+            break;
+        case kActionInstallTargetNand:
+            SetInstallTarget(install::TargetStorage::Nand);
+            break;
         case kActionInstallDownload:
             /* The address screen: nothing is downloaded until the player has typed an address,
                because this app does not host or hand out any. */
@@ -1299,6 +1446,7 @@ void App::Run() {
        to do with the agent install path, so it is set here, once, rather than in RunInstall. */
     install::SetGameInstallLog(m_log);
     m_focus = FirstEnabled(m_actions);
+    int frames_drawn = 0;
     while (appletMainLoop() && !m_should_exit) {
         PollUpdateCheck();
         padUpdate(&pad);
@@ -1306,6 +1454,18 @@ void App::Run() {
         HandleStick(pad);
         HandleTouch();
         Render();
+        /* The environment block of log.txt goes out after the second frame, not before the first:
+           writing it costs about 2.2 s (one open/write/flush/close per line, two sinks), so doing
+           it earlier was most of the black screen -- and by waiting one more frame the player also
+           gets a frame of input handling before the pause, instead of a picture that ignores them. */
+        ++frames_drawn;
+        if (!m_report_traced && frames_drawn >= 2) {
+            m_report_traced = true;
+            TraceEnvironment();
+            if (m_log != nullptr) {
+                install::dev::LogStartup(*m_log, "environment report written");
+            }
+        }
     }
 }
 
@@ -1329,6 +1489,12 @@ void App::Render() {
     if (!m_fb_ready) {
         return;
     }
+    if (!m_first_frame_traced) {
+        m_first_frame_traced = true;
+        if (m_log != nullptr) {
+            install::dev::LogStartup(*m_log, "first frame drawn (the black screen ends here)");
+        }
+    }
     u32 stride = 0;
     /* After framebufferMakeLinear you must draw on the shadow buffer returned by
        framebufferBegin; framebufferEnd copies it into the real framebuffer. */
@@ -1351,6 +1517,12 @@ void App::Render() {
     surface.stride = static_cast<int>(stride / 4);
 
     Fill(surface, kBackground);
+    /* The storage row is read once per frame and shared: the header draws it and the touch targets
+       come from it, and reading it twice doubled the cost of the ncm queries for one answer.  The
+       flag is cleared at the end of the frame so a stale read can never be drawn. */
+    if (m_page == Page::GameInstall) {
+        RefreshStorageRow(surface.width);
+    }
     if (trace) {
         Trace("frame: fill done");
         if (m_stage_pause) {
@@ -1409,6 +1581,7 @@ void App::Render() {
         }
     }
     framebufferEnd(&m_fb);
+    m_storage_row_ready = false;
     if (trace) {
         Trace("frame: end done");
         --m_trace_frames;
@@ -1517,7 +1690,28 @@ void App::RenderHeader(Surface surface) {
 void App::AddChromeActions(int surface_width, int surface_height) {
     /* The progress page has no chrome on purpose: its keys are dead while the engine works, and
        drawing tabs or a "B back" hint would promise controls that do nothing. */
-    if (m_page == Page::Progress || m_page == Page::GameInstall) {
+    if (m_page == Page::Progress) {
+        return;
+    }
+    /* The installer page hides the tabs and shows the two storage blocks instead; those blocks are
+       also the control that picks where the run writes (design section 8.1).  Their rectangles come
+       from the same layout the drawing uses -- and they are registered here, not while drawing,
+       because the page's own render clears the action list first.  Not on the progress screen:
+       there the target is locked in, so a tap must do nothing (the bars are still *drawn* there --
+       they say which storage is being written to). */
+    if (m_page == Page::GameInstall) {
+        if (!InstallTargetSelectable()) {
+            return;
+        }
+        if (!m_storage_row_ready) {
+            RefreshStorageRow(surface_width);
+        }
+        const ui::StorageBarsLayout &layout = m_storage_row;
+        /* SD first: the pair reads in the order L / R moves through it.  Not focus targets: they
+           have their own keys, and the badge rule in ui/action.hpp says a control with a key does
+           not also take the focus ring. */
+        m_actions.push_back({kActionInstallTargetSd, layout.panel[0], true, false});
+        m_actions.push_back({kActionInstallTargetNand, layout.panel[1], true, false});
         return;
     }
     /* Same order as RenderHeader draws (the installer first, then the ring's three pages): the
@@ -1550,8 +1744,8 @@ void App::AddChromeActions(int surface_width, int surface_height) {
 
 /* Two footer hints, side by side, each of them a control: what is drawn as pressable has to be
    pressable.  Both screens that use it are "the card is information, the footer is the control". */
-void App::DrawFooterHintPair(Surface surface, int y, i18n::StringId first, int first_action,
-                             i18n::StringId second, int second_action) {
+int App::DrawFooterHintPair(Surface surface, int y, i18n::StringId first, int first_action,
+                            i18n::StringId second, int second_action) {
     int x = kMargin;
     const auto draw_hint = [&](const char *key, const char *label, Color face, Color ink,
                                int action) {
@@ -1565,6 +1759,7 @@ void App::DrawFooterHintPair(Surface surface, int y, i18n::StringId first, int f
     };
     draw_hint("A", Tr(first), kHeader, kOnHeader, first_action);
     draw_hint("B", Tr(second), kBorder, kText, second_action);
+    return x;
 }
 
 void App::RenderFooter(Surface surface) {
@@ -1588,8 +1783,10 @@ void App::RenderFooter(Surface surface) {
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Confirm) {
         /* "Start" is only useful next to "leave", and drawing them at the same spot (which the
            first version did) makes an unreadable pile. */
-        DrawFooterHintPair(surface, y, i18n::StringId::ConfirmStart, kActionInstallStart,
-                           i18n::StringId::LabelBack, kActionInstallBack);
+        const int hints_end = DrawFooterHintPair(surface, y, i18n::StringId::ConfirmStart,
+                                                 kActionInstallStart, i18n::StringId::LabelBack,
+                                                 kActionInstallBack);
+        DrawInstallTargetHint(surface, y + 12, hints_end + 30);
         const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
                     kBuildStamp);
@@ -1599,13 +1796,14 @@ void App::RenderFooter(Surface surface) {
         /* The address screen: one control, next to "leave".  Which control depends on whether
            there is a network -- with none, typing an address cannot lead anywhere, so A asks
            again instead. */
-        if (m_install_no_network) {
-            DrawFooterHintPair(surface, y, i18n::StringId::InstallRecheck, kActionInstallRecheck,
-                               i18n::StringId::LabelBack, kActionInstallBack);
-        } else {
-            DrawFooterHintPair(surface, y, i18n::StringId::InstallTypeUrl, kActionInstallUrl,
-                               i18n::StringId::LabelBack, kActionInstallBack);
-        }
+        const int hints_end =
+            m_install_no_network
+                ? DrawFooterHintPair(surface, y, i18n::StringId::InstallRecheck,
+                                     kActionInstallRecheck, i18n::StringId::LabelBack,
+                                     kActionInstallBack)
+                : DrawFooterHintPair(surface, y, i18n::StringId::InstallTypeUrl, kActionInstallUrl,
+                                     i18n::StringId::LabelBack, kActionInstallBack);
+        DrawInstallTargetHint(surface, y + 12, hints_end + 30);
         const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
                     kBuildStamp);
@@ -1649,7 +1847,15 @@ void App::RenderFooter(Surface surface) {
        control -- it names two keys, so there is no single action a tap could mean.  Not on the
        installer page (its header hides the tabs and L / R are dead there) and not on the progress
        page (no chrome at all). */
-    if (m_page != Page::GameInstall && m_page != Page::Progress) {
+    if (m_page == Page::GameInstall) {
+        /* The installer's own footer note, and only where it is true: L / R pick the storage on the
+           screens that still let the choice be made, and do nothing at all on the result screen
+           (the run is over), so that one gets no note rather than a note about other pages' keys. */
+        if (InstallTargetSelectable()) {
+            DrawInstallTargetHint(surface, hint.text_y,
+                                  hint.label_x + m_font.Measure(label, kFontSmall) + 30);
+        }
+    } else if (m_page != Page::Progress) {
         const char *pages_hint = Tr(i18n::StringId::FooterPagesHint);
         const int hint_width = m_font.Measure(pages_hint, kFontSmall);
         int x = kMargin;
@@ -1662,6 +1868,20 @@ void App::RenderFooter(Surface surface) {
             m_font.Draw(surface, x, hint.text_y, kFontSmall, kSubtle, pages_hint);
         }
     }
+}
+
+/* The install page's footer note: which key changes the target storage.  The tabs are hidden on
+   that page, so the "L / R switch pages" note has no meaning there and this one takes its place,
+   after the page's own hints (the footer's left group is "how to leave", and this is the same kind
+   of hint); `x` comes from the caller because only it knows where its hints ended. */
+void App::DrawInstallTargetHint(Surface surface, int text_y, int x) {
+    const std::string hint = Tr(i18n::StringId::FooterInstallTargetHint);
+    const int hint_width = m_font.Measure(hint, kFontSmall);
+    const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
+    if (x + hint_width + stamp_width + 24 >= surface.width) {
+        return; /* no room next to the stamps: saying nothing beats drawing over them */
+    }
+    m_font.Draw(surface, x, text_y, kFontSmall, kSubtle, hint.c_str());
 }
 
 bool App::HasOwnBackButton() const {
@@ -2745,58 +2965,136 @@ void App::RefreshFileList() {
     Trace("install: %s -> %zu entries", m_file_dir.c_str(), m_file_list.Items().size());
 }
 
-/* Two bars where the tabs were: the SD card and the console's own memory, in content-storage
-   terms (the same call the space check uses, so the screen and the check cannot disagree).
-   A storage that cannot be read shows the placeholder, never a made-up zero. */
-void App::RenderStorageBars(Surface surface) {
-    struct Bar {
-        i18n::StringId label;
-        install::TargetStorage target;
-    };
-    const Bar bars[2] = {{i18n::StringId::StorageSdCard, install::TargetStorage::SdCard},
-                         {i18n::StringId::StorageSystem, install::TargetStorage::Nand}};
-    constexpr int kBarWidth = 150;
-    constexpr int kBarHeight = 8;
-    /* One block per storage: the caption above, the bar below, both placed from these two numbers.
-       They used to be separate literals inside the loop, and moving one of them moved only the
-       track -- the filled part stayed behind, so the two layers of the same bar stopped
-       overlapping.  The whole block sits low in the header band, not against its top edge. */
-    constexpr int kCaptionY = 32;
-    constexpr int kBarY = 62;
-    int x_right = surface.width - kMargin;
-    for (int i = 1; i >= 0; --i) {
+/* "microSD  12.3 / 29.1 GB" and how full that storage is, for each of the two content storages
+   (the same call the space check uses, so the screen and the check cannot disagree), read fresh:
+   the header shows this on every install screen, and a stale number is worse than none.  A storage
+   that cannot be read reports `ok = false` instead of a made-up zero. */
+void App::StorageBarTexts(std::string text[2], bool ok[2], double used[2]) const {
+    const install::TargetStorage targets[2] = {install::TargetStorage::SdCard,
+                                              install::TargetStorage::Nand};
+    const i18n::StringId labels[2] = {i18n::StringId::StorageSdCard,
+                                     i18n::StringId::StorageSystem};
+    for (int i = 0; i < 2; ++i) {
         std::uint64_t free_bytes = 0;
         std::uint64_t total_bytes = 0;
         std::string error;
-        const bool ok = install::ContentInstaller::Space(bars[i].target, &free_bytes, &total_bytes,
-                                                         &error);
-        /* "free / total" in GB with one decimal, the shape the design fixes; a storage that
-           cannot be read says so instead of showing 0.0 (design section 8). */
+        ok[i] = install::ContentInstaller::Space(targets[i], &free_bytes, &total_bytes, &error);
+        used[i] = ok[i] && total_bytes > 0
+                      ? 1.0 - static_cast<double>(free_bytes) / static_cast<double>(total_bytes)
+                      : 0.0;
+        /* "free / total" in GB with one decimal, the shape the design fixes; a storage that cannot
+           be read says so instead of showing 0.0 (design section 8). */
         char caption[64];
-        if (ok) {
+        if (ok[i]) {
             std::snprintf(caption, sizeof(caption), "%.1f / %.1f GB",
                           static_cast<double>(free_bytes) / (1024.0 * 1024.0 * 1024.0),
                           static_cast<double>(total_bytes) / (1024.0 * 1024.0 * 1024.0));
         } else {
             std::snprintf(caption, sizeof(caption), "%s", Tr(i18n::StringId::StorageUnavailable));
         }
-        char line[96];
-        std::snprintf(line, sizeof(line), "%s  %s", Tr(bars[i].label), caption);
-        const int width = m_font.Measure(line, kFontSmall);
-        const int x = x_right - width;
-        m_font.Draw(surface, x, kCaptionY, kFontSmall, kOnHeader, line);
-        /* The bar is as wide as the text above it, so the two read as one block; it used to be a
-           fixed 150 px, which left the bar visibly shorter than its own caption. */
-        const int bar = width > kBarWidth ? width : kBarWidth;
-        FillRoundedRect(surface, x, kBarY, bar, kBarHeight, kBarHeight / 2, kHeaderBadge);
-        if (ok && total_bytes > 0) {
-            const double used = 1.0 - static_cast<double>(free_bytes) / static_cast<double>(total_bytes);
-            const int filled = static_cast<int>(bar * used);
+        text[i] = std::string(Tr(labels[i])) + "  " + caption;
+    }
+}
+
+void App::StorageRowReadout(std::string text[2], int text_w[2], bool ok[2], double used[2],
+                            int *label_w) {
+    StorageBarTexts(text, ok, used);
+    for (int i = 0; i < 2; ++i) {
+        text_w[i] = m_font.Measure(text[i], kFontSmall);
+    }
+    /* The label is drawn bold, which is the same glyph one pixel right and down: two pixels of
+       slack keep the layout from tucking a block under it. */
+    *label_w = m_font.Measure(Tr(i18n::StringId::InstallToLabel), InstallToLabelSize()) + 2;
+}
+
+void App::RefreshStorageRow(int surface_width) {
+    int label_w = 0;
+    StorageRowReadout(m_storage_text, m_storage_text_w, m_storage_ok, m_storage_used,
+                      &label_w);
+    m_storage_row = ui::LayoutStorageBars(surface_width, label_w, m_storage_text_w);
+    m_storage_row_ready = true;
+}
+
+/* The label is the heading for the pair, so it is one size up from the numbers it introduces. */
+int App::InstallToLabelSize() const {
+    return kFontHeading + 4;
+}
+
+/* Centred on the panels beside it, not on the caption's line: the label names the whole group, and
+   the group's optical centre is the panel's. */
+int App::InstallToLabelY() const {
+    return ui::kStoragePanelCenterY - m_font.LineHeight(InstallToLabelSize()) / 2 + 4;
+}
+
+/* The row where the tabs were: the fixed "install to:" label and the two storage blocks (microSD,
+   the console's own memory).  Each block is a control group -- key badge, "free / total" and the
+   used bar -- and the chosen one carries a panel behind it.
+
+   They are also the control that picks where the run writes (design section 8.1), which is why the
+   measurement lives in helpers instead of in this drawing loop: the drawing and the touch targets
+   have to agree about where each group is, or an idle tap picks the storage the player was not
+   pointing at. */
+void App::RenderStorageBars(Surface surface) {
+    if (!m_storage_row_ready) {
+        RefreshStorageRow(surface.width);
+    }
+    const std::string *text = m_storage_text;
+    const bool *ok = m_storage_ok;
+    const double *used = m_storage_used;
+    const ui::StorageBarsLayout &layout = m_storage_row;
+    /* The fixed label that says what the pair is.  It is not a control: nothing registers it, and
+       it stays put whichever storage is selected. */
+    m_font.DrawBold(surface, layout.label_x, InstallToLabelY(), InstallToLabelSize(), kOnHeader,
+                    Tr(i18n::StringId::InstallToLabel));
+    const install::TargetStorage targets[2] = {install::TargetStorage::SdCard,
+                                              install::TargetStorage::Nand};
+    for (int i = 0; i < 2; ++i) {
+        /* The panel behind the chosen block is drawn on every screen that shows the pair, including
+           the ones where the choice is settled (the transfer, and the result): it says *where this
+           is going*, which is worth knowing while several gigabytes are moving, not just what may
+           still be tapped.  What does change with the screen is the key badge (letter vs dot, below)
+           and the footer's key note (see RenderFooter), and whether a tap does anything (see
+           AddChromeActions).  The other block keeps its numbers but dims, so the pair still compares
+           -- which is what the numbers are for -- while one of them is clearly the chosen one. */
+        const bool selected = m_install_target == targets[i];
+        if (selected) {
+            FillRoundedRect(surface, layout.panel[i].x, layout.panel[i].y, layout.panel[i].w,
+                            layout.panel[i].h, ui::kStoragePanelRadius, kHeaderPanel);
+        }
+        /* The key that picks this storage, drawn the way every other key in this app is drawn: the
+           same disc, in the same place relative to the thing it triggers.  Where the choice is
+           settled (the transfer, the result) the keys do nothing, so the disc loses its letter and
+           turns into a plain dot -- the same "this control is not available here" statement the
+           footer's missing key note makes, instead of a letter that promises a key that does
+           nothing.  The two dots are not the same colour: the chosen storage keeps the badge's mint
+           (the colour it had while it still carried its letter) and the other goes grey, so the row
+           still answers "where is this going?" at a glance. */
+        const int badge_cx = layout.badge_x[i] + ui::kStorageBadge / 2;
+        const int badge_cy = layout.badge_y + ui::kStorageBadge / 2;
+        if (InstallTargetSelectable()) {
+            DrawKeyBadge(surface, m_font, badge_cx, badge_cy, ui::kStorageBadge / 2,
+                         i == 0 ? "L" : "R", kHeaderBadge, kOnHeader);
+        } else {
+            FillRoundedRect(surface, badge_cx - ui::kStorageBadge / 2,
+                            badge_cy - ui::kStorageBadge / 2, ui::kStorageBadge, ui::kStorageBadge,
+                            ui::kStorageBadge / 2,
+                            selected ? kHeaderBadge : kHeaderBadgeOff);
+        }
+        m_font.Draw(surface, layout.caption_x[i], ui::kStorageCaptionY, kFontSmall,
+                    selected ? kOnHeader : kHeaderSubtle, text[i].c_str());
+        /* The bar is "how full": the lighter track reads against both the header and the selected
+           block's darker face, the filled part is white.  A storage that cannot be read gets a
+           bare track and no invented fill. */
+        FillRoundedRect(surface, layout.caption_x[i], ui::kStorageBarY, layout.block_w[i],
+                        ui::kStorageBarHeight, ui::kStorageBarHeight / 2, kHeaderBadge);
+        if (ok[i] && used[i] > 0.0) {
+            const int filled =
+                static_cast<int>(layout.block_w[i] * (used[i] > 1.0 ? 1.0 : used[i]));
             if (filled > 0) {
-                FillRoundedRect(surface, x, kBarY, filled, kBarHeight, kBarHeight / 2, kOnHeader);
+                FillRoundedRect(surface, layout.caption_x[i], ui::kStorageBarY, filled,
+                                ui::kStorageBarHeight, ui::kStorageBarHeight / 2, kOnHeader);
             }
         }
-        x_right -= bar + 30;
     }
 }
 
@@ -2885,6 +3183,11 @@ void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
     m_game_install.reset();
     m_cover = ui::Bitmap{};
     install::InstallOptions options; /* the reference implementation's defaults (design section 5) */
+    /* The storage the player picked in the header (design section 8.1): it decides where the
+       content goes, which is why switching it re-opens the package instead of just changing a
+       number on the screen.  The option struct and the engine's own target are the same value --
+       the field is what the caller passes on, so the two cannot disagree. */
+    options.target = m_install_target;
     m_game_install =
         std::make_unique<install::GameInstall>(reader, name, size, options.target, options);
     std::string error;
@@ -2947,6 +3250,15 @@ void App::StartDownload() {
         Trace("install: no address was entered (%s)", error.c_str());
         return;
     }
+    OpenDownloadPackage(address);
+}
+
+/* Opening the package an address names: the Range probe (which is also where the container's size
+   comes from) and then the same "what is this" path a card file takes.  Two callers -- the address
+   the player just typed, and the re-open after the target storage changed -- and they must not
+   drift apart, because the second one has to end up exactly where the first did. */
+bool App::OpenDownloadPackage(const std::string &address) {
+    std::string error;
     m_install_error.clear();
     m_download_url = address;
     m_http_source = std::make_unique<install::HttpSource>();
@@ -2956,13 +3268,15 @@ void App::StartDownload() {
         /* "no-network" and "range-unsupported" are codes the address screen has wording for; the
            log gets whatever curl said. */
         m_install_error = error;
+        m_install_screen = InstallScreen::Url;
         Trace("install: %s cannot be downloaded: %s", address.c_str(), error.c_str());
-        return;
+        return false;
     }
     Trace("install: download %s (range probe ok, container %llu bytes)", address.c_str(),
           static_cast<unsigned long long>(size));
     m_install_origin = InstallScreen::Url;
     OpenPackage(*m_http_source, address, size);
+    return true;
 }
 
 /* Runs the whole transfer on this thread.  The engine's steps are bounded (4 MB each), so the
@@ -3091,6 +3405,53 @@ void App::InstallStepBack() {
     m_focus = FirstEnabled(m_actions);
 }
 
+/* Where this run writes.  The choice is a preference (settings.json) and it is also a fact about
+   the run in hand: reading a package's CNMT and control data leaves placeholders behind *on the
+   target storage* (they are what the console mounts to hand us the meta), so switching the target
+   while a package is open means dropping that run and opening the same package again on the new
+   storage -- the local file is re-parsed, a download re-reads its header and CNMT.  The design
+   keeps the selector off the progress and result screens (section 8.1): there the target is
+   locked in, or the run is already over. */
+void App::SetInstallTarget(install::TargetStorage target) {
+    if (m_install_target == target) {
+        return; /* already selected: L on the selected block must not re-read the package */
+    }
+    if (!InstallTargetSelectable()) {
+        return; /* the target is committed, or the run is finished */
+    }
+    m_install_target = target;
+    Trace("install: target=%s", target == install::TargetStorage::Nand ? "nand" : "sd");
+    SaveSettings();
+    if (m_game_install == nullptr) {
+        return; /* nothing is open yet: the next open already uses the new storage */
+    }
+    const bool from_url = m_http_source != nullptr;
+    const std::string address = m_download_url;
+    LeaveInstallScreen();
+    if (from_url) {
+        OpenDownloadPackage(address);
+    } else {
+        OpenPickedPackage();
+    }
+}
+
+bool App::InstallTargetSelectable() const {
+    if (m_page != Page::GameInstall) {
+        return false;
+    }
+    switch (m_install_screen) {
+        case InstallScreen::Choose:
+        case InstallScreen::Files:
+        case InstallScreen::Url:
+        case InstallScreen::Confirm:
+            return true;
+        case InstallScreen::Progress:
+        case InstallScreen::Result:
+        default:
+            return false;
+    }
+}
+
 bool App::AgentInstalled() const {
     /* "NeedsInstall" is exactly "this console has no agent yet" and "GameMissing" is a console with
        no game to attach one to; everything else counts as present here -- including a half-written
@@ -3099,9 +3460,10 @@ bool App::AgentInstalled() const {
            m_home_kind != HomeKind::GameMissing;
 }
 
-/* "集合啦！动物森友会 3.0.3(更新)" -- what the run in hand is, in one line.  The confirm page, the
-   progress page and the result page all name it the same way, because a player who looks away
-   during a four-gigabyte transfer has to be able to tell what is being written without going back. */
+/* "Animal Crossing: New Horizons 3.0.3 (Update)" -- what the run in hand is, in one line.  The
+   confirm page, the progress page and the result page all name it the same way, because a player
+   who looks away during a four-gigabyte transfer has to be able to tell what is being written
+   without going back. */
 std::string App::PackageSummary() const {
     if (m_game_install == nullptr) {
         return std::string();
@@ -3620,7 +3982,11 @@ void App::RenderInstallConfirm(Surface surface) {
                           (1024.0 * 1024.0 * 1024.0));
         row(i18n::StringId::ConfirmSize, buffer);
     }
-    row(i18n::StringId::ConfirmTarget, Tr(i18n::StringId::StorageSdCard));
+    /* Where this run would write, which is the choice the header's two blocks make -- naming the
+       storage here is what makes that choice visible on the card the player actually reads. */
+    row(i18n::StringId::ConfirmTarget,
+        Tr(m_install_target == install::TargetStorage::Nand ? i18n::StringId::StorageSystem
+                                                           : i18n::StringId::StorageSdCard));
 
     if (TitleIsOurs(package.cnmt.title_id) &&
         install::MetaTypeCarriesGameVersion(package.cnmt.type)) {
@@ -3777,7 +4143,10 @@ void App::RenderInstallResult(Surface surface) {
             std::snprintf(size, sizeof(size), "%.1f GB",
                           static_cast<double>(status.total_bytes) / (1024.0 * 1024.0 * 1024.0));
             std::snprintf(happened, sizeof(happened), Tr(i18n::StringId::ResultWroteLine),
-                          Tr(i18n::StringId::StorageSdCard), status.total_contents, size);
+                          Tr(m_install_target == install::TargetStorage::Nand
+                                 ? i18n::StringId::StorageSystem
+                                 : i18n::StringId::StorageSdCard),
+                          status.total_contents, size);
             break;
         }
     }

@@ -148,6 +148,28 @@ void LogSummary(Log &log) {
     log.Line("timing: waits   %s, %s (the two halves of the pipeline)", wait, wait2);
 }
 
+std::uint64_t g_launch_ms = 0;
+
+void MarkLaunch() {
+    g_launch_ms = NowMs();
+}
+
+void LogStartup(Log &log, const char *phase) {
+    const std::uint64_t now = NowMs();
+    const std::uint64_t since =
+        g_launch_ms != 0 && now > g_launch_ms ? now - g_launch_ms : 0;
+    log.Line("launch: +%llu ms %s", static_cast<unsigned long long>(since), phase);
+}
+
+void LogPrepare(Log &log, std::uint64_t total_ms, std::uint64_t meta_ms, std::uint64_t control_ms,
+                std::uint64_t query_ms) {
+    log.Line("prepare: %llu ms total (meta reads %llu, control %llu, queries %llu)",
+             static_cast<unsigned long long>(total_ms),
+             static_cast<unsigned long long>(meta_ms),
+             static_cast<unsigned long long>(control_ms),
+             static_cast<unsigned long long>(query_ms));
+}
+
 }  // namespace acnh_manager::install::dev
 
 #endif /* ACNH_DEV_AIDS */

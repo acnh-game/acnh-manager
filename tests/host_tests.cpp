@@ -49,6 +49,7 @@
 #include "ui/home_state.hpp"
 #include "ui/list_view.hpp"
 #include "ui/settings.hpp"
+#include "ui/storage_bars.hpp"
 #include "util/text_wrap.hpp"
 #include "util/time.hpp"
 
@@ -1601,8 +1602,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::MetaTypeDlcShort) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::MetaTypeDlcShort); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::FooterInstallTargetHint) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::FooterInstallTargetHint); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -1852,6 +1853,84 @@ void TestHeaderTabs() {
     }
     CHECK(ring_layout.hit[0].x >= 0);
     CHECK(ring_layout.hit[kHeaderTabCount - 1].x + ring_layout.hit[kHeaderTabCount - 1].w <= 1280);
+}
+
+/* The install page's two storage blocks (design section 8.1): microSD left, the console's own
+   memory right.  The blocks show free/total, and they are also the control that picks where the
+   run writes -- so what matters here is that the drawn block and its touch target are one thing,
+   and that the two targets can never be ambiguous at the seam. */
+void TestStorageBars() {
+    using acnh_manager::ui::HitTest;
+    using acnh_manager::ui::kHeaderBarHeight;
+    using acnh_manager::ui::kStorageBadge;
+    using acnh_manager::ui::kStorageBadgeGap;
+    using acnh_manager::ui::kStorageBarCount;
+    using acnh_manager::ui::kStorageBarY;
+    using acnh_manager::ui::kStorageBlockGap;
+    using acnh_manager::ui::kStorageCaptionY;
+    using acnh_manager::ui::kStoragePanelPadX;
+    using acnh_manager::ui::LayoutStorageBars;
+
+    /* The row: "install to:" and two control groups, each of them a panel holding a key badge, the
+       caption ("microSD  12.3 / 29.1 GB") and the bar.  Each group's touch target *is* the group --
+       badge, caption and bar together -- and the two targets can never be ambiguous at the seam. */
+    const int label_w = 150;
+    const int text_w[kStorageBarCount] = {250, 230};
+    const auto layout = LayoutStorageBars(1280, label_w, text_w);
+
+    /* The pair is right-aligned: the console's group ends at the margin, microSD sits left of it. */
+    CHECK(layout.panel[1].x + layout.panel[1].w == 1280 - 40);
+    CHECK(layout.panel[0].x + layout.panel[0].w < layout.panel[1].x);
+    /* The label reads in front of the pair ("install to:  L microSD  R system") and is clear of the
+       first group's target, so tapping the label picks nothing. */
+    CHECK(layout.label_x < layout.panel[0].x);
+    CHECK(layout.label_x + label_w <= layout.panel[0].x);
+
+    /* Each group is one target, and everything it draws is inside it: the badge on its left, the
+       caption and the bar on its right.  A tap anywhere in the panel picks that group -- which is
+       what "the group is the control" has to mean on a touch screen. */
+    std::vector<acnh_manager::ui::Action> blocks;
+    blocks.push_back({1, layout.panel[0], true});
+    blocks.push_back({2, layout.panel[1], true});
+    for (int i = 0; i < kStorageBarCount; ++i) {
+        CHECK(HitTest(blocks, layout.badge_x[i] + kStorageBadge / 2, layout.badge_y + 1) == i + 1);
+        CHECK(HitTest(blocks, layout.caption_x[i] + 4, kStorageCaptionY + 4) == i + 1);
+        CHECK(HitTest(blocks, layout.caption_x[i] + layout.block_w[i] / 2, kStorageBarY + 2) ==
+              i + 1);
+        CHECK(layout.badge_x[i] >= layout.panel[i].x + kStoragePanelPadX);
+        CHECK(layout.badge_x[i] + kStorageBadge + kStorageBadgeGap <= layout.caption_x[i]);
+        CHECK(layout.caption_x[i] + layout.block_w[i] <=
+              layout.panel[i].x + layout.panel[i].w - kStoragePanelPadX);
+    }
+
+    /* The seam: the targets stay clear of each other whatever the captions measure, so a tap that
+       lands between the two groups can never be read as the wrong one. */
+    CHECK(layout.panel[0].x + layout.panel[0].w <= layout.panel[1].x);
+    CHECK(kStorageBlockGap > 0);
+    CHECK(HitTest(blocks, layout.panel[1].x - 1, kStorageBarY + 2) == -1);
+    /* Both targets stay inside the header band and inside the screen. */
+    for (int i = 0; i < kStorageBarCount; ++i) {
+        CHECK(layout.panel[i].y >= 0);
+        CHECK(layout.panel[i].y + layout.panel[i].h <= kHeaderBarHeight);
+        CHECK(layout.panel[i].x >= 0);
+        CHECK(layout.panel[i].x + layout.panel[i].w <= 1280);
+    }
+    /* The two lines keep their order inside the panel, and the bar keeps the caption's width -- the
+       two read as one block, which is the whole point of the pair. */
+    CHECK(layout.block_w[0] == text_w[0]);
+    CHECK(kStorageBarY > kStorageCaptionY);
+    /* The badge is centred on the panel, not on one of its lines: it belongs to the group. */
+    CHECK(layout.badge_y + kStorageBadge / 2 ==
+          layout.panel[0].y + layout.panel[0].h / 2);
+
+    /* Wider captions move the pair left instead of running off the screen edge. */
+    const int wide[kStorageBarCount] = {420, 400};
+    const auto wide_layout = LayoutStorageBars(1280, label_w, wide);
+    CHECK(wide_layout.panel[0].x < layout.panel[0].x);
+    CHECK(wide_layout.panel[0].x >= 0);
+    CHECK(wide_layout.panel[0].x + wide_layout.panel[0].w <= wide_layout.panel[1].x);
+    CHECK(wide_layout.label_x >= 0);
+    CHECK(wide_layout.label_x < wide_layout.panel[0].x);
 }
 
 /* L / R walk the pages the player reads, in the order the header draws them, wrapping at both
@@ -2508,6 +2587,22 @@ void TestSettings() {
     Settings defaults;
     CHECK(ParseSettings("{\"schema\":1}", &defaults, &error));
     CHECK(defaults.language == Language::ZhHans);
+    /* The install target is a preference too: a missing key means SD, a written one survives a
+       restart, and an unusable value keeps the value it had and says so. */
+    CHECK(!defaults.install_to_nand);
+    Settings nand_written;
+    nand_written.install_to_nand = true;
+    const std::string nand_text = DumpSettings(nand_written);
+    CHECK(nand_text.find("\"installTarget\":\"nand\"") != std::string::npos);
+    Settings nand_read;
+    CHECK(ParseSettings(nand_text, &nand_read, &error));
+    CHECK(nand_read.install_to_nand);
+    CHECK(ParseSettings("{\"schema\":1,\"installTarget\":\"sd\"}", &nand_read, &error));
+    CHECK(!nand_read.install_to_nand);
+    nand_read.install_to_nand = true;
+    CHECK(ParseSettings("{\"schema\":1,\"installTarget\":\"tape\"}", &nand_read, &error));
+    CHECK(nand_read.install_to_nand);
+    CHECK(!error.empty());
     defaults.language = Language::English;
     CHECK(ParseSettings("{\"schema\":1,\"language\":\"klingon\"}", &defaults, &error));
     CHECK(defaults.language == Language::English);
@@ -2521,7 +2616,7 @@ void TestSettings() {
     CHECK(junk.language == Language::ZhHans); /* untouched on failure */
 
     /* The names are stable identifiers: the enum can be renamed without resetting a choice. */
-    CHECK(text == "{\"schema\":1,\"language\":\"en\"}");
+    CHECK(text == "{\"schema\":1,\"language\":\"en\",\"installTarget\":\"sd\"}");
 
     /* Both directions round trip, not just the one that happens to be the default. */
     Settings chinese;
@@ -2530,7 +2625,7 @@ void TestSettings() {
     reloaded.language = Language::English;
     CHECK(ParseSettings(DumpSettings(chinese), &reloaded, &error));
     CHECK(reloaded.language == Language::ZhHans);
-    CHECK(DumpSettings(chinese) == "{\"schema\":1,\"language\":\"zh-Hans\"}");
+    CHECK(DumpSettings(chinese) == "{\"schema\":1,\"language\":\"zh-Hans\",\"installTarget\":\"sd\"}");
 }
 
 }  // namespace
@@ -2691,6 +2786,7 @@ int main() {
     TestTimeFormat();
     TestActions();
     TestHeaderTabs();
+    TestStorageBars();
     TestPeerRing();
     TestFormatSize();
     TestMetaTypeCarriesGameVersion();

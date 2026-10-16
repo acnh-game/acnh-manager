@@ -226,6 +226,12 @@ constexpr Entry kStrings[] = {
     {"本体", "Base"},  /* MetaTypeBaseShort */
     {"更新", "Update"},  /* MetaTypeUpdateShort */
     {"追加内容", "DLC"},  /* MetaTypeDlcShort */
+    /* The install page's header: this label sits to the left of the two storage blocks and says
+       what the pair means (they are the control that picks the target storage). */
+    {"安装到:", "Install to:"},  /* InstallToLabel */
+    /* The footer note on the install page.  The tabs are hidden there, so the "L / R switch
+       pages" note has no meaning and this one takes its place. */
+    {"L / R 切换存储", "L / R switch storage"},  /* FooterInstallTargetHint */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

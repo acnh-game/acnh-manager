@@ -68,6 +68,18 @@ void AddStep();
    breakdown. */
 void LogSummary(Log &log);
 
+/* Launch timing.  The screen stays black from the moment the loader hands this process control
+   until the first frame is drawn, and "why so long?" can only be answered per phase: MarkLaunch()
+   is the first statement of main(), LogStartup() prints one line per phase with the milliseconds
+   since then.  A release build compiles both away, so the call sites stay and cost nothing. */
+void MarkLaunch();
+void LogStartup(Log &log, const char *phase);
+/* One line for the "picked a file -> the confirm card is up" pause: the total and the three
+   stages that dominate it (reading each meta content out of its placeholder, the control content
+   the name and cover come from, and the console's version queries). */
+void LogPrepare(Log &log, std::uint64_t total_ms, std::uint64_t meta_ms, std::uint64_t control_ms,
+                std::uint64_t query_ms);
+
 #else
 
 inline std::uint64_t NowMs() { return 0; }
@@ -81,6 +93,9 @@ inline void AddReaderWait(std::uint64_t) {}
 inline void SetTransferMs(std::uint64_t) {}
 inline void AddStep() {}
 inline void LogSummary(Log &) {}
+inline void MarkLaunch() {}
+inline void LogStartup(Log &, const char *) {}
+inline void LogPrepare(Log &, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t) {}
 
 #endif
 

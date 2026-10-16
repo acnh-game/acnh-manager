@@ -10,6 +10,48 @@
 
 namespace acnh_manager {
 
+/* Whether this run writes the log at all.
+
+   Each line is one open -> write -> flush -> close per sink, and the file handle is deliberately
+   not kept open (an open handle makes the card answer "Device or resource busy" to FTP, which is
+   how this project reads log.txt while the app runs).  That discipline has a price: the lines of
+   one startup, measured on hardware (2026-10-16), cost about 2.2 s -- most of the black screen
+   before the first frame.  So writing it is a switch, and the switch is a *runtime* one:
+
+     * a **development build always writes it** -- the probes, the timing lines and every
+       diagnostic of the development loop exist nowhere else;
+     * a **release build writes it only when the card carries `log-on`** (the file's existence is
+       the whole protocol, like the other switch files), so a shipped binary can be debugged on a
+       console without rebuilding it, and by default nobody pays 2.2 s for a log nobody reads.
+
+   The decision is made once, at startup (see LogWanted), because the file handle discipline is
+   per line: there is no "turn it on halfway". */
+#ifndef ACNH_DEV_AIDS
+#define ACNH_DEV_AIDS 0
+#endif
+
+/* The switch file: present = a release build writes its log this run.  Named without the `dev-`
+   prefix the development switches use, because a *release* build honours this one. */
+inline constexpr const char *kLogSwitchPath = "/switch/ACNH-Manager/log-on";
+
+/* The decision itself, made once at startup (main calls it before opening the log): a development
+   build always writes its log, a release build only when `log-on` sits on the card.  Only the
+   existence of the file matters, never its contents -- the same protocol as the dev switches. */
+inline bool LogWanted(FsFileSystem &sd) {
+#if ACNH_DEV_AIDS
+    (void)sd;
+    return true;
+#else
+    FsFile flag{};
+    const util::FsPath path(kLogSwitchPath);
+    if (R_FAILED(fsFsOpenFile(&sd, path.c_str(), FsOpenMode_Read, &flag))) {
+        return false;
+    }
+    fsFileClose(&flag);
+    return true;
+#endif
+}
+
 /* Line-based log file on the SD card.  Uses the fs* API directly, no devoptab mount.
 
    Three rules matter:
@@ -24,10 +66,18 @@ namespace acnh_manager {
       why the sink keeps its own path buffer instead of remembering the caller's pointer. */
 class Log {
 public:
-    /* truncate = true: recreate the file (this run's log); false: append (kept across runs). */
-    Result Open(FsFileSystem &sd, const char *path, bool truncate) {
+    /* `truncate` = true: recreate the file (this run's log); false: append (kept across runs).
+       `wanted` comes from LogWanted() and is passed in explicitly at every call site: a default
+       here would let a release build start writing a log nobody asked for. */
+    Result Open(FsFileSystem &sd, const char *path, bool truncate, bool wanted) {
         if (m_sink_count >= kMaxSinks || path == nullptr) {
             return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        }
+        if (!wanted) {
+            /* Logging is off for this run (see LogWanted): not an error, but nothing is written and
+               no file is created or deleted -- a log.txt another run left behind stays readable
+               instead of being silently truncated to nothing. */
+            return 0;
         }
         const util::FsPath arg(path);
         Sink &sink = m_sinks[m_sink_count];

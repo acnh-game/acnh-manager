@@ -11,8 +11,9 @@ ACNH-Manager 是 `acnh-agent` 的安装器:识别控制台上游戏的实际构�
 |---|---|
 | `/switch/ACNH-Manager/acnh-manager.nro` | 应用本体 |
 | `/switch/ACNH-Manager/state.json` | 安装记录:agent 版本、写入的文件与 sha256、时间 |
-| `/switch/ACNH-Manager/settings.json` | 用户设置(目前只有界面语言) |
-| `/switch/ACNH-Manager/log.txt` | 运行日志(含失败原因;M1 起产生) |
+| `/switch/ACNH-Manager/settings.json` | 用户设置(界面语言、安装目标存储 `sd` / `nand`) |
+| `/switch/ACNH-Manager/log.txt` | 运行日志(含失败原因;M1 起产生)。**开发构建一律写;发布构建只在卡上有下面那个开关文件时才写** —— 每行日志是一次"开→写→flush→关",一次启动约 2.2 s,发布件默认不为没人看的日志付这笔钱(`source/log.hpp` 的 `LogWanted`) |
+| `/switch/ACNH-Manager/log-on` | 日志开关(空文件即可,内容不看):发布构建启动时看到它就写 `log.txt`,缺席时既不创建也不删除那份文件 |
 | `/switch/ACNH-Manager/spike.log`、`spike-history.log` | M0 环境探测输出(仅 spike 构建产生) |
 | `atmosphere/contents/01006F8002326000/exefs/subsdk9` | agent 模块(跨构建共享) |
 | `atmosphere/contents/01006F8002326000/exefs/main.npdm` | 按游戏构建派生的 NPDM(每个构建一份) |
@@ -402,8 +403,10 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
   动作上才触发;滑动(偏移超限)一律不触发。
 - **画出来的按钮必须能点**。页眉的 `L 状态` / `R 详情` 与页脚的 `Ⓑ` 提示都是按钮:它们和
   对应按键走同一条 `ActivateAction` 路径,命中矩形与绘制几何共用同一个布局函数
-  (`ui/header_tabs.hpp` 的 `LayoutHeaderTabs`,页脚的 `LayoutFooterHint`),避免"画得到、
-  点不到"再次发生(真机收到过这个反馈)。这些外壳控件在每页自己的控件**之后**追加,进入页面
+   (`ui/header_tabs.hpp` 的 `LayoutHeaderTabs`,页脚的 `LayoutFooterHint`,安装页页眉那两组存储
+   控件组用 `ui/storage_bars.hpp` 的 `LayoutStorageBars` —— 整组就是命中区,圆标、文字、长条与留白
+   都在里面),避免"画得到、点不到"再次发生(真机收到过这个反馈)。这些外壳控件在每页自己的控件
+   **之后**追加,进入页面
   仍落在主按钮上;只读页(详情)开头清空动作表,点空白处不会误触上一页的按钮。
   **唯一的例外是进度页**:安装/卸载期间引擎占着这条线程,页面上不放任何控件,也不处理按键,
   于是它连页眉标签与页脚提示都不画(画了就是"画得到、点不到"的反面教材)。

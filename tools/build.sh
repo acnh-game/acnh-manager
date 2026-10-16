@@ -13,6 +13,9 @@ image="devkitpro/devkita64:20260219"
 dev_aids=1
 for arg in "$@"; do
     case "${arg}" in
+        # A release build ships with the probes switched off.  Whether it writes log.txt is not a
+        # build decision at all: the app asks the card at startup (see source/log.hpp), so a
+        # released binary can be told to log by dropping `log-on` next to it.
         --release) dev_aids=0 ;;
         *) echo "unknown argument: ${arg}" >&2; exit 2 ;;
     esac

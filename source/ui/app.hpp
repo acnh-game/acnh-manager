@@ -27,6 +27,7 @@
 #include "ui/icon_image.hpp"
 #include "ui/list_view.hpp"
 #include "ui/settings.hpp"
+#include "ui/storage_bars.hpp"
 #include <memory>
 
 #include "install/game_install.hpp"
@@ -64,6 +65,15 @@ private:
     enum class Page { Home, Details, Install, Uninstall, Progress, Guide, Result, GameInstall };
 
     void Collect();
+    /* Writes the environment block into log.txt: what this console is, what game/version is
+       installed, which override files exist, and which manifest this build would install from.
+       It is written off the one environment collection the app does (the launcher used to collect
+       the same thing a second time before starting the UI: about 1.6 s of the launch on hardware,
+       measured 2026-10-16), and from the second loop iteration rather than during Init -- each log
+       line is one open/write/flush/close per sink, so the block costs about 2.2 s, and it used to
+       sit between the framebuffer and the first frame, which is where most of the black screen
+       came from. */
+    void TraceEnvironment();
     void RefreshPlan();
     /* Compare the card with the install record (the record alone is not evidence). */
     void VerifyRecordAgainstCard();
@@ -130,7 +140,38 @@ private:
     void ToggleGuide();
     void RenderGuide(Surface surface);
     void RenderGameInstall(Surface surface);
+    /* The two storage blocks in the header of the install page: microSD first, the console's own
+       memory second.  They are also the control that picks where this run writes (design section
+       8.1), so the text they show and the room they take both come from helpers the drawing and
+       the touch targets share. */
+    void StorageBarTexts(std::string text[2], bool ok[2], double used[2]) const;
+    /* Everything the header's storage row needs, read and measured in one place: each storage's
+       readout (its line of text, whether it could be read at all, how full it is) and the measured
+       widths of that text and of the fixed "install to:" label.  The drawing and the touch targets
+       both ask here -- only the font knows the widths, and a hit box that disagrees with the pixels
+       is how a tap selects the storage the player was not pointing at. */
+    void StorageRowReadout(std::string text[2], int text_w[2], bool ok[2], double used[2],
+                           int *label_w);
+    /* Reads and lays out the storage row once per frame into the members below: the ncm space
+       queries are IPC calls, and both the header drawing and the touch targets need the same
+       numbers -- asking twice per frame is twice the cost for one answer. */
+    void RefreshStorageRow(int surface_width);
+    /* Where the "install to:" label is drawn: one size up from the captions and bold. */
+    int InstallToLabelSize() const;
+    int InstallToLabelY() const;
     void RenderStorageBars(Surface surface);
+    /* Draws the "L / R switch storage" note at `x` (the install page's own replacement for the
+       "L / R switch pages" note, whose keys mean something else there); draws nothing when the
+       note would run into the build stamp. */
+    void DrawInstallTargetHint(Surface surface, int text_y, int x);
+    /* Picks the storage a run writes to.  A package that is already open is re-opened on the new
+       storage, because reading its CNMT/control data left placeholders behind on the old one. */
+    void SetInstallTarget(install::TargetStorage target);
+    /* True on the install screens where the target can still be changed (design section 8.1):
+       picking a source, the file list, the address screen and the confirm card.  The transfer has
+       the target locked in, and the result screen reports a run that is over -- a selectable-*looking*
+       control there would be a control that does nothing. */
+    bool InstallTargetSelectable() const;
     /* Open the game installer, remembering where we came from (it is modal: B returns there). */
     void OpenGameInstall();
     bool TitleIsOurs(const std::string &title_id) const;
@@ -193,6 +234,12 @@ private:
     Font m_font{};
     Framebuffer m_fb{};
     bool m_fb_ready{false};
+    /* Development aid: the first frame is the end of the black screen, so its launch offset is
+       logged once (see install/dev_stats.hpp). */
+    bool m_first_frame_traced{false};
+    /* Development aid: the environment block of log.txt is written once, after the second frame --
+       see TraceEnvironment. */
+    bool m_report_traced{false};
     Page m_page{Page::Home};
     /* Where + sends the player back to when the guide page is closed again. */
     Page m_guide_return{Page::Home};
@@ -229,8 +276,10 @@ private:
     std::string InstallErrorText() const;
     /* Two footer hints side by side, each of them a control: what is drawn as pressable has to be
        pressable.  The confirm screen and the address screen both use it. */
-    void DrawFooterHintPair(Surface surface, int y, i18n::StringId first, int first_action,
-                            i18n::StringId second, int second_action);
+    /* Draws the two hints and returns the x just past the second one, so a caller can put its own
+       note after the pair without repeating the spacing arithmetic. */
+    int DrawFooterHintPair(Surface surface, int y, i18n::StringId first, int first_action,
+                           i18n::StringId second, int second_action);
     void LeaveDirectory();
     void PickFocusedFile();
     /* Opens the picked package and decides what to show next: the confirm screen, or the result
@@ -242,6 +291,9 @@ private:
     void OpenPackage(install::ContainerReader &reader, const std::string &name, std::uint64_t size);
     /* Asks for an address (system keyboard), probes it and opens the package it names. */
     void StartDownload();
+    /* Opens the package an address names (the same path for a freshly typed address and for the
+       re-open after the target storage changed).  False leaves the address screen showing why. */
+    bool OpenDownloadPackage(const std::string &address);
     void RunGameInstall();
     /* The agent's own install, on this thread: the payload that matches the manifest's origin,
        the engine, and the per-file progress.  It owns no screen and decides no result -- the home
@@ -283,8 +335,9 @@ private:
     void RenderInstallConfirm(Surface surface);
     void RenderInstallProgress(Surface surface);
     void RenderInstallResult(Surface surface);
-    /* "集合啦！动物森友会 3.0.3(更新)" -- the run in hand named in one line; the confirm, progress
-       and result cards all show it, so what is being installed never has to be guessed at. */
+    /* "Animal Crossing: New Horizons 3.0.3 (Update)" -- the run in hand named in one line; the
+       confirm, progress and result cards all show it, so what is being installed never has to be
+       guessed at. */
     std::string PackageSummary() const;
     /* The cover of the game the package belongs to, decoded once when the package is opened and
        drawn on the card's right-hand side.  Returns the width the card's text may still use. */
@@ -294,6 +347,18 @@ private:
        (the file list for a card install, the input screen for a URL or an upload). */
     InstallScreen m_install_origin{InstallScreen::Choose};
     std::unique_ptr<install::LocalFileSource> m_file_source;
+    /* Where this run would write: the header's two storage blocks select it, and the choice is
+       remembered in settings.json (design section 8.1).  Read at startup, so the page opens on the
+       storage the player picked last time. */
+    install::TargetStorage m_install_target{install::TargetStorage::SdCard};
+    /* This frame's storage row (see RefreshStorageRow).  `m_storage_row_ready` is cleared at the
+       end of every frame so nothing can be drawn from a stale read. */
+    bool m_storage_row_ready{false};
+    std::string m_storage_text[2];
+    int m_storage_text_w[2]{0, 0};
+    bool m_storage_ok[2]{false, false};
+    double m_storage_used[2]{0.0, 0.0};
+    ui::StorageBarsLayout m_storage_row{};
     /* The download source, kept alive for as long as the run in hand needs to read from it (the
        engine holds a reference, not a copy). */
     std::unique_ptr<install::HttpSource> m_http_source;

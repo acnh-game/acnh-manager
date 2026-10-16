@@ -32,6 +32,8 @@ std::string DumpSettings(const Settings &settings) {
     root.type = json::Type::Object;
     root.object.emplace_back("schema", json::Value::MakeNumber(kSchema));
     root.object.emplace_back("language", json::Value::MakeString(LanguageName(settings.language)));
+    root.object.emplace_back("installTarget",
+                             json::Value::MakeString(settings.install_to_nand ? "nand" : "sd"));
     return json::Dump(root);
 }
 
@@ -66,6 +68,19 @@ bool ParseSettings(std::string_view text, Settings *settings, std::string *error
             settings->language = parsed;
         } else if (error != nullptr) {
             *error = "settings: unknown language '" + language->StringOr(std::string()) + "'";
+        }
+    }
+    /* The install target is a preference too: unknown text keeps the current value and says so,
+       a missing key keeps SD (an older settings file has no such key and must keep working). */
+    const json::Value *target = root.Find("installTarget");
+    if (target != nullptr) {
+        const std::string name = target->StringOr(std::string());
+        if (target->IsString() && name == "nand") {
+            settings->install_to_nand = true;
+        } else if (target->IsString() && name == "sd") {
+            settings->install_to_nand = false;
+        } else if (error != nullptr) {
+            *error = "settings: unknown installTarget '" + name + "'";
         }
     }
     return true;

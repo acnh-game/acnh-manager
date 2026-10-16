@@ -106,6 +106,14 @@ GameInstall::~GameInstall() {
 }
 
 bool GameInstall::Prepare(std::string *error) {
+    /* Development aid: where the "picking a file" pause goes.  Reading a package's identity means
+       installing its meta (and, for the control data, another) content into a placeholder and
+       mounting it -- a sequence of ncm/fs round trips whose cost cannot be guessed at, so it is
+       measured (see install/dev_stats.hpp; a release build has no marks). */
+    const std::uint64_t t_prepare = dev::NowMs();
+    std::uint64_t t_meta_ms = 0;
+    std::uint64_t t_control_ms = 0;
+    std::uint64_t t_query_ms = 0;
     /* Closing the game is a one-step fix for the player; nothing else in this flow is.  So the
        running-game stop comes first, before the package is even read. */
     {
@@ -225,11 +233,13 @@ bool GameInstall::Prepare(std::string *error) {
     for (const ContainerEntry *candidate : meta_entries) {
         MetaUnit unit;
         unit.entry = candidate;
+        const std::uint64_t t_meta = dev::NowMs();
         if (!ReadMetaContent(*candidate, &unit.placeholder, &unit.title_id, &unit.blob, error)) {
             m_status.stage = InstallStage::Failed;
             m_status.error = *error;
             return false;
         }
+        t_meta_ms += dev::NowMs() - t_meta;
         if (!ParseCnmt(unit.blob.data(), unit.blob.size(), &unit.cnmt, error)) {
             m_status.stage = InstallStage::Failed;
             m_status.error = *error;
@@ -324,7 +334,7 @@ bool GameInstall::Prepare(std::string *error) {
     Note("install: effective version 0x%x (%s)", m_status.effective_version,
          m_status.effective_title_id.c_str());
 
-    /* What else rides along, in the app's language: "更新 ×1 · 追加内容 ×2".  The confirm page
+    /* What else rides along, in the app's language: "Update x1 - Add-on x2".  The confirm page
        says it, because installing a game out of a dump that also holds its update and DLCs and
        silently leaving them out is the kind of surprise this app is not allowed to spring. */
     {
@@ -397,6 +407,7 @@ bool GameInstall::Prepare(std::string *error) {
        field said "no control content" for a package that plainly has one.  Same read mechanism as
        the CNMT: install the content, mount it, read the file out. */
     {
+        const std::uint64_t t_control = dev::NowMs();
         /* Two facts of their own, each on its own line: this app's log lines are built in a
            192-byte buffer (App::Trace), and a "-> confirm (...)" line carrying the identity *and*
            these two used to end mid-word. */
@@ -549,6 +560,7 @@ bool GameInstall::Prepare(std::string *error) {
         }
         Note("install: control content: %s", nacp_note.c_str());
         Note("install: cover: %s", icon_note.c_str());
+        t_control_ms += dev::NowMs() - t_control;
     }
 
     /* Only when the package carries no picture of its own (an add-on, whose control content holds
@@ -607,6 +619,7 @@ bool GameInstall::Prepare(std::string *error) {
     std::uint32_t installed_version = 0;
     bool same_version_installed = false;
     {
+        const std::uint64_t t_query = dev::NowMs();
         std::string version_error;
         if (!m_installer.InstalledState(m_package.cnmt.title_id, m_package.cnmt.version,
                                         static_cast<std::uint8_t>(m_package.cnmt.type),
@@ -625,10 +638,12 @@ bool GameInstall::Prepare(std::string *error) {
         for (const auto &line : m_installer.FinishTrace()) {
             Note("install: query %s", line.c_str());
         }
+        t_query_ms += dev::NowMs() - t_query;
     }
     m_status.package_version = m_package.cnmt.version;
     m_status.installed_version = installed_version;
     {
+        const std::uint64_t t_query = dev::NowMs();
         std::uint32_t sd = 0;
         std::uint32_t nand = 0;
         std::string per_storage_error;
@@ -636,6 +651,14 @@ bool GameInstall::Prepare(std::string *error) {
                                                    &per_storage_error)) {
             Note("install: installed version per storage: sd=0x%x nand=0x%x", sd, nand);
         }
+        t_query_ms += dev::NowMs() - t_query;
+    }
+    /* Where the pause between "picked a file" and "the card is up" actually goes: every stage that
+       creates a placeholder or mounts one is a handful of ncm/fs round trips, and the split -- not
+       the total -- is what says whether there is anything to win.  Logged here, before the skip
+       decision, so a package that turns out to be installed already reports its cost too. */
+    if (g_log != nullptr) {
+        dev::LogPrepare(*g_log, dev::NowMs() - t_prepare, t_meta_ms, t_control_ms, t_query_ms);
     }
     {
         char installed_note[64];

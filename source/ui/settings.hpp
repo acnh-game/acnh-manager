@@ -16,6 +16,10 @@ namespace acnh_manager::ui {
 
 struct Settings {
     i18n::Language language{i18n::Language::ZhHans};
+    /* Which storage an install writes to: microSD by default.  It is a *preference*, so it outlives
+       the app like the language does (key `installTarget`: `"sd"` / `"nand"`); a missing key means
+       SD, so an older settings file keeps working, and an unusable value is reported and ignored. */
+    bool install_to_nand{false};
 };
 
 std::string DumpSettings(const Settings &settings);

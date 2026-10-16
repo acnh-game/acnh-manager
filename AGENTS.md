@@ -25,6 +25,13 @@ Switch 构建纪律)与跨仓库命名规则见工作区根 `AGENTS.md`;产品�
 `source/ui/text_ui.cpp` 的文本界面回退、`dev-pause` 分段暂停。开关打开时构建戳会带 `+devaids`,发布件
 不带;`tools/release.sh` 用 `--release` 构建,并在发布前 `grep` 核对 NRO 里不含探针字符串。
 
+**写不写 `log.txt` 是启动时决定的运行时开关**(`source/log.hpp` 的 `LogWanted`,在 `main` 里读一次):
+日志每行都是"开→写→flush→关",一次启动的日志量在真机上约 2.2 s,所以不写时启动黑屏从约 2.7 s 缩到
+约 0.8 s(数据见 `docs/device-acceptance.md`)。规则两条:**开发构建一律写**(探针、计时行与各种诊断
+只存在于这个文件里);**发布构建只在卡上有 `/switch/ACNH-Manager/log-on` 时才写**(文件存在即可,
+不看内容 —— 与其它开关文件同一套协议),所以已发布的二进制不用重新编译就能打开日志。发布件在开关
+缺席时**既不创建也不删除** `log.txt`(别人留下的那份保持可读,不会被截成空文件)。
+
 Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,真机安装/测试由用户手工执行。
 链接依赖(见 `docs/architecture.md` 第 7 节):`-lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx`。
 
