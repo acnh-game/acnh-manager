@@ -5,6 +5,9 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <string_view>
 
 #include "util/fs_path.hpp"
 
@@ -57,7 +60,11 @@ inline bool LogWanted(FsFileSystem &sd) {
    Three rules matter:
    1. **every line is opened -> written -> flushed -> closed**: that keeps the log readable
       over FTP while the app runs (an open handle makes fs answer "Device or resource
-      busy") and loses nothing if we crash;
+      busy") and loses nothing if we crash.  The one exception is a *burst* (Block /
+      BeginBurst below), where a group of lines that belong to one action shares a single
+      handle -- that discipline costs ~37 ms per line on this card, measured 2026-10-16, so
+      a burst is the difference between 2.2 s and 0.16 s for the sixty lines of the startup
+      report, and a burst is short by construction (it ends with the action's last line);
    2. fs cannot write past EOF, so the file is grown to the target length first (SetSize),
       exactly like Sphaira's write_entire_file;
    3. **every path handed to fs goes through util::FsPath first**: fs declares `FS_MAX_PATH`
@@ -130,8 +137,24 @@ public:
         }
         buf[n++] = '\n';
         buf[n] = '\0';
-        for (Sink &sink : m_sinks) {
-            Write(sink, buf, static_cast<u64>(n));
+        /* Inside a burst this line is text, not a write (see BeginBurst).  The check and the append
+           are one critical section: the burst can be ended by another thread, and a line that fell
+           between the two would be written twice or lost. */
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_burst_open) {
+                m_burst += buf;
+                return;
+            }
+        }
+        /* One writer at a time: the update-check thread and this one both log, and two writers
+           sharing a sink's offset would interleave their lines (the burst below makes that more
+           likely, not less).  The card is under the lock for the duration of one write. */
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (Sink &sink : m_sinks) {
+                Write(sink, buf, static_cast<u64>(n));
+            }
         }
         if (m_echo) {
             std::printf("%s", buf);
@@ -142,8 +165,74 @@ public:
        ASCII only). */
     void SetEcho(bool on) { m_echo = on; }
 
+    /* Many lines in one write, for a burst whose text is already formatted (one line per '\n').
+       This exists because a burst is what the per-line discipline is worst at: every Line() is one
+       open -> SetSize -> write -> flush -> close **per sink**, measured at ~37 ms per line on this
+       card, so the environment block's ~60 lines cost 2.2 s when they go out one at a time -- and
+       that landed as a UI frozen for two seconds right after the first frame was painted (the
+       screens are up, the loop has not been reached).  Same lines, same discipline, one handle. */
+    void Block(std::string_view text) {
+        if (text.empty()) {
+            return;
+        }
+        std::string owned(text);
+        if (owned.back() != '\n') {
+            owned += '\n';
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (Sink &sink : m_sinks) {
+                Write(sink, owned.data(), static_cast<u64>(owned.size()));
+            }
+        }
+        if (m_echo) {
+            std::printf("%s", owned.c_str());
+        }
+    }
+
+    /* A burst: lines that belong together, collected and written as one block when it ends.  The
+       startup walk (`App::Collect`) is the reason this exists -- its ~48 lines cost 1.5 s of the
+       black screen when each one went to the card on its own, measured 2026-10-16.  Lines from
+       another thread land in the same buffer, so a burst must stay short: everything it swallows is
+       written when it ends, which is also the only moment it is lost (a crash inside a burst). */
+    void BeginBurst() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_sink_count == 0) {
+            return; /* nothing is being written in this run: do not even buffer the lines */
+        }
+        if (m_burst_depth == 0) {
+            m_burst.clear();
+        }
+        ++m_burst_depth;
+        m_burst_open = true;
+    }
+
+    void EndBurst() {
+        std::string text;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!m_burst_open) {
+                return;
+            }
+            if (--m_burst_depth > 0) {
+                return; /* a nested burst ends, the outer one keeps collecting */
+            }
+            m_burst_open = false;
+            text.swap(m_burst);
+        }
+        Block(text);
+    }
+
 private:
     static constexpr size_t kMaxSinks = 2;
+
+    /* Guards `m_burst` only: the card is written outside the lock, so a burst cannot make another
+       thread wait on I/O. */
+    mutable std::mutex m_mutex;
+    std::string m_burst;
+    bool m_burst_open{false};
+    /* Bursts nest (a package read can start inside a walk): the outermost one owns the buffer. */
+    int m_burst_depth{0};
 
     struct Sink {
         FsFileSystem *sd{nullptr};
@@ -194,6 +283,31 @@ private:
     Sink m_sinks[kMaxSinks]{};
     size_t m_sink_count{0};
     bool m_echo{true};
+};
+
+
+/* A burst as a scoped object: everything logged between construction and destruction goes to the
+   card in one write (see Log::BeginBurst).  RAII on purpose -- the two places that use it
+   (`App::Collect` and `GameInstall::Prepare`) both have early returns, and a burst left open would
+   swallow every later line of the session.  A null log means "logging is off", and the guard then
+   does nothing at all. */
+class LogBurst {
+public:
+    explicit LogBurst(Log *log) : m_log(log) {
+        if (m_log != nullptr) {
+            m_log->BeginBurst();
+        }
+    }
+    ~LogBurst() {
+        if (m_log != nullptr) {
+            m_log->EndBurst();
+        }
+    }
+    LogBurst(const LogBurst &) = delete;
+    LogBurst &operator=(const LogBurst &) = delete;
+
+private:
+    Log *m_log;
 };
 
 }  // namespace acnh_manager

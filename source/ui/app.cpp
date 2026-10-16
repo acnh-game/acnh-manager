@@ -209,6 +209,23 @@ std::string FormatSize(u64 bytes) {
 }
 
 
+/* One formatted line appended to the environment block.  The block is written in a single write
+   (Log::Block), so the lines are assembled here instead of going through App::Trace: 60 separate
+   lines cost 2.2 s of open/write/flush/close on this card, and that was two seconds of frozen UI
+   right after the first frame.  The buffer is larger than App::Trace's 192 bytes, so a long line in
+   this block is no longer cut mid-word. */
+void AddBlockLine(std::string *out, const char *format, ...)
+    __attribute__((format(printf, 2, 3)));
+void AddBlockLine(std::string *out, const char *format, ...) {
+    char line[512];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    *out += line;
+    *out += '\n';
+}
+
 /* Names for the environment block of log.txt (see App::TraceEnvironment): the console's applet
    kind, a meta's kind, and the gate's verdict, each as one short word a support reader knows. */
 const char *AppletTypeName(int type) {
@@ -401,6 +418,10 @@ void App::Collect() {
     if (m_sd == nullptr) {
         return;
     }
+    /* The walk below writes ~48 lines, and each of them used to cost a full open/write/flush/close
+       per sink -- about 1.5 s of the black screen.  A burst turns them into one write (see
+       Log::BeginBurst); the update-check thread's lines ride along in the same buffer. */
+    const LogBurst burst(m_log);
     m_report = env::Collect(*m_sd);
 
     m_have_state = false;
@@ -467,39 +488,45 @@ void App::TraceEnvironment() {
         return;
     }
     const env::EnvironmentReport &report = m_report;
-    Trace("== ACNH-Manager %s ==", kAppVersion);
-    Trace("HOS %s, applet=%s", report.hos_version.c_str(), AppletTypeName(report.applet_type));
-    Trace("game running=%d, patch storage=%u", report.application_running ? 1 : 0,
-          report.patch_found ? report.patch_storage : 0xFF);
+    std::string block;
+    AddBlockLine(&block, "== ACNH-Manager %s ==", kAppVersion);
+    AddBlockLine(&block, "HOS %s, applet=%s", report.hos_version.c_str(),
+                 AppletTypeName(report.applet_type));
+    AddBlockLine(&block, "game running=%d, patch storage=%u", report.application_running ? 1 : 0,
+                 report.patch_found ? report.patch_storage : 0xFF);
     for (const auto &meta : report.metas) {
-        Trace("  meta type=%s(%#04x) storage=%u version=%u(%#x)", MetaTypeName(meta.meta_type),
-              meta.meta_type, meta.storage, meta.version, meta.version);
+        AddBlockLine(&block, "  meta type=%s(%#04x) storage=%u version=%u(%#x)",
+                     MetaTypeName(meta.meta_type), meta.meta_type, meta.storage, meta.version,
+                     meta.version);
     }
-    Trace("detected build: title=%s version=%u contentId=%s", report.build.title_id.c_str(),
-          report.build.version,
-          report.build.content_id.empty() ? "(unavailable)" : report.build.content_id.c_str());
-    Trace("game version: %s (NACP display version, from nsGetApplicationControlData)",
-          report.game_display_version.empty() ? "(unavailable)"
-                                              : report.game_display_version.c_str());
+    AddBlockLine(&block, "detected build: title=%s version=%u contentId=%s",
+                 report.build.title_id.c_str(), report.build.version,
+                 report.build.content_id.empty() ? "(unavailable)"
+                                                 : report.build.content_id.c_str());
+    AddBlockLine(&block, "game version: %s (NACP display version, from nsGetApplicationControlData)",
+                 report.game_display_version.empty() ? "(unavailable)"
+                                                     : report.game_display_version.c_str());
     if (report.build.module_id_known) {
-        Trace("  running main ModuleId=%s (dmnt:cht)", report.build.module_id.c_str());
+        AddBlockLine(&block, "  running main ModuleId=%s (dmnt:cht)",
+                     report.build.module_id.c_str());
     }
-    Trace("override advice: %s", report.advice.text.c_str());
-    Trace("exefs override files: %zu", report.exefs.size());
+    AddBlockLine(&block, "override advice: %s", report.advice.text.c_str());
+    AddBlockLine(&block, "exefs override files: %zu", report.exefs.size());
     for (const auto &file : report.exefs) {
-        Trace("  %s (%llu B)", file.name.c_str(), static_cast<unsigned long long>(file.size));
+        AddBlockLine(&block, "  %s (%llu B)", file.name.c_str(),
+                     static_cast<unsigned long long>(file.size));
     }
     if (report.legacy_cheat_present) {
-        Trace("legacy cheat present: %s entry=\"%s\" (same chat path as the agent)",
-              report.legacy_cheat_path.c_str(),
-              report.legacy_cheat_entry.empty() ? "(file unreadable)"
-                                                : report.legacy_cheat_entry.c_str());
+        AddBlockLine(&block, "legacy cheat present: %s entry=\"%s\" (same chat path as the agent)",
+                     report.legacy_cheat_path.c_str(),
+                     report.legacy_cheat_entry.empty() ? "(file unreadable)"
+                                                       : report.legacy_cheat_entry.c_str());
     }
     if (!report.problems.empty()) {
-        Trace("problems: %s", report.problems.c_str());
+        AddBlockLine(&block, "problems: %s", report.problems.c_str());
     }
     for (const std::string &note : report.notes) {
-        Trace("%s", note.c_str());
+        AddBlockLine(&block, "%s", note.c_str());
     }
     /* Which manifest this build installs from.  The embedded release channel is the one the
        interface calls "bundled with the app"; the SD channel only appears when the embedded one is
@@ -516,8 +543,11 @@ void App::TraceEnvironment() {
     } else {
         manifest_line = "none embedded (this build carries no release import)";
     }
-    Trace("gate: %s (%s)", GateStatusName(m_gate.status), m_gate.reason.c_str());
-    Trace("manifest: %s", manifest_line.c_str());
+    AddBlockLine(&block, "gate: %s (%s)", GateStatusName(m_gate.status), m_gate.reason.c_str());
+    AddBlockLine(&block, "manifest: %s", manifest_line.c_str());
+    /* One write for the whole block: sixty lines of open/write/flush/close cost 2.2 s on this card,
+       and those seconds were a frozen window right after the first frame (see Log::Block). */
+    m_log->Block(block);
 }
 
 /* "0.11.0(c47d2b47)": the version alone cannot tell two builds of the same version apart, so

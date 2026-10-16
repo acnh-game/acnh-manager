@@ -114,6 +114,11 @@ bool GameInstall::Prepare(std::string *error) {
     std::uint64_t t_meta_ms = 0;
     std::uint64_t t_control_ms = 0;
     std::uint64_t t_query_ms = 0;
+    /* Everything this function logs goes out as one write when it returns: ~15 diagnostic lines,
+       and each of them costs about 37 ms of open/write/flush/close per sink on this card (measured
+       2026-10-16), i.e. ~0.5 s of the pause between "picked a file" and the confirm card.  RAII,
+       because the dozen early returns below would otherwise leave the burst open. */
+    const LogBurst burst(g_log);
     /* Closing the game is a one-step fix for the player; nothing else in this flow is.  So the
        running-game stop comes first, before the package is even read. */
     {
