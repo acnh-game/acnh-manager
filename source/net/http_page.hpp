@@ -122,6 +122,27 @@ inline std::string BuildPageLabelsJson() {
     return out;
 }
 
+/* One value out of a query string ("offset=123&taskId=ab"), or empty when it is not there.  Plain
+   string walking on purpose: the page is the only client, the values are numbers and hex, and a URL
+   parser would be more code than the whole route table. */
+inline std::string QueryValue(std::string_view query, std::string_view key) {
+    std::size_t at = 0;
+    while (at <= query.size()) {
+        const std::size_t end = query.find('&', at);
+        const std::string_view pair =
+            query.substr(at, end == std::string_view::npos ? std::string_view::npos : end - at);
+        const std::size_t equals = pair.find('=');
+        if (equals != std::string_view::npos && pair.substr(0, equals) == key) {
+            return std::string(pair.substr(equals + 1));
+        }
+        if (end == std::string_view::npos) {
+            break;
+        }
+        at = end + 1;
+    }
+    return std::string();
+}
+
 /* The response head, framed exactly the way the browser needs it.  `Connection: close` on purpose:
    one request per connection keeps the server's state machine to one pass (see http_server.hpp). */
 inline std::string BuildResponseHead(int status, const char *status_text, std::string_view content_type,

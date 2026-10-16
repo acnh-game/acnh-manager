@@ -22,6 +22,7 @@
 #include "net/update_policy.hpp"
 #include "version.hpp"
 #include "util/fs_path.hpp"
+#include "util/json.hpp"
 #include "util/size_text.hpp"
 #include "util/swkbd.hpp"
 
@@ -3295,6 +3296,12 @@ void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
         std::string cleanup_error;
         m_game_install->CleanupAfterFailure(&cleanup_error);
         m_game_install.reset();
+        /* A run that never got as far as being described owes the browser nothing either: drop the
+           source so the page can start over (its task id is stale from here on, by design). */
+        if (m_upload_source != nullptr) {
+            m_upload_source->Abort("the package could not be read");
+            m_upload_source.reset();
+        }
         /* The raw text is the installer's diagnostic (English, technical) and belongs in
            log.txt; the screen gets a line the player can act on.  A running game is not a dead
            end -- closing it and picking the same file again is one step -- so that case goes
@@ -3514,6 +3521,13 @@ void App::LeaveInstallScreen() {
     m_game_install.reset();
     m_file_source.reset();
     m_http_source.reset();
+    /* The upload source too: it is holding a browser's connection and the page's task id, and
+       leaving the screen is exactly when that should end (the page says "the console is offline"
+       and a new run starts from a fresh `POST /upload/begin`). */
+    if (m_upload_source != nullptr) {
+        m_upload_source->Abort("the console left the install page");
+        m_upload_source.reset();
+    }
     m_cover = ui::Bitmap{};
     m_install_error.clear();
 }
@@ -3938,7 +3952,30 @@ void App::PollInstallerServer() {
     if (!m_http_server.Listening()) {
         return;
     }
-    m_http_server.Poll();
+    ServiceInstallerPage();
+    /* A file the browser picked becomes a package from an upload source: Prepare reads its first
+       bytes through the page (which is why the source can pump the server while it waits). */
+    if (m_http_pending_upload) {
+        m_http_pending_upload = false;
+        const std::string name = m_http_upload_name;
+        const std::uint64_t size = m_http_upload_size;
+        m_http_upload_name.clear();
+        m_http_upload_size = 0;
+        m_upload_source = std::make_unique<install::HttpUploadSource>();
+        std::string error;
+        if (!m_upload_source->Begin(name, size, m_http_upload_task_id, &error)) {
+            Trace("install: the page's file cannot be used: %s", error.c_str());
+            m_upload_source.reset();
+        } else {
+            /* The reader serves the page while it waits: without this, reading the package would
+               deadlock against the page's own `/upload/next` (see the source's note). */
+            m_upload_source->SetPump([this] { ServiceInstallerPage(); });
+            m_upload_source->SetLog(m_log);
+            Trace("install: the page offers %s (%llu bytes, task %s)", name.c_str(),
+                  static_cast<unsigned long long>(size), m_upload_source->TaskId().c_str());
+            OpenPackage(*m_upload_source, name, size, install::TaskSource::HttpUpload, std::string());
+        }
+    }
     /* An address the *browser* submitted becomes an ordinary download run: the same code path the
        console's own keyboard uses, which is the point of this entry (design section 14, item 28). */
     if (!m_http_pending_url.empty()) {
@@ -3947,6 +3984,39 @@ void App::PollInstallerServer() {
         Trace("install: the page submitted an address; opening it as a download");
         m_install_error.clear();
         OpenDownloadPackage(address);
+    }
+}
+
+/* One pass of the page's server plus the hand-off it produced: a part the browser posted goes to
+   the upload source, which may be waiting for it on this thread (the package being read) or on the
+   transfer's fetch thread.  Two callers use this as-is (the frame loop and the transfer loop), and a
+   third -- the upload source itself, while it waits -- because otherwise reading the package would
+   deadlock against the very request that carries its bytes. */
+void App::ServiceInstallerPage() {
+    m_http_server.Poll();
+    if (m_upload_source == nullptr) {
+        return;
+    }
+    net::HttpHandoff handoff;
+    if (m_http_server.TakeHandoff(&handoff)) {
+        /* One line per part: offset, length, and the first bytes, because "the console refused the
+           package" and "the bytes arrived shifted" look the same from the screens. */
+        if (m_log != nullptr) {
+            /* `Block`, not `Trace`: the package read runs inside the engine's log burst, which
+               buffers every line until it ends -- and these are exactly the lines needed while the
+               read is stuck. */
+            char line[192];
+            std::snprintf(line, sizeof(line),
+                          "http: part at %llu (%zu bytes, %zu already read, first=%02x%02x%02x%02x)\n",
+                          static_cast<unsigned long long>(handoff.offset), handoff.length,
+                          handoff.prefix.size(), handoff.prefix.size() > 0 ? handoff.prefix[0] : 0,
+                          handoff.prefix.size() > 1 ? handoff.prefix[1] : 0,
+                          handoff.prefix.size() > 2 ? handoff.prefix[2] : 0,
+                          handoff.prefix.size() > 3 ? handoff.prefix[3] : 0);
+            m_log->Block(line);
+        }
+        m_upload_source->AttachPart(handoff.fd, handoff.offset, handoff.length,
+                                    std::move(handoff.prefix));
     }
 }
 
@@ -3990,6 +4060,11 @@ std::string App::InstallerStatusJson() const {
     json += buffer;
     json += ",\"content_name\":\"";
     json += net::EscapeForJs(m_install_status.current_name);
+    /* The upload task's id: a page that reloaded (or a second tab that wants to take over) reads it
+       from here and keeps feeding the same task, which is why the id is in the status payload and
+       not only in the answer to `POST /upload/begin` (design section 29). */
+    json += "\",\"taskId\":\"";
+    json += m_upload_source != nullptr ? m_http_upload_task_id : std::string();
     json += "\",\"message\":\"";
     json += net::EscapeForJs(finished ? m_install_error : std::string());
     json += "\",\"pending\":";
@@ -4060,11 +4135,115 @@ net::HttpResponse App::ServeHttp(const net::HttpRequest &request) {
         response.body = "nothing to cancel\n";
         return response;
     }
-    if (request.path == "/upload" || request.path == "/upload/part") {
-        /* The second half of M4.  Answering 501 rather than 404 keeps the difference between "this
-           server does not do that yet" and "this server does not know that path" visible. */
-        response.status = 501;
-        response.body = "uploading is not wired yet\n";
+    /* ---- the upload path: the browser is the source, one posted range at a time ---- */
+    if (request.method == "POST" && request.path == "/upload/begin") {
+        /* {name, size}: the file the page picked.  One upload at a time, and never while a transfer
+           is running -- a task has exactly one source (design section 3). */
+        if (m_upload_source != nullptr || m_http_pending_upload ||
+            (m_page == Page::GameInstall && m_install_screen == InstallScreen::Progress)) {
+            response.status = 409;
+            response.body = "{\"code\":\"busy\"}\n";
+            return response;
+        }
+        json::Value root;
+        std::string parse_error;
+        if (!json::Parse(request.body, &root, &parse_error) || !root.IsObject()) {
+            response.status = 400;
+            response.body = "{\"code\":\"bad-request\"}\n";
+            return response;
+        }
+        const json::Value *name = root.Find("name");
+        const json::Value *size = root.Find("size");
+        if (name == nullptr || size == nullptr) {
+            response.status = 400;
+            response.body = "{\"code\":\"bad-request\"}\n";
+            return response;
+        }
+        m_http_upload_name = name->StringOr(std::string());
+        m_http_upload_size = static_cast<std::uint64_t>(json::IntOr(*size, 0));
+        if (m_http_upload_name.empty() || m_http_upload_size == 0) {
+            response.status = 400;
+            response.body = "{\"code\":\"bad-request\"}\n";
+            return response;
+        }
+        /* The id the page quotes with every part: it makes "this is the tab feeding the task I
+           asked for" checkable, and a stale tab's parts are refused with a 409 (design section 8). */
+        char id[32];
+        std::snprintf(id, sizeof(id), "%08x%04x", static_cast<unsigned>(armGetSystemTick() & 0xFFFFFFFFu),
+                      static_cast<unsigned>(m_http_upload_serial++ & 0xFFFF));
+        m_http_upload_task_id = id;
+        m_http_pending_upload = true;
+        response.content_type = "application/json; charset=utf-8";
+        response.body = "{\"taskId\":\"" + m_http_upload_task_id + "\"}\n";
+        return response;
+    }
+    if (request.method == "GET" && request.path == "/upload/next") {
+        if (m_upload_source == nullptr) {
+            /* Between `POST /upload/begin` and the next frame the source does not exist yet: that is
+               a moment, not a refusal.  Saying "wait" keeps every client from having to know about
+               the console's frame loop. */
+            response.content_type = "application/json; charset=utf-8";
+            response.body = m_http_pending_upload ? "{\"wait\":true}\n"
+                                                  : "{\"code\":\"no-task\"}\n";
+            if (!m_http_pending_upload) {
+                response.status = 409;
+            }
+            return response;
+        }
+        if (net::QueryValue(request.query, "taskId") != m_http_upload_task_id) {
+            response.status = 409;
+            response.body = "{\"code\":\"stale-task\"}\n";
+            return response;
+        }
+        std::uint64_t offset = 0;
+        std::size_t size = 0;
+        char numbers[96];
+        if (!m_upload_source->Want(&offset, &size)) {
+            /* Nothing is being read this instant: the package is on the confirm screen, or the run
+               is over.  `wait` is not an error -- the page simply asks again. */
+            response.content_type = "application/json; charset=utf-8";
+            response.body = "{\"wait\":true}\n";
+            return response;
+        }
+        std::snprintf(numbers, sizeof(numbers), "{\"offset\":%llu,\"size\":%zu}\n",
+                      static_cast<unsigned long long>(offset), size);
+        response.content_type = "application/json; charset=utf-8";
+        response.body = numbers;
+        return response;
+    }
+    if (request.method == "POST" && request.path == "/upload/part") {
+        if (m_upload_source == nullptr) {
+            response.status = 409;
+            response.body = "{\"code\":\"no-task\"}\n";
+            return response;
+        }
+        if (net::QueryValue(request.query, "taskId") != m_http_upload_task_id) {
+            response.status = 409;
+            response.body = "{\"code\":\"stale-task\"}\n";
+            return response;
+        }
+        std::uint64_t want_offset = 0;
+        std::size_t want_size = 0;
+        const std::uint64_t offset =
+            std::strtoull(net::QueryValue(request.query, "offset").c_str(), nullptr, 10);
+        if (!m_upload_source->Want(&want_offset, &want_size) ||
+            !install::UploadPartMatches(want_offset, want_size, offset, request.body_length)) {
+            /* Out of step (a dropped part, a stale page, a mirrored tab): tell it what is expected
+               instead of writing bytes into the wrong place -- the design's 409 (section 8). */
+            response.status = 409;
+            char message[128];
+            std::snprintf(message, sizeof(message),
+                          "{\"code\":\"wrong-offset\",\"expected\":%llu,\"size\":%zu}\n",
+                          static_cast<unsigned long long>(want_offset), want_size);
+            response.content_type = "application/json; charset=utf-8";
+            response.body = message;
+            return response;
+        }
+        /* The body goes straight to the installer: the fetch thread is waiting for exactly these
+           bytes, and buffering megabytes here would be work for nobody (see HttpUploadSource). */
+        response.handoff = true;
+        response.handoff_offset = offset;
+        response.handoff_length = request.body_length;
         return response;
     }
     response.status = 404;

@@ -155,11 +155,14 @@ bool GameInstall::Prepare(std::string *error) {
             return false;
         }
     }
+    Note("install: reading the container (%llu bytes from %s)",
+         static_cast<unsigned long long>(m_task.container_size), m_name.c_str());
     if (!ReadPackage(m_reader, m_name, m_task.container_size, &m_package, error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
     }
+    Note("install: container read, %zu entries", m_package.container.contents.size());
     /* An NSZ/XCZ carries its large NCAs as NCZ streams, so the size an entry stands for is not the
        bytes on the card.  Read each stream's tables now: everything after this point (the
        placeholder size, the progress numbers, the decoders) works with the NCA's own size. */

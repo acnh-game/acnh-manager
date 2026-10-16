@@ -34,6 +34,7 @@
 #include "install/game_install.hpp"
 #include "install/source_http_client.hpp"
 #include "install/source_local_file.hpp"
+#include "install/source_http_upload.hpp"
 #include "ui/touch.hpp"
 
 namespace acnh_manager {
@@ -184,6 +185,9 @@ private:
     /* One non-blocking pass of the server, called from the UI loop and from the transfer loop
        between steps (so a browser sees progress and can cancel *while* bytes move). */
     void PollInstallerServer();
+    /* One pass of the page's server, plus the hand-off it produced (a posted part goes to the upload
+       source).  The frame loop, the transfer loop and the upload source's own wait all call this. */
+    void ServiceInstallerPage();
     /* The route table, in one place: the page, its status, the address a browser pasted, and the
        cancel request. */
     net::HttpResponse ServeHttp(const net::HttpRequest &request);
@@ -400,6 +404,17 @@ private:
     /* The download source, kept alive for as long as the run in hand needs to read from it (the
        engine holds a reference, not a copy). */
     std::unique_ptr<install::HttpSource> m_http_source;
+    /* The upload run's source: the browser is the file, and this is how the engine reads it. */
+    std::unique_ptr<install::HttpUploadSource> m_upload_source;
+    /* What `POST /upload/begin` asked for: the UI loop opens it like any other package (the file is
+       remote, everything after Prepare is the same code). */
+    bool m_http_pending_upload{false};
+    std::string m_http_upload_name;
+    std::uint64_t m_http_upload_size{0};
+    /* The id the page quotes with every part; a stale tab's parts are refused (409).  The serial
+       makes two runs in one session distinguishable. */
+    std::string m_http_upload_task_id;
+    unsigned m_http_upload_serial{0};
     /* The address the run in hand was started from, shown back on the address screen so a typo is
        visible without opening the keyboard again. */
     std::string m_download_url;

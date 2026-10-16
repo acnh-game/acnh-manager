@@ -50,6 +50,7 @@
 #include "ui/list_view.hpp"
 #include "ui/settings.hpp"
 #include "ui/storage_bars.hpp"
+#include "install/upload_protocol.hpp"
 #include "net/http_page.hpp"
 #include "util/text_wrap.hpp"
 #include "util/time.hpp"
@@ -1856,6 +1857,36 @@ void TestHeaderTabs() {
     CHECK(ring_layout.hit[kHeaderTabCount - 1].x + ring_layout.hit[kHeaderTabCount - 1].w <= 1280);
 }
 
+/* The upload protocol's rules, without a socket: which part the console accepts, and how a query
+   string is read.  Both are the kind of thing that fails only on hardware (a part written at the
+   wrong offset corrupts a content silently). */
+void TestUploadProtocol() {
+    using acnh_manager::install::kUploadPartBytes;
+    using acnh_manager::install::UploadPartMatches;
+    using acnh_manager::net::QueryValue;
+
+    /* The part the reader is waiting for, and only that one. */
+    CHECK(UploadPartMatches(0, 512, 0, 512));
+    CHECK(UploadPartMatches(4096, kUploadPartBytes, 4096, kUploadPartBytes));
+    CHECK(UploadPartMatches(0, 4096, 0, 512)); /* a shorter part is fine (the page may slice) */
+    /* Everything else is a 409: a different offset, a longer part, an empty one. */
+    CHECK(!UploadPartMatches(0, 512, 512, 512));
+    CHECK(!UploadPartMatches(4096, 512, 0, 512));
+    CHECK(!UploadPartMatches(0, 512, 0, 0));
+    CHECK(!UploadPartMatches(0, 512, 0, 1024));
+    CHECK(!UploadPartMatches(0, 512, 0, kUploadPartBytes + 1));
+
+    /* Query strings: the page writes `?offset=123&taskId=ab`, and a missing key is empty rather
+       than a guess. */
+    CHECK(QueryValue("offset=123&taskId=ab", "offset") == "123");
+    CHECK(QueryValue("offset=123&taskId=ab", "taskId") == "ab");
+    CHECK(QueryValue("taskId=ab", "taskId") == "ab");
+    CHECK(QueryValue("offset=1", "taskId").empty());
+    CHECK(QueryValue("", "offset").empty());
+    CHECK(QueryValue("offset=", "offset").empty());
+    CHECK(QueryValue("noffset=1&offset=2", "offset") == "2"); /* no prefix matching */
+}
+
 /* The installer's web page, without a socket: escaping, the label substitution and the response
    head.  These are the parts that are easy to get subtly wrong and impossible to see on the console
    (a label with a `"` or a `</script>` in it breaks the page silently, and a wrong Content-Length
@@ -2910,6 +2941,7 @@ int main() {
     TestStorageBars();
     TestResumePlan();
     TestHttpPage();
+    TestUploadProtocol();
     TestPeerRing();
     TestFormatSize();
     TestMetaTypeCarriesGameVersion();

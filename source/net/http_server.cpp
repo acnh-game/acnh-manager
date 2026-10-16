@@ -291,6 +291,9 @@ bool HttpServer::TryRequest(Connection &connection) {
     }
     HttpRequest request;
     HttpResponse response;
+    /* Where the body starts in `connection.in`: the reply code below needs it when the body is
+       handed over to somebody else (see HttpResponse::handoff). */
+    std::size_t body_start = parsed > 0 ? static_cast<std::size_t>(parsed) : 0;
     if (parsed < 0) {
         response.status = 400;
         response.body = "bad request\n";
@@ -313,13 +316,27 @@ bool HttpServer::TryRequest(Connection &connection) {
         if (!length_text.empty()) {
             body_length = static_cast<std::size_t>(std::strtoull(length_text.c_str(), nullptr, 10));
         }
-        const std::size_t body_start = static_cast<std::size_t>(parsed);
-        if (connection.in.size() < body_start + body_length) {
-            return false; /* body still arriving */
-        }
+        request.body_length = body_length;
         if (body_length > kHttpSmallBodyLimit) {
-            response.status = 413;
-            response.body = "body too large\n";
+            /* Too big to buffer.  A route that can consume it as a stream takes the connection over
+               (the upload part); anything else is refused *before* the bytes arrive, which is what
+               keeps a stray multi-gigabyte POST from filling the console's memory. */
+            if (m_handler) {
+                response = m_handler(request);
+            } else {
+                response.status = 501;
+                response.body = "no handler\n";
+            }
+            ++m_requests;
+            Trace("http: %s %s from %s (%zu-byte body) -> %d", request.method.c_str(),
+                  request.path.c_str(), connection.peer.c_str(), body_length, response.status);
+            if (!response.handoff) {
+                response.status = 413;
+                response.content_type = "text/plain; charset=utf-8";
+                response.body = "body too large\n";
+            }
+        } else if (connection.in.size() < body_start + body_length) {
+            return false; /* body still arriving */
         } else {
             request.body = connection.in.substr(body_start, body_length);
             if (m_handler) {
@@ -332,6 +349,30 @@ bool HttpServer::TryRequest(Connection &connection) {
             Trace("http: %s %s from %s -> %d", request.method.c_str(), request.path.c_str(),
                   connection.peer.c_str(), response.status);
         }
+    }
+
+    if (response.handoff) {
+        /* The handler wants the body for somebody else: the connection goes over with the bytes
+           already read (this must happen *before* the buffer is cleared for the reply, which is why
+           it sits here and not down with the response framing).  The head is not sent -- the new
+           owner writes its own answer once it has the bytes. */
+        m_handoff.fd = connection.fd;
+        m_handoff.offset = response.handoff_offset;
+        m_handoff.length = response.handoff_length;
+        if (body_start <= connection.in.size()) {
+            m_handoff.prefix = connection.in.substr(body_start);
+            if (m_handoff.prefix.size() > m_handoff.length) {
+                m_handoff.prefix.resize(m_handoff.length);
+            }
+        } else {
+            m_handoff.prefix.clear();
+        }
+        connection.fd = -1;
+        connection.in.clear();
+        connection.out.clear();
+        Trace("http: handing the request body (%zu bytes, %zu already read) to the installer",
+              response.handoff_length, m_handoff.prefix.size());
+        return true;
     }
 
     char head[256];
@@ -373,6 +414,7 @@ void HttpServer::Flush(Connection &connection) {
 }
 
 void HttpServer::Poll() {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (m_listen_fd < 0) {
         return;
     }
@@ -399,6 +441,19 @@ void HttpServer::Poll() {
             Flush(connection);
         }
     }
+}
+
+bool HttpServer::TakeHandoff(HttpHandoff *out) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_handoff.fd < 0) {
+        return false;
+    }
+    *out = m_handoff;
+    m_handoff.fd = -1;
+    m_handoff.offset = 0;
+    m_handoff.length = 0;
+    m_handoff.prefix.clear();
+    return true;
 }
 
 }  // namespace acnh_manager::net

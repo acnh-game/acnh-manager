@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,9 @@ struct HttpRequest {
     std::string path;
     std::string query;
     std::string body; /* the whole body when the route asked for one (see kSmallBodyLimit) */
+    /* How long the body is, whether or not it was buffered: a route that takes the connection over
+       (see HttpResponse::handoff) needs the number before it has the bytes. */
+    std::size_t body_length{0};
 };
 
 struct HttpResponse {
@@ -41,6 +45,13 @@ struct HttpResponse {
     std::string body;
     /* Extra headers, one per string, each already "Name: value". */
     std::vector<std::string> headers;
+    /* Set by a handler that wants the *body* to go somewhere other than this server: the connection
+       is handed over instead of answered, and whoever takes it (see TakeHandoff) owns it from there
+       -- body and response.  The upload route is the reason: a part can be megabytes, and the
+       consumer of those bytes is the installer, which is waiting on another thread. */
+    bool handoff{false};
+    std::uint64_t handoff_offset{0};
+    std::size_t handoff_length{0};
 };
 
 /* A body larger than this is refused with 413 rather than buffered: the upload route does not go
@@ -53,6 +64,18 @@ inline constexpr int kHttpMaxConnections = 6;
    falls back to a kernel-assigned port and the screens show *that* number (the player never has to
    know which one it got). */
 inline constexpr std::uint16_t kHttpDefaultPort = 4321;
+
+/* A connection a handler gave away: `length` bytes of body are still to be read, and the response
+   has not been written. */
+struct HttpHandoff {
+    int fd{-1};
+    std::uint64_t offset{0};
+    std::size_t length{0};
+    /* Body bytes this server had already read into its buffer before the handler asked for the
+       connection.  A small part arrives here whole; a big one (over kHttpSmallBodyLimit) arrives as
+       an empty prefix and the rest still on the socket.  Whoever takes the handoff gets both. */
+    std::string prefix;
+};
 
 class HttpServer {
 public:
@@ -78,8 +101,14 @@ public:
     void SetHandler(Handler handler);
 
     /* One non-blocking pass: accept what is waiting, read what has arrived, answer what is complete,
-       and drop connections that went quiet.  Cheap enough for the frame loop. */
+       and drop connections that went quiet.  Cheap enough for the frame loop -- and safe to call
+       from the transfer's fetch thread as well, which is how the page is served while a package is
+       being read (see TakeHandoff). */
     void Poll();
+
+    /* The connection a handler handed over, if there is one.  The caller owns the fd from here:
+       it reads `length` bytes of body, writes its own response, and closes. */
+    bool TakeHandoff(HttpHandoff *out);
 
     /* Where diagnostics go (one line per event worth knowing: a connection, a route, a refusal). */
     void SetLog(Log *log) { m_log = log; }
@@ -111,6 +140,10 @@ private:
     Log *m_log{nullptr};
     int m_requests{0};
     std::vector<Connection> m_connections;
+    /* Held whenever the connection table or a socket is touched: Poll() runs on the UI thread and on
+       the transfer's fetch thread, and both may be serving a page at the same moment. */
+    mutable std::mutex m_mutex;
+    HttpHandoff m_handoff;
     /* Held for as long as the server is up: libcurl and this server share the BSD socket service. */
     void *m_socket_session{nullptr};
 };
