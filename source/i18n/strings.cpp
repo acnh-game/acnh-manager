@@ -245,6 +245,25 @@ constexpr Entry kStrings[] = {
     {"继续上次未完成的安装(已接收 %s)", "Continuing the unfinished install (%s received)"},  /* ConfirmResumeNote */
     /* The transfer failed but the work is not lost: the task file and its placeholders stay. */
     {"未完成的安装已保留,下次进安装页可以继续", "The unfinished install was kept - continue it from the install page"},  /* ResultTaskKept */
+    /* The browser page the console serves: the phone/computer half of the installer. */
+    {"第 1 步 · 选择安装文件", "Step 1 - pick the file to install"},  /* PageStep1 */
+    {"选择文件", "Choose a file"},  /* PageChooseFile */
+    {"或把文件拖到这里", "or drop it here"},  /* PageDropHint */
+    {"传输时请让本页留在前台;锁屏或切后台会中断,重新打开本页可从断点继续。", "Keep this page in the foreground while it transfers; locking the screen or switching away interrupts it, and re-opening this page continues from where it stopped."},  /* PageKeepAwake */
+    {"或者 · 粘贴下载网址(主机自己去下)", "or - paste a download address (the console fetches it)"},  /* PageUrlTitle */
+    {"下载并安装", "Download and install"},  /* PageUrlButton */
+    {"已交给主机,请看主机屏幕", "The console has it - watch its screen"},  /* PageUrlSent */
+    {"主机没有接受这个地址", "The console did not accept that address"},  /* PageUrlFailed */
+    {"正在上传", "Uploading"},  /* PageStageUpload */
+    {"取消本次安装", "Cancel this install"},  /* PageCancel */
+    {"取消会丢弃已接收的进度,需要重头再来。", "Cancelling throws away what has been received."},  /* PageCancelNote */
+    {"再次点击以确认。", "Press again to confirm."},  /* PageCancelConfirm */
+    {"已请求取消。", "Cancellation requested."},  /* PageCancelSent */
+    {"主机没有接受取消请求。", "The console did not accept the cancellation."},  /* PageCancelFailed */
+    {"主机已离线(可能已经离开安装页)", "The console is offline (it may have left the install page)"},  /* PageOffline */
+    {"浏览器上传还没有接上主机(下一步就做);现在可以先用上面粘贴网址那条路。", "Uploading from the browser is not wired to the console yet (that is the next step); for now use the address box above."},  /* PageUploadNotReady */
+    {"本页由主机直接提供,全程不需要互联网。", "The console serves this page itself; no internet connection is involved."},  /* PageNoteNoInternet */
+    {"主机屏幕上会同步显示同一份进度。", "The same progress is shown on the console's own screen."},  /* PageNoteHostScreen */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

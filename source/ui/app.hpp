@@ -18,6 +18,7 @@
 #include "manifest/manifest.hpp"
 #include "net/update.hpp"
 #include "net/update_task.hpp"
+#include "net/http_server.hpp"
 #include "payload/embedded.hpp"
 #include "ui/guide_qr.hpp"
 #include "ui/action.hpp"
@@ -176,6 +177,22 @@ private:
        see SetGameInstallTaskStore), and offered as "continue" or "give up" rather than silently
        holding space.  Design section 10 calls this the answer to "where did my gigabytes go?". */
     void RefreshPendingTask();
+    /* The browser page's server (M4): it lives while the install page is up, and stops the moment
+       the player leaves it -- "the server is only alive when it is needed" (design section 3). */
+    void StartInstallerServer();
+    void StopInstallerServer();
+    /* One non-blocking pass of the server, called from the UI loop and from the transfer loop
+       between steps (so a browser sees progress and can cancel *while* bytes move). */
+    void PollInstallerServer();
+    /* The route table, in one place: the page, its status, the address a browser pasted, and the
+       cancel request. */
+    net::HttpResponse ServeHttp(const net::HttpRequest &request);
+    /* What `/status.json` answers: the console's own view of the install, so a browser (or a second
+       tab, or another device) can show the same thing without the page keeping any state. */
+    std::string InstallerStatusJson() const;
+    /* "http://<ip>:<port>", the address the screens show and the QR code carries; empty when there
+       is no network. */
+    std::string InstallerAddressText() const;
     void RenderInstallPending(Surface surface);
     /* Picks the recorded run up again: the same source, opened the same way, and then adopted into
        the engine's task before any byte moves (see GameInstall::AdoptResume). */
@@ -365,6 +382,13 @@ private:
        remembered in settings.json (design section 8.1).  Read at startup, so the page opens on the
        storage the player picked last time. */
     install::TargetStorage m_install_target{install::TargetStorage::SdCard};
+    /* The installer's own web server.  `m_http_port` is the port it really got (the fixed default,
+       or a kernel-assigned one when that is taken) -- the address on screen is built from it. */
+    net::HttpServer m_http_server;
+    std::uint16_t m_http_port{0};
+    /* An address the *browser* handed over (`POST /url`): the UI loop picks it up on the next frame
+       and opens it exactly as if the player had typed it, because that is what it is. */
+    std::string m_http_pending_url;
     /* This frame's storage row (see RefreshStorageRow).  `m_storage_row_ready` is cleared at the
        end of every frame so nothing can be drawn from a stale read. */
     bool m_storage_row_ready{false};

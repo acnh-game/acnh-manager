@@ -13,8 +13,11 @@
 #include "install/range_probe.hpp"
 #include "install/source_local_file.hpp"
 #include "install/network_source.hpp"
+#include "install/nx_services.hpp"
 #include "ui/icon_image.hpp"
 #include "ui/storage_bars.hpp"
+#include "net/http_page.hpp"
+#include "payload/embedded.hpp"
 #include "log.hpp"
 #include "net/update_policy.hpp"
 #include "version.hpp"
@@ -1519,6 +1522,9 @@ void App::Run() {
     int frames_drawn = 0;
     while (appletMainLoop() && !m_should_exit) {
         PollUpdateCheck();
+        /* The browser page is answered from this loop: a page that cannot be served while the
+           console draws is a page that times out every second. */
+        PollInstallerServer();
         padUpdate(&pad);
         HandleKeys(padGetButtonsDown(&pad));
         HandleStick(pad);
@@ -2985,6 +2991,9 @@ void App::OpenGameInstall() {
     }
     m_game_install_return = m_page;
     m_page = Page::GameInstall;
+    /* The browser page comes up with the install page and goes away with it: the address and the
+       QR code the screens show are only true while this server is listening. */
+    StartInstallerServer();
     /* An interrupted install comes first: it holds space on one of the storages, and the only two
        ways to get that space back (or to finish what was started) are on that screen. */
     RefreshPendingTask();
@@ -3412,6 +3421,10 @@ void App::RunGameInstall() {
     }
     while (m_game_install->Step(&error)) {
         m_install_status = m_game_install->Status();
+        /* The transfer owns this thread for minutes at a time, so the browser page is answered from
+           inside its loop as well: that is what lets a phone watch progress (and, later, cancel)
+           while the bytes move. */
+        PollInstallerServer();
         /* Redraw for every step instead of every sixteenth: a step is one 4 MiB range, which took
            406 ms on average on the gateway path (33.8 s for 83 steps, measured 2026-10-16), so this
            is about two frames a second -- and the transfer's own timing is 99.7% network wait, so
@@ -3470,6 +3483,8 @@ void App::RunGameInstall() {
 }
 
 void App::LeaveGameInstall() {
+    /* The modal page is what the server existed for, so it goes down with it (design section 3). */
+    StopInstallerServer();
     LeaveInstallScreen();
     m_page = m_game_install_return;
 }
@@ -3874,6 +3889,188 @@ void App::RenderInstallProgress(Surface surface) {
     }
 }
 
+
+/* The installer's web server (M4).  Lifecycle first, because it is a resource: a listening socket
+   that nobody asked for is a port somebody else could have used, so it exists exactly while the
+   install page is up (design section 3). */
+std::string App::InstallerAddressText() const {
+    if (m_http_port == 0) {
+        return std::string();
+    }
+    std::string ip;
+    std::string error;
+    if (!install::CurrentIpAddressText(&ip, &error)) {
+        return std::string();
+    }
+    return "http://" + ip + ":" + std::to_string(static_cast<unsigned>(m_http_port));
+}
+
+void App::StartInstallerServer() {
+    if (m_http_server.Listening()) {
+        return;
+    }
+    m_http_server.SetLog(m_log);
+    m_http_server.SetHandler([this](const net::HttpRequest &request) { return ServeHttp(request); });
+    std::uint16_t port = 0;
+    std::string error;
+    if (!m_http_server.Start(net::kHttpDefaultPort, &port, &error)) {
+        /* No page for this run.  The address screen will show nothing (with the address printed as
+           unavailable) and the log keeps the reason -- and the two console-side ways in (typing the
+           address, picking a file from the card) are unaffected. */
+        Trace("http: the browser page could not be served: %s", error.c_str());
+        return;
+    }
+    m_http_port = port;
+    Trace("http: page ready at %s", InstallerAddressText().c_str());
+}
+
+void App::StopInstallerServer() {
+    if (!m_http_server.Listening()) {
+        return;
+    }
+    m_http_server.Stop();
+    m_http_port = 0;
+    m_http_pending_url.clear();
+    Trace("http: the page server stopped");
+}
+
+void App::PollInstallerServer() {
+    if (!m_http_server.Listening()) {
+        return;
+    }
+    m_http_server.Poll();
+    /* An address the *browser* submitted becomes an ordinary download run: the same code path the
+       console's own keyboard uses, which is the point of this entry (design section 14, item 28). */
+    if (!m_http_pending_url.empty()) {
+        const std::string address = m_http_pending_url;
+        m_http_pending_url.clear();
+        Trace("install: the page submitted an address; opening it as a download");
+        m_install_error.clear();
+        OpenDownloadPackage(address);
+    }
+}
+
+std::string App::InstallerStatusJson() const {
+    /* The state machine the page renders: nothing that happens on the console is invented here, and
+       the page keeps no state of its own (design section 14, item 29). */
+    const bool transferring = m_page == Page::GameInstall && m_game_install != nullptr &&
+                              m_install_screen == InstallScreen::Progress;
+    const bool finished = m_page == Page::GameInstall && m_game_install != nullptr &&
+                          m_install_screen == InstallScreen::Result;
+    const char *state = transferring ? "downloading"
+                                     : finished ? (m_install_status.stage == install::InstallStage::Done
+                                                       ? "done"
+                                                       : "failed")
+                                                : "idle";
+    char buffer[64];
+    std::string json = "{\"schema\":1,\"state\":\"";
+    json += state;
+    json += "\",\"busy\":";
+    json += transferring ? "true" : "false";
+    json += ",\"name\":\"";
+    json += net::EscapeForJs(m_install_status.game_name.empty() ? m_install_status.detail
+                                                                : m_install_status.game_name);
+    json += "\",\"received\":";
+    std::snprintf(buffer, sizeof(buffer), "%llu",
+                  static_cast<unsigned long long>(m_install_status.done_bytes));
+    json += buffer;
+    json += ",\"total\":";
+    std::snprintf(buffer, sizeof(buffer), "%llu",
+                  static_cast<unsigned long long>(m_install_status.total_bytes));
+    json += buffer;
+    json += ",\"received_text\":\"";
+    json += util::FormatSize(m_install_status.done_bytes);
+    json += "\",\"total_text\":\"";
+    json += util::FormatSize(m_install_status.total_bytes);
+    json += "\",\"eta_text\":\"\",\"rate_text\":\"\",\"content_index\":";
+    std::snprintf(buffer, sizeof(buffer), "%d", m_install_status.done_contents);
+    json += buffer;
+    json += ",\"content_total\":";
+    std::snprintf(buffer, sizeof(buffer), "%d", m_install_status.total_contents);
+    json += buffer;
+    json += ",\"content_name\":\"";
+    json += net::EscapeForJs(m_install_status.current_name);
+    json += "\",\"message\":\"";
+    json += net::EscapeForJs(finished ? m_install_error : std::string());
+    json += "\",\"pending\":";
+    if (m_have_pending_task) {
+        json += "{\"name\":\"";
+        json += net::EscapeForJs(m_pending_task.name);
+        json += "\",\"received\":\"";
+        json += util::FormatSize(m_pending_live_bytes);
+        json += "\",\"total\":\"";
+        json += util::FormatSize(install::TotalBytes(m_pending_task));
+        json += "\"}";
+    } else {
+        json += "null";
+    }
+    json += "}";
+    return json;
+}
+
+net::HttpResponse App::ServeHttp(const net::HttpRequest &request) {
+    net::HttpResponse response;
+    if (request.method == "GET" && (request.path == "/" || request.path == "/index.html")) {
+        response.content_type = "text/html; charset=utf-8";
+        const std::string_view embedded = payload::EmbeddedInstallerPage();
+        if (embedded.empty()) {
+            response.status = 501;
+            response.content_type = "text/plain; charset=utf-8";
+            response.body = "this build carries no installer page\n";
+            return response;
+        }
+        std::string page(embedded);
+        /* The page's wording, its language and the address it was reached at all come from here:
+           the console's own i18n table and its own address, so the two screens agree (design
+           section 14, items 15 and 27). */
+        page = net::SubstituteLabels(page, net::kPageLabelsMarker, net::BuildPageLabelsJson());
+        page = net::SubstituteLabels(page, net::kPageLangMarker,
+                                     i18n::Current() == i18n::Language::English ? "en" : "zh-Hans");
+        page = net::SubstituteLabels(page, net::kPageAddressMarker, InstallerAddressText());
+        response.body = std::move(page);
+        return response;
+    }
+    if (request.method == "GET" && request.path == "/status.json") {
+        response.content_type = "application/json; charset=utf-8";
+        response.body = InstallerStatusJson();
+        return response;
+    }
+    if (request.method == "POST" && request.path == "/url") {
+        const std::string address = request.body;
+        if (address.empty() || address.size() > 2048) {
+            response.status = 400;
+            response.body = "empty address\n";
+            return response;
+        }
+        /* Not opened here: this runs inside the socket pass, and opening a package touches ncm, the
+           engine and the screens.  The UI loop picks it up on the next frame. */
+        m_http_pending_url = address;
+        response.body = "ok\n";
+        return response;
+    }
+    if (request.method == "POST" && request.path == "/cancel") {
+        /* Cancelling is refused while the console is finishing an install (that part cannot be
+           undone), and there is nothing to cancel when no run is in flight. */
+        if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Progress) {
+            response.status = 409;
+            response.body = "cancelling during the transfer is not wired yet\n";
+            return response;
+        }
+        response.status = 409;
+        response.body = "nothing to cancel\n";
+        return response;
+    }
+    if (request.path == "/upload" || request.path == "/upload/part") {
+        /* The second half of M4.  Answering 501 rather than 404 keeps the difference between "this
+           server does not do that yet" and "this server does not know that path" visible. */
+        response.status = 501;
+        response.body = "uploading is not wired yet\n";
+        return response;
+    }
+    response.status = 404;
+    response.body = "not found\n";
+    return response;
+}
 
 /* The install an interruption left behind, as its own screen.  It is the first thing the install
    page shows while a task file exists, because the space its placeholders hold is otherwise

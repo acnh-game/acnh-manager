@@ -32,6 +32,8 @@ enum class Language { ZhHans, English };
    install a base game, so the button offers that instead of asking the player to find a copy
    elsewhere and come back ("check again"), which a console with no game cannot do. */
 
+/* Every id here has one row in `kStrings`, in the same order (tools/check-i18n.py compares the two
+   lists).  Keep comments **out of the braces**: that tool reads every line inside them as an id. */
 enum class StringId {
     AppTitle,
     TabStatus,
@@ -244,6 +246,24 @@ enum class StringId {
     PendingReserved,
     ConfirmResumeNote,
     ResultTaskKept,
+    PageStep1,
+    PageChooseFile,
+    PageDropHint,
+    PageKeepAwake,
+    PageUrlTitle,
+    PageUrlButton,
+    PageUrlSent,
+    PageUrlFailed,
+    PageStageUpload,
+    PageCancel,
+    PageCancelNote,
+    PageCancelConfirm,
+    PageCancelSent,
+    PageCancelFailed,
+    PageOffline,
+    PageUploadNotReady,
+    PageNoteNoInternet,
+    PageNoteHostScreen,
 };
 
 const char *Text(StringId id, Language language);

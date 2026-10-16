@@ -2,6 +2,11 @@
 
 #include <cstring>
 
+/* <sys/socket.h> first: `AF_INET` lives there, and libnx's switch.h (through the header above)
+   does not bring the socket API along. */
+#include <sys/socket.h>
+#include <arpa/inet.h>
+
 #include "install/content_install.hpp" /* ToHex: the same hex spelling the trace lines use */
 
 namespace acnh_manager::install {
@@ -271,8 +276,8 @@ bool NxServices::GetDisplayVersion(std::uint64_t application_id, std::string *ve
     return true;
 }
 
-bool HasNetworkAddress(bool *out, std::string *error) {
-    *out = false;
+bool CurrentIpAddressText(std::string *out, std::string *error) {
+    out->clear();
     const Result rc = nifmInitialize(NifmServiceType_User);
     if (R_FAILED(rc)) {
         *error = "opening the network service failed (0x" + ToHex(&rc, sizeof(std::uint32_t)) + ")";
@@ -288,8 +293,34 @@ bool HasNetworkAddress(bool *out, std::string *error) {
                  ")";
         return false;
     }
-    *out = address != 0;
+    if (address == 0) {
+        *error = "the console has no address (not connected)";
+        return false;
+    }
+    /* Dotted quad, in the order a person writes it.  The service hands the address over in network
+       byte order (like every socket API), so it goes through `inet_ntop` instead of being shifted
+       apart by hand -- the first version printed 160.8.168.192 for 192.168.8.160, which the log
+       caught immediately and a player would have caught by typing it. */
+    struct in_addr packed;
+    packed.s_addr = address;
+    char text[INET_ADDRSTRLEN] = {};
+    if (inet_ntop(AF_INET, &packed, text, sizeof(text)) == nullptr) {
+        *error = "the console's address could not be printed";
+        return false;
+    }
+    *out = text;
     return true;
+}
+
+bool HasNetworkAddress(bool *out, std::string *error) {
+    std::string text;
+    std::string local_error;
+    const bool ok = CurrentIpAddressText(&text, &local_error);
+    *out = ok && !text.empty();
+    if (!ok && error != nullptr) {
+        *error = local_error;
+    }
+    return ok;
 }
 
 }  // namespace acnh_manager::install

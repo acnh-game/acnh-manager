@@ -101,4 +101,10 @@ private:
    when the network service cannot be opened at all (which is also "no address to show"). */
 bool HasNetworkAddress(bool *out, std::string *error);
 
+/* The console's own address as text ("192.168.8.160"), which is what the install page puts in the
+   address the player types into a browser and in the QR code.  Empty with an error when there is no
+   address (or no network service): the screens then say "connect first" instead of showing a
+   half-built address. */
+bool CurrentIpAddressText(std::string *out, std::string *error);
+
 }  // namespace acnh_manager::install

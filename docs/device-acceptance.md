@@ -1258,3 +1258,23 @@ Edition 的 785 MB NSP,主机在地址屏输入地址、确认、开始接收,�
      `AdoptResume` 跳过这些已经完整的内容。
 
 **还没验的**:**上传来源**的续传(M4 才有上传来源;本机文件与下载两条来源的续传都走过了)。
+
+## HTTP 服务端与网页:第一片真机验收(2026-10-16)
+
+服务端薄层(`source/net/http_server.*`)与自包含网页(`data/installer_page.html.bin`)的第一片:页面能
+被打开、状态能读、地址能提交、取消会被拒绝、生命周期跟着安装页走。证据是"从开发机 curl 主机" +
+`log.txt` + 主机采屏(**主机的地址与端口 4321 从日志里读**):
+
+| 手法 | 结果 |
+|---|---|
+| 进安装页(`＋`) | 日志:`http: listening on port 4321` + `http: page ready at http://192.168.8.160:4321`;离开安装页(`B`):`http: the page server stopped` |
+| `curl http://192.168.8.160:4321/` | 200、12090 字节的 `text/html`;页面里 `const L = {…}` 是**当前语言**的 28 条文案(当时界面是中文),`__ACNH_LABELS__` / `__ACNH_LANG__` / `__ACNH_ADDRESS__` 三个标记都被替换掉,没有残留 |
+| `curl …/status.json` | `{"schema":1,"state":"idle",…,"pending":null}` —— 页面靠它决定显示哪一屏,自己不留状态 |
+| `POST /url`(正文一个地址) | 200,主机的日志:`install: the page submitted an address; opening it as a download` → 下一帧就走普通下载那条路(Range 探测失败时地址屏照常报错)。这条就是设计里"手机粘网址"的主入口 |
+| `POST /cancel`(没有任务时) | 409 + `nothing to cancel` —— 页面据此显示"主机没有接受取消请求" |
+| `POST /upload` | 501(数据通路还没接;用它而不是 404,是为了让"这个服务器还不会做这件事"和"这个路径它不认识"分得清) |
+| 未知路径 | 404 |
+| 把界面语言切成 English 后再取页面 | `lang="en"`、`"pageStep1":"Step 1 - pick the file to install"` —— 页面文案确实来自 i18n 表,跟着 App 的语言走 |
+
+一条到手才发现的小 bug:`nifmGetCurrentIpAddress` 交回的是**网络字节序**,第一版把四个字节手工拆开,
+日志里立刻印出 `http://160.8.168.192:4321`(`192.168.8.160` 的反序);改成 `inet_ntop` 后正确。

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="__ACNH_LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACNH-Manager</title>
+<style>
+  :root { --teal:#2fbfa8; --teal-dark:#259b88; --cream:#f6f1e3; --card:#fffdf7;
+          --border:#d8cfb6; --text:#2b2b2b; --subtle:#6b6b6b; --warn:#9a6200; --bad:#c0392b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--cream); color:var(--text);
+         font-family:-apple-system,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif; }
+  header { background:var(--teal); color:#fff; padding:18px 20px; }
+  header h1 { margin:0; font-size:24px; font-weight:600; }
+  header .sub { margin-top:6px; font-size:13px; color:#d5f2ec; }
+  main { padding:16px; max-width:760px; margin:0 auto; }
+  .card { background:var(--card); border:2px solid var(--border); border-radius:18px;
+          padding:18px; margin-bottom:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; font-weight:600; color:var(--subtle); }
+  .drop { border:2px dashed var(--border); border-radius:14px; padding:26px 16px; text-align:center; }
+  .drop.over { border-color:var(--teal); background:#f2fbf8; }
+  button { font:inherit; border:0; border-radius:14px; padding:14px 18px; background:var(--teal);
+           color:#fff; font-weight:600; cursor:pointer; }
+  button:disabled { background:#c9c2ae; cursor:default; }
+  button.danger { background:#fff; color:var(--bad); border:2px solid var(--bad); }
+  button.block { width:100%; }
+  input[type=text] { width:100%; font:inherit; padding:12px 14px; border:2px solid var(--border);
+                     border-radius:12px; background:#fdfbf4; margin-bottom:10px; }
+  .row { display:flex; gap:10px; align-items:center; }
+  .bar { height:14px; border-radius:7px; background:#ece7d8; overflow:hidden; }
+  .bar > i { display:block; height:100%; width:0; background:var(--teal); }
+  .big { font-size:26px; font-weight:700; margin:10px 0 6px; }
+  .muted { color:var(--subtle); font-size:13px; }
+  .warn { color:var(--warn); font-size:13px; }
+  .bad { color:var(--bad); font-size:13px; }
+  .mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; word-break:break-all; }
+  ul.notes { padding-left:18px; color:var(--subtle); font-size:13px; line-height:1.7; }
+  .hidden { display:none !important; }
+  code.addr { background:#fdfbf4; border:2px solid var(--border); border-radius:10px;
+              padding:2px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">ACNH-Manager</h1>
+  <div class="sub" id="subtitle"></div>
+</header>
+<main>
+  <div class="card hidden" id="queueCard">
+    <h2 id="queueTitle"></h2>
+    <div class="mono" id="queueName"></div>
+    <div class="muted" id="queueSize"></div>
+  </div>
+
+  <div class="card" id="pickCard">
+    <h2 id="pickTitle"></h2>
+    <div class="drop" id="drop">
+      <button id="chooseBtn"></button>
+      <div class="muted" id="dropHint" style="margin-top:12px"></div>
+      <div class="muted" id="formats" style="margin-top:6px"></div>
+    </div>
+    <div class="warn" id="pickNote" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card" id="urlCard">
+    <h2 id="urlTitle"></h2>
+    <input type="text" id="urlInput" spellcheck="false" autocomplete="off" autocapitalize="off">
+    <button class="block" id="urlBtn"></button>
+  </div>
+
+  <div class="card hidden" id="progressCard">
+    <h2 id="stageText"></h2>
+    <div class="mono" id="progressName"></div>
+    <div class="bar" style="margin-top:12px"><i id="progressBar"></i></div>
+    <div class="big" id="progressPercent">0%</div>
+    <div class="muted" id="progressBytes"></div>
+    <div class="muted" id="progressContents" style="margin-top:6px"></div>
+    <div class="mono" id="progressFile" style="margin-top:6px"></div>
+    <div class="muted" id="progressRate" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card hidden" id="cancelCard">
+    <button class="danger block" id="cancelBtn"></button>
+    <div class="muted" id="cancelNote" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card hidden" id="resultCard">
+    <h2 id="resultTitle"></h2>
+    <div class="muted" id="resultDetail"></div>
+  </div>
+
+  <ul class="notes" id="notes"></ul>
+</main>
+<input type="file" id="fileInput" class="hidden" accept=".nsp,.nsz,.xci,.xcz,.msp">
+<script>
+const L = __ACNH_LABELS__;
+const PORT_TEXT = "__ACNH_ADDRESS__";
+function t(key, ...args) {
+  let s = L[key] || key;
+  args.forEach(a => { s = s.replace("%s", a); });
+  return s;
+}
+function show(id, on) { document.getElementById(id).classList.toggle("hidden", !on); }
+document.getElementById("title").textContent = t("pageTitle");
+document.getElementById("subtitle").textContent = t("pageSubtitle") + " · " + PORT_TEXT;
+document.getElementById("pickTitle").textContent = t("pageStep1");
+document.getElementById("chooseBtn").textContent = t("pageChooseFile");
+document.getElementById("dropHint").textContent = t("pageDropHint");
+document.getElementById("formats").textContent = t("pageFormats");
+document.getElementById("pickNote").textContent = t("pageKeepAwake");
+document.getElementById("urlTitle").textContent = t("pageUrlTitle");
+document.getElementById("urlInput").placeholder = t("pageUrlPlaceholder");
+document.getElementById("urlBtn").textContent = t("pageUrlButton");
+document.getElementById("cancelBtn").textContent = t("pageCancel");
+document.getElementById("cancelNote").textContent = t("pageCancelNote");
+document.getElementById("notes").innerHTML =
+  "<li>" + t("pageNoteForeground") + "</li><li>" + t("pageNoteNoInternet") + "</li>" +
+  "<li>" + t("pageNoteHostScreen") + "</li>";
+document.getElementById("queueTitle").textContent = t("pageQueueTitle");
+
+/* The page does not remember anything: every screen it shows comes from /status.json, which is the
+   console's own view of the install.  Reload, a second tab, or another device all land on the same
+   state -- and an install that keeps running while this page is backgrounded still shows up. */
+let lastState = null;
+let cancelArmed = false;
+
+function render(status) {
+  lastState = status;
+  const busy = status.state === "downloading" || status.state === "uploading";
+  show("progressCard", busy || status.state === "done" || status.state === "failed");
+  show("cancelCard", busy);
+  show("pickCard", !busy && status.state !== "done");
+  show("urlCard", !busy && status.state !== "done");
+  show("resultCard", status.state === "done" || status.state === "failed");
+  show("queueCard", !busy && !!status.pending);
+  if (status.pending) {
+    document.getElementById("queueName").textContent = status.pending.name || "";
+    document.getElementById("queueSize").textContent =
+      t("pageQueueDetail", status.pending.received, status.pending.total);
+  }
+  if (busy) {
+    document.getElementById("stageText").textContent =
+      t(status.state === "uploading" ? "pageStageUpload" : "pageStageDownload");
+    document.getElementById("progressName").textContent = status.name || "";
+    const percent = status.total > 0 ? Math.floor(status.received * 100 / status.total) : 0;
+    document.getElementById("progressBar").style.width = percent + "%";
+    document.getElementById("progressPercent").textContent = percent + "%";
+    document.getElementById("progressBytes").textContent =
+      status.received_text + " / " + status.total_text +
+      (status.eta_text ? " · " + status.eta_text : "");
+    document.getElementById("progressContents").textContent =
+      t("pageContents", status.content_index, status.content_total);
+    document.getElementById("progressFile").textContent = status.content_name || "";
+    document.getElementById("progressRate").textContent = status.rate_text || "";
+  }
+  if (status.state === "done" || status.state === "failed") {
+    document.getElementById("resultTitle").textContent =
+      t(status.state === "done" ? "pageResultDone" : "pageResultFailed");
+    document.getElementById("resultDetail").textContent = status.message || "";
+  }
+  if (!busy) { cancelArmed = false; document.getElementById("cancelBtn").disabled = false; }
+}
+
+async function refresh() {
+  try {
+    const answer = await fetch("status.json", { cache: "no-store" });
+    if (!answer.ok) throw new Error(answer.status);
+    render(await answer.json());
+  } catch (error) {
+    /* The console stopped serving: the install page was left, or the console went to sleep.  Say so
+       instead of pretending the last numbers still mean something. */
+    document.getElementById("subtitle").textContent = t("pageOffline");
+  }
+}
+
+document.getElementById("cancelBtn").addEventListener("click", async () => {
+  if (!cancelArmed) {
+    cancelArmed = true;
+    document.getElementById("cancelBtn").disabled = true;
+    document.getElementById("cancelNote").textContent = t("pageCancelConfirm");
+    setTimeout(() => {
+      cancelArmed = false;
+      document.getElementById("cancelBtn").disabled = false;
+      document.getElementById("cancelNote").textContent = t("pageCancelNote");
+    }, 5000);
+    return;
+  }
+  const answer = await fetch("cancel", { method: "POST" });
+  document.getElementById("cancelNote").textContent =
+    answer.ok ? t("pageCancelSent") : t("pageCancelFailed");
+});
+
+document.getElementById("urlBtn").addEventListener("click", async () => {
+  const address = document.getElementById("urlInput").value.trim();
+  if (!address) return;
+  const answer = await fetch("url", { method: "POST",
+    headers: { "Content-Type": "text/plain" }, body: address });
+  document.getElementById("pickNote").textContent =
+    answer.ok ? t("pageUrlSent") : t("pageUrlFailed");
+});
+
+document.getElementById("fileInput").addEventListener("change", (event) => {
+  const file = event.target.files[0];
+  if (file) startUpload(file);
+});
+const drop = document.getElementById("drop");
+["dragenter", "dragover"].forEach(name => drop.addEventListener(name, (event) => {
+  event.preventDefault();
+  drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach(name => drop.addEventListener(name, () => drop.classList.remove("over")));
+drop.addEventListener("drop", (event) => {
+  event.preventDefault();
+  const file = event.dataTransfer.files[0];
+  if (file) startUpload(file);
+});
+document.getElementById("chooseBtn").addEventListener("click", () =>
+  document.getElementById("fileInput").click());
+
+/* Uploading is not wired to the console yet (the browser half of M4); the button says so instead of
+   pretending to send something. */
+function startUpload(file) {
+  document.getElementById("pickNote").textContent = t("pageUploadNotReady");
+}
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

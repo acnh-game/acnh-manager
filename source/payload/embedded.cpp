@@ -9,6 +9,7 @@
    These headers are generated into the build/ directory (the build passes -I for it). */
 #include "acnh_agent_version_bin.h"
 #include "agent_pubkey_bin.h"
+#include "installer_page_html_bin.h"
 #include "main_npdm_bin.h"
 #include "manifest_bin.h"
 #include "subsdk9_bin.h"
@@ -36,6 +37,11 @@ constexpr std::size_t kEntryCount = sizeof(kEntries) / sizeof(kEntries[0]);
 
 std::string_view EmbeddedManifestJson() {
     return std::string_view(reinterpret_cast<const char *>(manifest_bin), manifest_bin_size);
+}
+
+std::string_view EmbeddedInstallerPage() {
+    return std::string_view(reinterpret_cast<const char *>(installer_page_html_bin),
+                            installer_page_html_bin_size);
 }
 
 std::string_view EmbeddedAgentPublicKeyPem() {

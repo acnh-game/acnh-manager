@@ -29,6 +29,12 @@ std::string_view EmbeddedAgentPublicKeyPem();
 /* Whether the manifest and all three payload files are present. */
 bool EmbeddedAvailable();
 
+/* The browser page the console serves while the installer is up (`data/installer_page.html.bin`):
+   one self-contained file -- inline CSS and JS, no external reference of any kind, because the
+   console very often has no route to the internet at all.  The server substitutes the labels, the
+   language and the console's address into it before handing it out. */
+std::string_view EmbeddedInstallerPage();
+
 /* Read a payload straight from .rodata; names match files[].source in the manifest. */
 class EmbeddedPayloadSource final : public install::PayloadSource {
 public:

@@ -50,6 +50,7 @@
 #include "ui/list_view.hpp"
 #include "ui/settings.hpp"
 #include "ui/storage_bars.hpp"
+#include "net/http_page.hpp"
 #include "util/text_wrap.hpp"
 #include "util/time.hpp"
 
@@ -1602,8 +1603,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::ResultTaskKept) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ResultTaskKept); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::PageNoteHostScreen) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::PageNoteHostScreen); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -1853,6 +1854,52 @@ void TestHeaderTabs() {
     }
     CHECK(ring_layout.hit[0].x >= 0);
     CHECK(ring_layout.hit[kHeaderTabCount - 1].x + ring_layout.hit[kHeaderTabCount - 1].w <= 1280);
+}
+
+/* The installer's web page, without a socket: escaping, the label substitution and the response
+   head.  These are the parts that are easy to get subtly wrong and impossible to see on the console
+   (a label with a `"` or a `</script>` in it breaks the page silently, and a wrong Content-Length
+   hangs the browser). */
+void TestHttpPage() {
+    using acnh_manager::net::BuildPageLabelsJson;
+    using acnh_manager::net::BuildResponseHead;
+    using acnh_manager::net::EscapeForJs;
+    using acnh_manager::net::SubstituteLabels;
+
+    CHECK(EscapeForJs("plain") == "plain");
+    CHECK(EscapeForJs("a\"b") == "a\\\"b");
+    CHECK(EscapeForJs("back\\slash") == "back\\\\slash");
+    CHECK(EscapeForJs("line\nbreak") == "line\\nbreak");
+    /* The one that matters: a translation containing "</script>" must not be able to end the block
+       the labels live in. */
+    CHECK(EscapeForJs("</script>") == "\\u003c/script\\u003e");
+
+    /* Every occurrence is replaced, and a page without the marker comes back unchanged. */
+    CHECK(SubstituteLabels("<i>__X__</i> and __X__", "__X__", "L") == "<i>L</i> and L");
+    CHECK(SubstituteLabels("no marker here", "__X__", "L") == "no marker here");
+    CHECK(SubstituteLabels("__X__", "__X__", "") == "");
+
+    /* One response, framed so a browser cannot misread it: the status line first, the length that
+       matches the body, and a close. */
+    const std::string head = BuildResponseHead(200, "OK", "text/html; charset=utf-8", 42);
+    CHECK(head.rfind("HTTP/1.1 200 OK\r\n", 0) == 0);
+    CHECK(head.find("Content-Type: text/html; charset=utf-8\r\n") != std::string::npos);
+    CHECK(head.find("Content-Length: 42\r\n") != std::string::npos);
+    CHECK(head.find("Connection: close\r\n") != std::string::npos);
+    CHECK(head.size() >= 4);
+    CHECK(head.compare(head.size() - 4, 4, "\r\n\r\n") == 0);
+
+    /* The labels object: every key the page asks for, and nothing a JS string cannot carry. */
+    const std::string labels = BuildPageLabelsJson();
+    CHECK(labels.size() > 2);
+    CHECK(labels.front() == '{');
+    CHECK(labels.back() == '}');
+    for (const char *key : {"pageTitle", "pageStep1", "pageChooseFile", "pageCancel",
+                            "pageOffline", "pageNoteHostScreen"}) {
+        CHECK(labels.find(std::string("\"") + key + "\":\"") != std::string::npos);
+    }
+    CHECK(labels.find('\n') == std::string::npos);
+    CHECK(labels.find("</") == std::string::npos);
 }
 
 /* Picking up an interrupted install (design section 10).  The rules are pure on purpose: the
@@ -2862,6 +2909,7 @@ int main() {
     TestHeaderTabs();
     TestStorageBars();
     TestResumePlan();
+    TestHttpPage();
     TestPeerRing();
     TestFormatSize();
     TestMetaTypeCarriesGameVersion();
