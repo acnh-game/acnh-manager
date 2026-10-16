@@ -50,4 +50,21 @@ void RunFsSessionProbe(Log &log, FsFileSystem &sd, const char *where);
    4.5 GB in the manager's own directory and removes it; nothing else on the card is touched. */
 void RunLargeFileProbe(Log &log, FsFileSystem &sd);
 
+/* Network probe (development switch `/switch/ACNH-Manager/dev-netprobe`): measure what limits the
+   download path, in the shapes the installer could use, with the same libcurl the installer uses
+   and over the same address:
+
+     A. one request, no Range: the whole body streamed into a counter ("not chunked at all");
+     B. the installer's own shape: sequential 4 MiB Range requests;
+     C. four connections, each walking its own slice with 4 MiB Range requests (parallel ranges);
+     D. A again over a plain-http address, when a second line names one: the price of TLS;
+     E. ten 1-byte Range requests: the per-request overhead on its own.
+
+   The shapes exist because wall-clock times of whole installs (50.8 s and 78.8 s for the same
+   address, same console, same package) cannot say whether the limit is the network, the TLS
+   stack, the per-request cost, or something below all three.  Addresses come from
+   `/switch/ACNH-Manager/dev-netprobe-url` (line 1 = the address to test, line 2 = optional
+   plain-http address); every shape moves up to 64 MiB and logs bytes, seconds and MB/s. */
+void RunNetworkProbe(Log &log, FsFileSystem &sd);
+
 }  // namespace acnh_manager::probe

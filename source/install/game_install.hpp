@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "install/content_install.hpp"
@@ -24,6 +25,7 @@
 #include "install/ncz_decode.hpp"
 #include "install/options.hpp"
 #include "install/package.hpp"
+#include "install/transfer_queue.hpp"
 
 namespace acnh_manager {
 class Log;
@@ -34,6 +36,13 @@ namespace acnh_manager::install {
 /* Where the installer's diagnostics go (the app hands over its log at startup).  Several short
    lines beat one long one: the log truncates a line, which is how a useful self-check was lost. */
 void SetGameInstallLog(acnh_manager::Log *log);
+
+/* The one failure the installer reports as a *code* instead of a sentence: the console has a game
+   running, and the screens have wording of their own for it ("close the game first, then try
+   again").  It is a constant because three screens can show it, and a literal in four places is
+   how one of them ends up printing the code itself -- which is exactly what the address screen did
+   (2026-10-15, on hardware: the strip read "game-running"). */
+inline constexpr const char *kErrorGameRunning = "game-running";
 
 enum class InstallStage {
     Idle,
@@ -154,9 +163,29 @@ private:
     void RefreshStatus();
     /* Writes the bytes just read into the content's placeholder.  `content_offset` is where they
        start *inside the content* (the container offset means nothing for a compressed content,
-       and the XCI distribution bit has to be rewritten at the content's own offset 0). */
-    bool WriteRange(const RangeRequest &range, std::uint64_t content_offset, std::uint64_t size,
-                    std::string *error);
+       and the XCI distribution bit has to be rewritten at the content's own offset 0).  `data` is
+       the queue slot the reader filled; the header rewrite edits it in place, which is why it is
+       not const. */
+    bool WriteRange(const RangeRequest &range, std::uint64_t content_offset, std::uint8_t *data,
+                    std::uint64_t size, std::string *error);
+    /* Decodes nothing -- the payload piece is already in the decoder -- but writes everything the
+       decoder has decoded since the last call, at the content offset the task is at.  Runs on the
+       writer thread; this is the half of the pipeline that used to be on the fetch thread. */
+    bool WriteDecoded(std::size_t index, NczDecoder &decoder, std::string *error);
+    /* The transfer's reader thread: it walks its own copy of the task, reads each range (from the
+       source, or through the NCZ decoder) into a queue slot and publishes it.  Everything it can
+       fail with goes to the consumer through the queue, never thrown across the thread. */
+    void ReadLoop();
+    /* A free queue slot for the fetch thread; nullptr (after finishing the queue) when the run was
+       stopped or has already failed. */
+    std::uint8_t *AcquireSlotOrFinish();
+    /* What the fetch thread has read of one content's *source* stream, which is not the same thing
+       as what the writer has written: a compressed content's source is the NCZ header (once) plus
+       the payload, while its content bytes only exist after the writer decoded them. */
+    struct FetchCursor {
+        std::uint64_t stream_read{0}; /* payload bytes read (compressed) or container bytes (plain) */
+        bool header_sent{false};      /* the NCZ header piece is only read once */
+    };
     /* Reads one `.ncz` entry's tables (section table, and the block table when the file has one)
        and reports the NCA it rebuilds.  Called once per compressed content while the package is
        being read. */
@@ -173,12 +202,6 @@ private:
     bool ReadMetaContent(const ContainerEntry &entry, Placeholder *out_placeholder,
                          std::uint64_t *out_title_id, std::vector<std::uint8_t> *out_blob,
                          std::string *error);
-    /* Hands out the content's own bytes: the header region straight from the file, everything
-       after it decoded (install/ncz_decode.hpp) and, for the sections that were stored decrypted,
-       encrypted again. */
-    bool ReadCompressed(const TaskContent &content, NczDecoder &decoder,
-                        std::uint64_t content_offset, std::size_t size, std::uint8_t *out,
-                        std::string *error);
     /* True when the console can actually use the version it has recorded.  Two things can be true
        about a record without that being true: it can sit under the wrong id (an install that filed
        an update's record as an application of its own left an empty tile on the home screen while
@@ -206,11 +229,19 @@ private:
     std::vector<std::string> m_rights_ids;
     /* One decoder per task content, in the task's own order (null for plain contents). */
     std::vector<std::unique_ptr<NczDecoder>> m_ncz;
+    /* The transfer's pipeline (see install/transfer_queue.hpp): the fetch thread fills slots with
+       source bytes and this thread (the UI one) drains them -- decoding a `payload` piece first --
+       into the placeholders.  Only the writer touches the task counters, so the two halves cannot
+       disagree about how far the run has got; the fetch thread keeps its own cursors in `m_fetch`. */
+    std::unique_ptr<TransferQueue> m_queue;
+    std::thread m_reader_thread;
+    /* One cursor per content for the fetch thread (see FetchCursor). */
+    std::vector<FetchCursor> m_fetch;
+    /* Development aid (install/dev_stats.*): when Begin() started this run's clock, 0 when no run
+       is in flight.  Kept unconditional so the call sites need no #if. */
+    std::uint64_t m_transfer_begin_ms{0};
     ContentInstaller m_installer;
     std::vector<Placeholder> m_placeholders;
-    std::uint8_t *m_buffer{nullptr}; /* one block, reused: 4 MB on the applet heap is fine, a
-                                        fresh allocation per range is not */
-    std::size_t m_buffer_size{0};
 };
 
 }  // namespace acnh_manager::install

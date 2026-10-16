@@ -2899,7 +2899,7 @@ void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
            back to the screen the run started on instead of to a result page that only offers
            "back". */
         Trace("install: %s is not installable: %s", name.c_str(), error.c_str());
-        if (error == "game-running") {
+        if (error == install::kErrorGameRunning) {
             m_install_screen = m_install_origin;
             return;
         }
@@ -2984,12 +2984,13 @@ void App::RunGameInstall() {
         Render();
         return;
     }
-    int steps = 0;
     while (m_game_install->Step(&error)) {
         m_install_status = m_game_install->Status();
-        if ((++steps % 16) == 0) {
-            Render();
-        }
+        /* Redraw for every step instead of every sixteenth: a step is one 4 MiB range, which took
+           406 ms on average on the gateway path (33.8 s for 83 steps, measured 2026-10-16), so this
+           is about two frames a second -- and the transfer's own timing is 99.7% network wait, so
+           the drawing has nothing to steal from.  The bar then moves while the bytes move. */
+        Render();
     }
     m_install_status = m_game_install->Status();
     if (m_install_status.stage == install::InstallStage::Failed) {
@@ -3325,8 +3326,9 @@ void App::RenderInstallFiles(Surface surface) {
 
     if (!m_install_error.empty()) {
         m_font.Draw(surface, card_x + 24, card_top + card_height - 46, kFontSmall, kBad,
-                    m_install_error == "game-running" ? Tr(i18n::StringId::InstallGameRunning)
-                                                     : m_install_error.c_str());
+                    m_install_error == install::kErrorGameRunning
+                        ? Tr(i18n::StringId::InstallGameRunning)
+                        : m_install_error.c_str());
     }
     const ui::ListWindow window = m_file_list.Window();
     const int list_top = card_top + 60;
@@ -3494,6 +3496,12 @@ std::string App::InstallErrorText() const {
         return i18n::Format(
             i18n::StringId::InstallHttpStatus,
             m_install_error.substr(std::strlen(install::kProbeErrorHttpStatusPrefix)).c_str());
+    }
+    /* The installer's own code for "a game is running" comes back through this screen too (the run
+       returns to the address screen so the player can close the game and press A again), and it is
+       not a sentence: without this it reached the strip as the literal "game-running". */
+    if (m_install_error == install::kErrorGameRunning) {
+        return Tr(i18n::StringId::InstallGameRunning);
     }
     return m_install_error;
 }
@@ -3674,7 +3682,7 @@ void App::RenderInstallResult(Surface surface) {
         i18n::StringId reason = i18n::StringId::InstallNotAPackage;
         if (m_install_error == "no-content") {
             reason = i18n::StringId::InstallNoContent;
-        } else if (m_install_error == "game-running") {
+        } else if (m_install_error == install::kErrorGameRunning) {
             reason = i18n::StringId::InstallGameRunning;
         } else if (!m_install_error.empty() && m_install_error != "not-a-package" &&
                    m_install_error != "no file picked") {

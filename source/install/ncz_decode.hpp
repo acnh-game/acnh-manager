@@ -51,6 +51,21 @@ public:
     bool Take(std::uint64_t content_offset, std::size_t size, std::uint8_t *out,
               std::size_t *out_size, std::string *error);
 
+    /* --- fed by the caller: the transfer's writer owns the decoder ---
+
+       The transfer reads the payload on one thread and decodes it on another, so that the zstd
+       work (3.4 s of a 51 s transfer, measured) stops sitting on the same critical path as the
+       network reads.  In this mode the payload arrives in the caller's buffers -- one piece per
+       source read -- and the decoded bytes are collected in this object until the caller takes
+       them (`Pending` / `Consume`).  The block-table rules, the raw-block copy and the size checks
+       are the same code the pull mode runs. */
+    bool Feed(const std::uint8_t *payload, std::size_t size, std::string *error);
+
+    /* Decoded bytes not handed out yet, in order (nullptr when there are none).  The pointer stays
+       valid until the next Feed or Consume. */
+    std::uint8_t *Pending(std::size_t *size);
+    void Consume(std::size_t size);
+
     /* The tables this decoder reads the entry with, for the callers that need the sections (the
        bytes that were stored decrypted have to be encrypted again before they are written). */
     const NczInfo &Info() const { return m_info; }
@@ -58,6 +73,9 @@ public:
 private:
     /* Pulls `chunk` bytes of payload from the source into m_input. */
     bool Refill(std::string *error);
+    /* One decode step over the buffered payload: decodes up to one block's worth and appends what
+       it produced.  Shared by both modes. */
+    bool Step(std::string *error);
 
     const NczInfo m_info;
     ContainerReader &m_reader;

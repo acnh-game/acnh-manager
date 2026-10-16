@@ -19,6 +19,10 @@
 
 #include <zstd.h>
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 #include "env/cheat_file.hpp"
 #include "env/config_ini.hpp"
 #include "i18n/strings.hpp"
@@ -33,6 +37,7 @@
 #include "install/ncz_decode.hpp"
 #include "install/range_probe.hpp"
 #include "install/title_name.hpp"
+#include "install/transfer_queue.hpp"
 #include "net/update_policy.hpp"
 #include "util/json.hpp"
 #include "util/size_text.hpp"
@@ -1129,6 +1134,159 @@ void TestPackageTickets() {
     CHECK(!error.empty());
 }
 
+/* The transfer's hand-off queue (install/transfer_queue.hpp): the reader thread fills slots, the UI
+   thread drains them.  What matters for the install is that the order is kept exactly (the
+   placeholder offsets depend on it), that a full queue is waited on rather than dropped, and that
+   stopping or failing wakes both sides -- the engine's reader waits on this from another thread,
+   so none of it can be left to "it usually works". */
+void TestTransferQueue() {
+    using acnh_manager::install::PreparedRange;
+    using acnh_manager::install::TransferQueue;
+
+    TransferQueue queue(3, 64);
+
+    /* Three slots, three ranges, published and consumed in that order. */
+    for (int i = 0; i < 3; ++i) {
+        std::uint8_t *slot = queue.AcquireSlot();
+        CHECK(slot != nullptr);
+        slot[0] = static_cast<std::uint8_t>(i);
+        PreparedRange prepared;
+        prepared.range.index = static_cast<std::size_t>(i);
+        prepared.range.offset = static_cast<std::uint64_t>(i) * 100;
+        prepared.content_offset = static_cast<std::uint64_t>(i) * 10;
+        prepared.size = 7 + static_cast<std::size_t>(i);
+        queue.Publish(prepared);
+    }
+    for (int i = 0; i < 3; ++i) {
+        PreparedRange prepared;
+        std::uint8_t *data = nullptr;
+        std::string error;
+        CHECK(queue.Next(&prepared, &data, &error, 0) == TransferQueue::Take::Got);
+        CHECK(prepared.range.index == static_cast<std::size_t>(i));
+        CHECK(prepared.range.offset == static_cast<std::uint64_t>(i) * 100);
+        CHECK(prepared.content_offset == static_cast<std::uint64_t>(i) * 10);
+        CHECK(prepared.size == 7 + static_cast<std::size_t>(i));
+        CHECK(data != nullptr && data[0] == static_cast<std::uint8_t>(i));
+        queue.Release();
+    }
+    /* Drained: an empty queue answers Empty (with the deadline) rather than blocking the UI. */
+    {
+        PreparedRange prepared;
+        std::uint8_t *data = nullptr;
+        std::string error;
+        CHECK(queue.Next(&prepared, &data, &error, 0) == TransferQueue::Take::Empty);
+    }
+    /* The slots came back, so the ring wraps and keeps the order: three more fit, and the first of
+       them comes out first. */
+    for (int i = 0; i < 3; ++i) {
+        std::uint8_t *slot = queue.AcquireSlot();
+        CHECK(slot != nullptr);
+        PreparedRange prepared;
+        prepared.range.index = static_cast<std::size_t>(100 + i);
+        queue.Publish(prepared);
+    }
+    {
+        PreparedRange prepared;
+        std::uint8_t *data = nullptr;
+        std::string error;
+        CHECK(queue.Next(&prepared, &data, &error, 0) == TransferQueue::Take::Got);
+        CHECK(prepared.range.index == 100);
+        queue.Release();
+    }
+
+    /* A full queue makes the producer *wait* rather than drop work, and a release lets it through --
+       the engine's reader blocks in AcquireSlot while the writer works, so this is the property the
+       transfer depends on.  Two items are queued from the wrap check above, so one more fills it. */
+    {
+        std::uint8_t *last = queue.AcquireSlot();
+        CHECK(last != nullptr);
+        PreparedRange filler;
+        filler.range.index = 5;
+        queue.Publish(filler); /* three queued, no free slot */
+
+        std::atomic<bool> acquired{false};
+        std::thread producer([&] {
+            std::uint8_t *slot = queue.AcquireSlot(); /* blocks until the consumer releases one */
+            if (slot != nullptr) {
+                slot[0] = 0xAB;
+                PreparedRange published;
+                published.range.index = 7;
+                queue.Publish(published);
+            }
+            acquired = true;
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        CHECK(!acquired.load()); /* still blocked: no slot free */
+
+        /* Take one (which is what frees its slot) and give it back. */
+        PreparedRange prepared;
+        std::uint8_t *data = nullptr;
+        std::string error;
+        CHECK(queue.Next(&prepared, &data, &error, 0) == TransferQueue::Take::Got);
+        CHECK(prepared.range.index == 101);
+        queue.Release();
+        producer.join();
+        CHECK(acquired.load());
+
+        /* Drain what is left: two from the ring plus the producer's range. */
+        int drained = 0;
+        bool saw_producer = false;
+        for (;;) {
+            PreparedRange item;
+            std::uint8_t *item_data = nullptr;
+            std::string item_error;
+            if (queue.Next(&item, &item_data, &item_error, 0) != TransferQueue::Take::Got) {
+                break;
+            }
+            if (item.range.index == 7) {
+                saw_producer = true;
+                CHECK(item_data[0] == 0xAB);
+            }
+            queue.Release();
+            ++drained;
+        }
+        CHECK(drained == 3);
+        CHECK(saw_producer);
+    }
+
+    /* Finished: the consumer hears "no more" once the queue is empty, and keeps hearing it. */
+    queue.Finish();
+    {
+        PreparedRange prepared;
+        std::uint8_t *data = nullptr;
+        std::string error;
+        CHECK(queue.Next(&prepared, &data, &error, 0) == TransferQueue::Take::Finished);
+        CHECK(queue.Next(&prepared, &data, &error, 0) == TransferQueue::Take::Finished);
+    }
+
+    /* A failure reaches the consumer with its message, and the producer stops instead of filling
+       slots nobody will read. */
+    TransferQueue failing(2, 32);
+    failing.Fail("the source stopped early");
+    {
+        PreparedRange prepared;
+        std::uint8_t *data = nullptr;
+        std::string error;
+        CHECK(failing.Next(&prepared, &data, &error, 0) == TransferQueue::Take::Failed);
+        CHECK(error == "the source stopped early");
+    }
+    CHECK(failing.AcquireSlot() == nullptr);
+
+    /* Stopping wakes both sides: the producer gets no slot, and the consumer hears Stopped even with
+       an item still queued (the writer must not keep writing while the app is leaving). */
+    TransferQueue stopped(2, 32);
+    stopped.Publish(PreparedRange{});
+    stopped.RequestStop();
+    CHECK(stopped.StopRequested());
+    CHECK(stopped.AcquireSlot() == nullptr);
+    {
+        PreparedRange prepared;
+        std::uint8_t *data = nullptr;
+        std::string error;
+        CHECK(stopped.Next(&prepared, &data, &error, 0) == TransferQueue::Take::Stopped);
+    }
+}
+
 void TestInstallTask() {
     using acnh_manager::install::Advance;
     using acnh_manager::install::ContentKind;
@@ -1274,7 +1432,9 @@ void TestInstallOptions() {
     CHECK(options.skip_rsa_header_fixed_key_verify);
     CHECK(options.skip_rsa_npdm_fixed_key_verify);
     CHECK(!options.ignore_distribution_bit);
-    CHECK(options.convert_to_common_ticket);
+    /* Every ticket conversion is off: this app imports the package's ticket as it is and never
+       reads prod.keys, so it must not claim it might. */
+    CHECK(!options.convert_to_common_ticket);
     CHECK(!options.convert_to_standard_crypto);
     CHECK(!options.lower_master_key);
     CHECK(options.lower_system_version);
@@ -1283,12 +1443,12 @@ void TestInstallOptions() {
     CHECK(!options.ticket_only);
     CHECK(!options.SkipsEverything());
 
-    /* Only the common-ticket conversion is on by default, so the default path may need keys --
-       which is why the ticket check has to report a missing prod.keys instead of skipping it. */
-    CHECK(options.MayNeedKeys());
-    InstallOptions no_keys;
-    no_keys.convert_to_common_ticket = false;
-    CHECK(!no_keys.MayNeedKeys());
+    /* With every conversion off the default run needs no keys at all; turning one on is what makes
+       the caller warn about prod.keys (the flag exists for that sentence, not for a code path). */
+    CHECK(!options.MayNeedKeys());
+    InstallOptions wants_keys;
+    wants_keys.convert_to_common_ticket = true;
+    CHECK(wants_keys.MayNeedKeys());
 
     std::string error;
     CHECK(options.Validate(&error));
@@ -2154,6 +2314,27 @@ void TestNczDecode() {
     }
     CHECK(walked == expected);
 
+    /* The fed mode: the transfer's writer drives the decoder with the payload the fetch thread
+       read, in pieces the size of one source read.  Same bytes, same order -- the transfer depends
+       on it, because the writer cannot ask for a range again once the decoder handed it out. */
+    NczDecoder fed(info, reader, 0);
+    std::vector<std::uint8_t> fed_got;
+    for (std::uint64_t at = 0; at < info.payload_size; at += 5000) {
+        const std::size_t piece =
+            static_cast<std::size_t>(std::min<std::uint64_t>(5000, info.payload_size - at));
+        if (!fed.Feed(file.data() + info.payload_offset + at, piece, &error)) {
+            CHECK(false);
+            break;
+        }
+        std::size_t pending = 0;
+        std::uint8_t *decoded = fed.Pending(&pending);
+        if (pending > 0 && decoded != nullptr) {
+            fed_got.insert(fed_got.end(), decoded, decoded + pending);
+            fed.Consume(pending);
+        }
+    }
+    CHECK(fed_got == expected);
+
     /* The other shape the format allows: no block table at all, so the payload really is one
        stream from end to end.  The first real NSZ installed was of this shape, and it has to keep
        working. */
@@ -2488,6 +2669,7 @@ int main() {
     TestNcaAndCnmt();
     TestPackageTickets();
     TestInstallTask();
+    TestTransferQueue();
     TestApplicationIdOf();
     TestBuildMetaRecordBlob();
     TestInstallOptions();

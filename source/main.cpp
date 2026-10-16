@@ -61,6 +61,8 @@ constexpr const char *kFsProbeFlagPath = "/switch/ACNH-Manager/dev-fsprobe";
    writes one 4.5 GB file in the manager's own directory and deletes it again. */
 constexpr const char *kLargeFileProbeFlagPath = "/switch/ACNH-Manager/dev-largefileprobe";
 constexpr const char *kTouchProbeFlagPath = "/switch/ACNH-Manager/dev-touchprobe";
+/* Development switch for the network probe: what limits the download path (see probe.hpp). */
+constexpr const char *kNetProbeFlagPath = "/switch/ACNH-Manager/dev-netprobe";
 constexpr const char *kTextUiFlagPath = "/switch/ACNH-Manager/ui-text";
 #endif
 constexpr const char *kStdioPath = "/switch/ACNH-Manager/stdout.log";
@@ -236,6 +238,10 @@ int main(int argc, char **argv) {
         if (FileExists(sd, kLargeFileProbeFlagPath)) {
             log.Line("dev-largefileprobe flag present: measuring how this card handles >4 GiB");
             acnh_manager::probe::RunLargeFileProbe(log, sd);
+        }
+        if (FileExists(sd, kNetProbeFlagPath)) {
+            log.Line("dev-netprobe flag present: measuring what limits the download path");
+            acnh_manager::probe::RunNetworkProbe(log, sd);
         }
 #endif
         log.Line("=== done: press + to exit ===");

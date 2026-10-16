@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "i18n/strings.hpp"
+#include "install/dev_stats.hpp"
 #include "install/icon_file.hpp"
 #include "install/nca.hpp"
 #include "install/nca_crypto.hpp"
@@ -39,7 +40,22 @@ void Note(const char *format, ...) {
 /* One request.  4 MB is the design's number: about a second on a local network, small enough
    that a status poll can slip between two of them, large enough that the per-request cost is
    noise (section 3). */
+/* One source read, and one placeholder write.  Measured 2026-10-16: a request costs ~16 ms of fixed
+   overhead on top of the payload (412 ms per 4 MiB at 10.1 MB/s on a 1.86 GB package), i.e. ~5% of
+   the transfer, and that share does not grow with the package (the same 412 ms mean at 337 MB).
+   Eight-megabyte blocks looked like the obvious way to halve that, and were measured instead: 9.0
+   vs 10.1 MB/s for the same bytes (930 ms per request instead of the expected ~824 ms), i.e. no
+   gain and a slower run -- while this link varies 8.9-13.1 MB/s run to run, which is larger than
+   any of it.  So four megabytes stays: the same measured throughput, half the queue memory (12 MB)
+   and a finer progress bar. */
 constexpr std::size_t kBlockSize = 4 * 1024 * 1024;
+/* How long the writer waits for the reader's next range before it lets the caller draw a frame.
+   Short enough that the screen keeps its frame rate during a transfer, long enough that the wait
+   is one wake-up rather than a spin. */
+constexpr int kQueuePollMs = 8;
+/* Three slots of one block each (12 MB): what the reference implementation's ring holds, and
+   enough for the reader to stay a range ahead of the writer. */
+constexpr std::size_t kQueueSlots = 3;
 
 std::string EntryName(const NacpLanguageEntry *entry) {
     if (entry == nullptr) {
@@ -79,7 +95,14 @@ GameInstall::GameInstall(ContainerReader &reader, std::string name, std::uint64_
 }
 
 GameInstall::~GameInstall() {
-    delete[] m_buffer;
+    /* The reader thread may still be in the middle of a ranged read (or waiting for a slot): ask it
+       to stop, then wait for it -- the queue must not outlive the thread that uses it. */
+    if (m_queue != nullptr) {
+        m_queue->RequestStop();
+    }
+    if (m_reader_thread.joinable()) {
+        m_reader_thread.join();
+    }
 }
 
 bool GameInstall::Prepare(std::string *error) {
@@ -95,7 +118,7 @@ bool GameInstall::Prepare(std::string *error) {
             return false;
         }
         if (running) {
-            *error = "game-running";
+            *error = kErrorGameRunning;
             m_status.stage = InstallStage::Failed;
             m_status.error = *error;
             return false;
@@ -759,6 +782,17 @@ bool GameInstall::Begin(std::string *error) {
             }
         }
     }
+    /* The task is complete now (order, sizes and placeholder ids), so the fetch thread can start
+       filling the queue while this thread starts writing.  It walks the contents itself and keeps
+       its own cursors (`m_fetch`): the task counters belong to the writer. */
+    m_fetch.assign(m_task.contents.size(), FetchCursor{});
+    m_queue = std::make_unique<TransferQueue>(kQueueSlots, kBlockSize);
+    /* Development aid: this run's counters start here, so a second run in one session is not
+       reported on top of the first one's numbers. */
+    dev::Reset();
+    dev::SetTransferMs(0);
+    m_transfer_begin_ms = dev::NowMs();
+    m_reader_thread = std::thread([this] { ReadLoop(); });
     RefreshStatus();
     return true;
 }
@@ -915,44 +949,36 @@ bool GameInstall::ReadContentHeader(const ContainerEntry &entry, NcaHeaderInfo *
     return true;
 }
 
-bool GameInstall::ReadCompressed(const TaskContent &content, NczDecoder &decoder,
-                                 std::uint64_t content_offset, std::size_t size, std::uint8_t *out,
-                                 std::string *error) {
-    std::size_t done = 0;
-    while (done < size) {
-        const std::uint64_t at = content_offset + done;
-        if (at < kNczHeaderSize) {
-            /* The NCA header is stored verbatim -- no decoding, and an XCI's distribution bit is
-               rewritten here like it is for a plain NCA. */
-            const std::size_t take = std::min<std::size_t>(
-                size - done, static_cast<std::size_t>(kNczHeaderSize - at));
-            if (!m_reader.Read(content.offset + at, take, out + done)) {
-                *error = "the source stopped early (connection lost or file truncated)";
-                return false;
-            }
-            done += take;
-            continue;
+/* Writes the bytes a decoded payload piece produced.  Called on the writer thread: the zstd work
+   lives here now (see ReadLoop), and so does the re-encryption of the ranges the file stored
+   decrypted, because both belong to "turn payload into what the placeholder holds". */
+bool GameInstall::WriteDecoded(std::size_t index, NczDecoder &decoder, std::string *error) {
+    for (;;) {
+        std::size_t pending = 0;
+        std::uint8_t *decoded = decoder.Pending(&pending);
+        if (pending == 0 || decoded == nullptr) {
+            return true;
         }
-        if (!decoder.DecodeUntil(at + 1, error)) {
+        const TaskContent &content = m_task.contents[index];
+        const std::uint64_t content_offset = content.written;
+        RangeRequest chunk;
+        chunk.index = index;
+        chunk.offset = content.offset + content_offset; /* bookkeeping: the placeholder write uses
+                                                           the content offset, not this one */
+        chunk.size = pending;
+        ReencryptNczRange(decoder.Info(), content_offset, decoded, pending);
+        if (!WriteRange(chunk, content_offset, decoded, pending, error)) {
             return false;
         }
-        std::size_t take = 0;
-        if (!decoder.Take(at, size - done, out + done, &take, error)) {
-            return false;
-        }
-        if (take == 0) {
-            *error = "the compressed content ended before the whole NCA was decoded";
-            return false;
-        }
-        /* The ranges the file stored decrypted go into the placeholder encrypted again. */
-        ReencryptNczRange(decoder.Info(), at, out + done, take);
-        done += take;
+        /* No Advance here: WriteRange does it (and doing it twice would push the task's `written`
+           past what the decoder has handed out -- the next write then lands past the content's end,
+           which is exactly what the first hardware run of this change reported). */
+        decoder.Consume(pending);
     }
-    return true;
 }
 
 bool GameInstall::WriteRange(const RangeRequest &range, std::uint64_t content_offset,
-                             std::uint64_t size, std::string *error) {
+                             std::uint8_t *data, std::uint64_t size, std::string *error) {
     /* A first block that carries the very start of an NCA is where an XCI's distribution bit has
        to be rewritten: the console only launches gamecard content from the card, so a dump
        installed to SD/NAND needs the header to say "system".  The header is encrypted, so it is
@@ -962,7 +988,7 @@ bool GameInstall::WriteRange(const RangeRequest &range, std::uint64_t content_of
     if (content_offset < kNcaHeaderSize && m_options.ignore_distribution_bit == false) {
         std::uint8_t decrypted[kNcaHeaderSize];
         std::uint8_t reencrypted[kNcaHeaderSize];
-        if (!DecryptNcaHeader(m_buffer, decrypted, error)) {
+        if (!DecryptNcaHeader(data, decrypted, error)) {
             return false;
         }
         NcaHeaderInfo header;
@@ -971,58 +997,187 @@ bool GameInstall::WriteRange(const RangeRequest &range, std::uint64_t content_of
             if (!EncryptNcaHeader(decrypted, reencrypted, error)) {
                 return false;
             }
-            std::memcpy(m_buffer, reencrypted, kNcaHeaderSize);
+            std::memcpy(data, reencrypted, kNcaHeaderSize);
             m_status.modified = true;
             header_touched = true;
         }
     }
     (void)header_touched;
-    if (!m_installer.Write(m_task, range, m_buffer, static_cast<std::size_t>(size), error)) {
+    const std::uint64_t write_begin = dev::NowMs();
+    const bool written =
+        m_installer.Write(m_task, range, data, static_cast<std::size_t>(size), error);
+    /* Development aid: the placeholder write is the card's own cost, and the only part of the run
+       the network cannot influence. */
+    dev::AddPlaceholder(write_begin, size);
+    if (!written) {
         return false;
     }
     Advance(m_task, range, size);
     return true;
 }
 
+/* The fetch half of the pipeline: **only the source reads happen here**, on their own thread, so
+   they overlap with everything else.  It used to decode too, and that put the zstd work on the
+   same critical path as the network: measured 2026-10-16 on hardware, the loop was 46.4 s of reads
+   plus 3.4 s of decode, while the writer sat idle for 35 s.  The decode moved to the writer (see
+   Step()), which has the slack, and this thread now does nothing but pull bytes.
+
+   It walks the contents in the task's order and publishes, per content: for a compressed one the
+   NCZ header verbatim (once) and then its payload; for a plain one its bytes.  Which of the two a
+   piece is travels with it (`PreparedRange::payload`).  The writer owns all the task counters, so
+   this thread never touches them -- it keeps its own cursors in `m_fetch`. */
+void GameInstall::ReadLoop() {
+    for (std::size_t index = 0; index < m_task.contents.size(); ++index) {
+        const TaskContent &content = m_task.contents[index];
+        /* Nothing to fetch when this run already has the content: the meta and the control NCA are
+           read out of the package *before* the transfer (Prepare marks them complete by setting
+           `written = size`).  The old loop got this for free from NextRange(); this one walks the
+           contents itself, so it has to say it here -- without it, the fetch read those contents
+           again and the writer refused the write past their end (measured on hardware). */
+        if (content.skipped || content.written >= content.size) {
+            continue;
+        }
+        /* The piece that carries the NCZ header verbatim: the first kNczHeaderSize bytes of the
+           content are the .ncz's own header, stored (not decoded) in the container. */
+        if (content.compressed && !m_fetch[index].header_sent) {
+            const std::size_t piece = static_cast<std::size_t>(kNczHeaderSize);
+            std::uint8_t *slot = AcquireSlotOrFinish();
+            if (slot == nullptr) {
+                return;
+            }
+            const std::uint64_t read_begin = dev::NowMs();
+            const bool ok = m_reader.Read(content.offset, piece, slot);
+            dev::AddSourceRead(read_begin, piece);
+            if (!ok) {
+                m_queue->Fail("the source stopped early (connection lost or file truncated)");
+                return;
+            }
+            PreparedRange prepared;
+            prepared.range.index = index;
+            prepared.range.offset = content.offset;
+            prepared.range.size = piece;
+            prepared.content_offset = 0;
+            prepared.size = piece;
+            m_queue->Publish(prepared);
+            m_fetch[index].header_sent = true;
+        }
+        /* The stream this content is read from: the payload for a compressed entry (after the NCZ
+           header and its tables), the content itself for a plain one. */
+        const bool compressed = content.compressed;
+        std::uint64_t stream_offset = content.offset;
+        std::uint64_t stream_size = content.size;
+        if (compressed) {
+            const auto known = m_ncz_info.find(content.content_id);
+            if (known == m_ncz_info.end()) {
+                m_queue->Fail("a compressed content arrived without its tables");
+                return;
+            }
+            stream_offset = content.offset + known->second.payload_offset;
+            stream_size = known->second.payload_size;
+        }
+        while (m_fetch[index].stream_read < stream_size) {
+            const std::uint64_t missing = stream_size - m_fetch[index].stream_read;
+            const std::size_t piece =
+                static_cast<std::size_t>(missing < kBlockSize ? missing : kBlockSize);
+            std::uint8_t *slot = AcquireSlotOrFinish();
+            if (slot == nullptr) {
+                return;
+            }
+            const std::uint64_t at = stream_offset + m_fetch[index].stream_read;
+            const std::uint64_t read_begin = dev::NowMs();
+            const bool ok = m_reader.Read(at, piece, slot);
+            dev::AddSourceRead(read_begin, piece);
+            if (!ok) {
+                m_queue->Fail("the source stopped early (connection lost or file truncated)");
+                return;
+            }
+            PreparedRange prepared;
+            prepared.range.index = index;
+            prepared.range.offset = at;
+            prepared.range.size = piece;
+            prepared.content_offset = 0; /* the writer uses the task's own `written` */
+            prepared.size = piece;
+            prepared.payload = compressed;
+            m_queue->Publish(prepared);
+            m_fetch[index].stream_read += piece;
+        }
+    }
+    m_queue->Finish();
+}
+
+/* A free queue slot, or nullptr after finishing the queue (stopped, or already failed). */
+std::uint8_t *GameInstall::AcquireSlotOrFinish() {
+    const std::uint64_t slot_begin = dev::NowMs();
+    std::uint8_t *slot = m_queue->AcquireSlot();
+    /* Development aid: the fetch thread waiting for a free slot means the writer is behind. */
+    dev::AddReaderWait(slot_begin);
+    if (slot == nullptr) {
+        m_queue->Finish();
+    }
+    return slot;
+}
+
 bool GameInstall::Step(std::string *error) {
-    RangeRequest range;
-    if (!NextRange(m_task, kBlockSize, &range)) {
-        /* Everything is in: the caller moves to Finish(). */
-        return false;
-    }
-    if (m_buffer == nullptr) {
-        m_buffer = new std::uint8_t[kBlockSize];
-        m_buffer_size = kBlockSize;
-    }
-    if (range.size > m_buffer_size) {
-        *error = "the requested range is larger than the transfer buffer";
-        return false;
-    }
-    const TaskContent &content = m_task.contents[range.index];
-    /* Where this range starts inside the content: for a plain content the range's own offset is
-       the container's, for an NCZ stream the decoded position is the only one that means anything
-       (and it is also what the placeholder write and the header rewrite need). */
-    const std::uint64_t content_offset = content.written;
-    std::size_t read_size = static_cast<std::size_t>(range.size);
-    if (content.compressed) {
-        if (m_ncz[range.index] == nullptr) {
-            *error = "a compressed content arrived without its decoder";
+    /* The writer half: take whatever the reader has ready and put it in the placeholder.  An empty
+       queue is not a failure -- it means the reader is still fetching -- so the caller keeps
+       drawing and calls again. */
+    PreparedRange prepared;
+    std::uint8_t *data = nullptr;
+    std::string reader_error;
+    const std::uint64_t wait_begin = dev::NowMs();
+    switch (m_queue->Next(&prepared, &data, &reader_error, kQueuePollMs)) {
+        case TransferQueue::Take::Got:
+            dev::AddWriterWait(wait_begin);
+            break;
+        case TransferQueue::Take::Empty:
+            dev::AddWriterWait(wait_begin);
+            return true;
+        case TransferQueue::Take::Finished:
+            /* Everything is in: the caller moves to Finish(). */
+            return false;
+        case TransferQueue::Take::Failed:
+            *error = reader_error;
             m_status.stage = InstallStage::Failed;
             m_status.error = *error;
             return false;
-        }
-        if (!ReadCompressed(content, *m_ncz[range.index], content_offset, read_size, m_buffer, error)) {
+        case TransferQueue::Take::Stopped:
+            *error = "the transfer was stopped";
             m_status.stage = InstallStage::Failed;
             m_status.error = *error;
             return false;
-        }
-    } else if (!m_reader.Read(range.offset, read_size, m_buffer)) {
-        *error = "the source stopped early (connection lost or file truncated)";
+    }
+    dev::AddStep();
+    if (prepared.size > kBlockSize) {
+        m_queue->Release();
+        *error = "the reader prepared a range larger than one block";
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
     }
-    if (!WriteRange(range, content_offset, read_size, error)) {
+    if (prepared.payload) {
+        /* The compressed half of the transfer: this is where the payload the fetch thread read
+           becomes NCA bytes. */
+        NczDecoder *decoder = m_ncz[prepared.range.index].get();
+        std::string decode_error;
+        if (decoder == nullptr) {
+            decode_error = "a compressed content arrived without its decoder";
+        } else if (!decoder->Feed(data, prepared.size, &decode_error)) {
+            /* keep the decoder's own sentence */
+        } else if (WriteDecoded(prepared.range.index, *decoder, &decode_error)) {
+            m_queue->Release();
+            RefreshStatus();
+            return true;
+        }
+        m_queue->Release();
+        *error = decode_error;
+        m_status.stage = InstallStage::Failed;
+        m_status.error = *error;
+        return false;
+    }
+    const bool written = WriteRange(prepared.range, prepared.content_offset, data, prepared.size,
+                                   error);
+    m_queue->Release();
+    if (!written) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
@@ -1037,6 +1192,15 @@ bool GameInstall::Finish(std::string *error) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
+    }
+    /* Development aid: the transfer is over, so this is where the breakdown is worth printing --
+       the numbers describe the download and the writes, not the register/finish work below. */
+    if (m_transfer_begin_ms != 0) {
+        dev::SetTransferMs(dev::NowMs() - m_transfer_begin_ms);
+        m_transfer_begin_ms = 0;
+        if (g_log != nullptr) {
+            dev::LogSummary(*g_log);
+        }
     }
     m_status.stage = InstallStage::Finalizing;
     /* The meta contents are registered here too: they are the contents the task cannot list (a

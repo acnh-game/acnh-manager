@@ -8,14 +8,18 @@
 
 #include "probe.hpp"
 
+#include <curl/curl.h>
+
 #include <cstddef>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "net/socket_session.hpp"
 #include "util/fs_path.hpp"
 
 /* M0 environment probes.  Every probe here ran on real hardware and its result is recorded
@@ -936,6 +940,290 @@ void RunLargeFileProbe(Log &log, FsFileSystem &sd) {
     ConcatenationLook(log, sd, kBigPackagePath, "v3.0.3 package");
     ConcatenationMake(log, sd);
     log.Line("=== large-file probe done ===");
+}
+
+/* --- network probe ---------------------------------------------------------- */
+namespace {
+
+constexpr const char *kNetProbeUrlPath = "/switch/ACNH-Manager/dev-netprobe-url";
+
+/* Each shape stops once it has this many bytes: long enough that the connection has settled and
+   short enough that a probe run stays a coffee break rather than an afternoon. */
+constexpr std::uint64_t kNetProbeBudget = 64ull * 1024 * 1024;
+constexpr std::size_t kNetProbeBlock = 4 * 1024 * 1024;
+
+/* Counts what arrives and stops the transfer once the budget is in.  Returning 0 from a write
+   callback is how libcurl is told to stop, so a shape that ends on the budget comes back as
+   CURLE_WRITE_ERROR -- that is the success path here, not a failure. */
+struct Counter {
+    std::uint64_t bytes{0};
+    std::uint64_t budget{0};
+};
+
+std::size_t OnCount(char *, std::size_t size, std::size_t count, void *user) {
+    auto *counter = static_cast<Counter *>(user);
+    const std::size_t bytes = size * count;
+    counter->bytes += bytes;
+    if (counter->bytes >= counter->budget) {
+        return 0; /* stop: the budget is in */
+    }
+    return bytes;
+}
+
+void NetProbeOptions(CURL *curl, const std::string &url) {
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "ACNH-Manager");
+    /* Same policy as the installer's source: no trust store is reachable from this stack. */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, OnCount);
+}
+
+/* One request' worth of a shape: `range` empty means "the whole body, no Range header".  The
+   status and the curl code come back to the caller so a failed shape says *why* -- a probe that
+   only reports "FAIL" costs a whole extra run to explain. */
+CURLcode NetProbeRequest(CURL *curl, const std::string &range, Counter *counter, long *status) {
+    if (range.empty()) {
+        curl_easy_setopt(curl, CURLOPT_RANGE, nullptr);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_RANGE, range.c_str());
+    }
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, counter);
+    const CURLcode code = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
+    return code;
+}
+
+/* The budget abort is the success path, not an error. */
+bool NetProbeOk(CURLcode code) { return code == CURLE_OK || code == CURLE_WRITE_ERROR; }
+
+std::string NetProbeWhy(CURLcode code, long status) {
+    char buffer[128];
+    std::snprintf(buffer, sizeof(buffer), "curl=%d %s, http=%ld", static_cast<int>(code),
+                  curl_easy_strerror(code), status);
+    return buffer;
+}
+
+std::string RangeFor(std::uint64_t offset, std::size_t size) {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%llu-%llu", static_cast<unsigned long long>(offset),
+                  static_cast<unsigned long long>(offset + size - 1));
+    return buffer;
+}
+
+void LogShape(Log &log, const char *what, std::uint64_t bytes, std::uint64_t ms, bool ok,
+              const std::string &why) {
+    const double seconds = static_cast<double>(ms) / 1000.0;
+    const double mb_per_s = seconds > 0.0 ? (static_cast<double>(bytes) / 1000000.0) / seconds : 0.0;
+    if (ok) {
+        log.Line("netprobe %-26s ok   %llu bytes %.1f s %.1f MB/s", what,
+                 static_cast<unsigned long long>(bytes), seconds, mb_per_s);
+    } else {
+        log.Line("netprobe %-26s FAIL %llu bytes %.1f s (%s)", what,
+                 static_cast<unsigned long long>(bytes), seconds, why.c_str());
+    }
+    log.Sync();
+}
+
+/* A: one request, no Range header at all -- what "not chunking the download" would look like if the
+   source streamed the whole body in one answer. */
+void ShapeSingleStream(Log &log, const char *label, const std::string &url) {
+    CURL *curl = curl_easy_init();
+    if (curl == nullptr) {
+        LogShape(log, label, 0, 0, false, "cannot start the download engine");
+        return;
+    }
+    Counter counter{0, kNetProbeBudget};
+    NetProbeOptions(curl, url);
+    const u64 begin = armGetSystemTick();
+    long status = 0;
+    const CURLcode code = NetProbeRequest(curl, std::string(), &counter, &status);
+    const std::uint64_t ms = armTicksToNs(armGetSystemTick() - begin) / 1000000ull;
+    curl_easy_cleanup(curl);
+    LogShape(log, label, counter.bytes, ms, NetProbeOk(code) && counter.bytes > 0,
+             NetProbeWhy(code, status));
+}
+
+/* One worker of the Range shapes: it walks every thread_count'th 4 MiB block of the file. */
+struct RangeWorker {
+    std::string url;
+    std::uint64_t first_block{0};
+    std::uint64_t block_count{0};
+    std::uint64_t stride{1};
+    std::uint64_t budget{0};
+    std::uint64_t bytes{0};
+    bool ok{true};
+    CURLcode code{CURLE_OK};
+    long status{0};
+};
+
+void RunRangeWorker(RangeWorker *worker) {
+    CURL *curl = curl_easy_init();
+    if (curl == nullptr) {
+        worker->ok = false;
+        worker->code = CURLE_FAILED_INIT;
+        return;
+    }
+    NetProbeOptions(curl, worker->url);
+    Counter counter{0, worker->budget};
+    for (std::uint64_t i = worker->first_block; i < worker->block_count; i += worker->stride) {
+        if (counter.bytes >= counter.budget) {
+            break;
+        }
+        const std::uint64_t offset = i * kNetProbeBlock;
+        const CURLcode code =
+            NetProbeRequest(curl, RangeFor(offset, kNetProbeBlock), &counter, &worker->status);
+        if (!NetProbeOk(code)) {
+            worker->ok = false;
+            worker->code = code;
+            break;
+        }
+    }
+    curl_easy_cleanup(curl);
+    worker->bytes = counter.bytes;
+}
+
+/* B and C: `threads` connections, each doing sequential 4 MiB Range requests over its own slice.
+   One thread is exactly the installer's shape; four answer "would parallel ranges help?". */
+void ShapeRanges(Log &log, const char *label, const std::string &url, int threads,
+                 std::uint64_t blocks) {
+    const u64 begin = armGetSystemTick();
+    std::vector<RangeWorker> workers(static_cast<std::size_t>(threads));
+    std::vector<std::thread> running;
+    const std::uint64_t total = blocks * kNetProbeBlock;
+    const std::uint64_t per_thread = total / static_cast<std::uint64_t>(threads);
+    for (int t = 0; t < threads; ++t) {
+        RangeWorker &worker = workers[static_cast<std::size_t>(t)];
+        worker.url = url;
+        worker.first_block = static_cast<std::uint64_t>(t);
+        worker.block_count = blocks;
+        worker.stride = static_cast<std::uint64_t>(threads);
+        worker.budget = per_thread;
+    }
+    for (int t = 0; t < threads; ++t) {
+        running.emplace_back(RunRangeWorker, &workers[static_cast<std::size_t>(t)]);
+    }
+    for (auto &thread : running) {
+        thread.join();
+    }
+    std::uint64_t bytes = 0;
+    bool ok = true;
+    CURLcode code = CURLE_OK;
+    long status = 0;
+    for (const RangeWorker &worker : workers) {
+        bytes += worker.bytes;
+        if (!worker.ok) {
+            ok = false;
+            code = worker.code;
+            status = worker.status;
+        }
+    }
+    const std::uint64_t ms = armTicksToNs(armGetSystemTick() - begin) / 1000000ull;
+    LogShape(log, label, bytes, ms, ok && bytes > 0, NetProbeWhy(code, status));
+}
+
+/* E: ten 1-byte Range requests on one connection.  This is the cost every extra request pays before
+   any byte of payload moves, and it is the number that decides whether a bigger block is worth
+   anything. */
+void ShapeRequestLatency(Log &log, const std::string &url) {
+    CURL *curl = curl_easy_init();
+    if (curl == nullptr) {
+        LogShape(log, "https 1-byte range x10", 0, 0, false, "cannot start the download engine");
+        return;
+    }
+    NetProbeOptions(curl, url);
+    std::uint64_t worst = 0;
+    std::uint64_t total = 0;
+    bool ok = true;
+    for (int i = 0; i < 10; ++i) {
+        Counter counter{0, 1};
+        const u64 begin = armGetSystemTick();
+        long status = 0;
+        const CURLcode code =
+            NetProbeRequest(curl, RangeFor(static_cast<std::uint64_t>(i), 1), &counter, &status);
+        const std::uint64_t ms = armTicksToNs(armGetSystemTick() - begin) / 1000000ull;
+        ok = ok && NetProbeOk(code) && counter.bytes == 1;
+        total += ms;
+        if (ms > worst) {
+            worst = ms;
+        }
+    }
+    curl_easy_cleanup(curl);
+    log.Line("netprobe %-26s %s 1-byte range x10: mean %llu ms, worst %llu ms",
+             "tls request latency", ok ? "ok  " : "FAIL",
+             static_cast<unsigned long long>(total / 10),
+             static_cast<unsigned long long>(worst));
+    log.Sync();
+}
+
+}  // namespace
+
+void RunNetworkProbe(Log &log, FsFileSystem &sd) {
+    const util::FsPath path(kNetProbeUrlPath);
+    FsFile file{};
+    if (R_FAILED(fsFsOpenFile(&sd, path.c_str(), FsOpenMode_Read, &file))) {
+        log.Line("netprobe: %s is missing, nothing to measure", kNetProbeUrlPath);
+        return;
+    }
+    std::int64_t size = 0;
+    fsFileGetSize(&file, &size);
+    std::string text(static_cast<std::size_t>(size > 0 ? size : 0), '\0');
+    if (!text.empty()) {
+        u64 read = 0;
+        fsFileRead(&file, 0, text.data(), text.size(), 0, &read);
+        text.resize(static_cast<std::size_t>(read));
+    }
+    fsFileClose(&file);
+    std::vector<std::string> lines;
+    std::string current;
+    for (char c : text) {
+        if (c == '\n' || c == '\r') {
+            if (!current.empty()) {
+                lines.push_back(current);
+                current.clear();
+            }
+            continue;
+        }
+        if (c != ' ' && c != '\t') {
+            current.push_back(c);
+        }
+    }
+    if (!current.empty()) {
+        lines.push_back(current);
+    }
+    if (lines.empty()) {
+        log.Line("netprobe: %s has no address in it", kNetProbeUrlPath);
+        return;
+    }
+
+    /* libcurl needs the console's socket service; the installer's source holds one for the same
+       reason (net/socket_session.hpp). */
+    net::SocketSession sockets;
+    if (!sockets.Ok()) {
+        log.Line("netprobe: the socket service would not start (0x%08x)",
+                 static_cast<unsigned>(sockets.Error()));
+        return;
+    }
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+        log.Line("netprobe: curl_global_init failed");
+        return;
+    }
+    const std::string &tls = lines[0];
+    log.Line("=== netprobe: %llu MiB per shape, 4 MiB blocks ===",
+             static_cast<unsigned long long>(kNetProbeBudget / (1024 * 1024)));
+    log.Sync();
+
+    ShapeSingleStream(log, "tls single-stream", tls);
+    ShapeRanges(log, "tls ranges x1", tls, 1, kNetProbeBudget / kNetProbeBlock);
+    ShapeRanges(log, "tls ranges x4", tls, 4, kNetProbeBudget / kNetProbeBlock);
+    ShapeRequestLatency(log, tls);
+    if (lines.size() > 1) {
+        ShapeSingleStream(log, "plain single-stream", lines[1]);
+        ShapeRanges(log, "plain ranges x1", lines[1], 1, kNetProbeBudget / kNetProbeBlock);
+    }
+    log.Line("=== netprobe done ===");
 }
 
 }  // namespace acnh_manager::probe

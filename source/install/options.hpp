@@ -48,7 +48,10 @@ struct InstallOptions {
        willing to launch from SD/NAND, which is what an XCI base needs.  The three [needs keys]
        conversions are only taken when the content really requires them. */
     bool ignore_distribution_bit{false};
-    bool convert_to_common_ticket{true};
+    /* Off, because this app never converts a ticket: the package's ticket is imported as it is
+       (design section 5, and `docs/device-acceptance.md`).  The flag only feeds MayNeedKeys(), so
+       leaving it "on" said "this run may need prod.keys" about a run that never reads them. */
+    bool convert_to_common_ticket{false};
     bool convert_to_standard_crypto{false};
     bool lower_master_key{false};
     bool lower_system_version{true};
