@@ -33,3 +33,18 @@
 安装决策与 `state.json` 往返的单元测试(不需要 Docker 与真机)。
 
 构建产物与日志等过程性材料放 `build/scratch/`(已忽略);真机验收结论写入 `docs/device-acceptance.md`(M5 建立)。
+
+## upload-client.py — 扮演安装页面的上传客户端
+
+`tools/upload-client.py <包> [--host switch] [--port 4321] [--verbose] [--task <id>]`
+
+主机把真正的安装页面发给浏览器;这个脚本做的是**页面 JS 要做的同一组调用**,所以上传那条路可以不用手机
+就测通、也能看清单个片段去哪了:
+
+    POST /upload/begin {name,size} -> taskId
+    GET  /upload/next?taskId=…     -> 现在要哪一段(offset + size)
+    POST /upload/part?taskId=…&offset=…  -> 原样发那一段
+
+主机显示确认页时按 `A` 开始安装,脚本会一直供片段到主机报告 `done`/`failed`。`--task <id>` 用来接上一个
+**已经在进行**的任务(页面刷新后就是这么接着喂的,id 在 `/status.json` 里)—— 调试中断/续传时很有用。
+标准库实现;主机没开安装页时它会直接报"主机没有回答",而不是一直重试。
