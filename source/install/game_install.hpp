@@ -87,7 +87,7 @@ struct InstallStatus {
        title, and the screens then leave the number out. */
     std::string installed_version_text;
     bool needs_keys{false};   /* the run may need /switch/prod.keys */
-    /* What else the container brings, in the app's language ("更新 ×1 · 追加内容 ×2"): a
+    /* What else the container brings, in the app's language ("Update x1 - Add-on x2"): a
        cartridge dump that was made from a game plus its update and DLCs carries one meta per
        piece, and the confirm page says so instead of quietly installing only the base game. */
     std::string extra_summary;

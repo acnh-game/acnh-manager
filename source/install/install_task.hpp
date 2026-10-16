@@ -101,7 +101,7 @@ std::uint64_t DoneBytes(const InstallTask &task);
 std::uint64_t PackageBytes(const InstallTask &task);
 
 /* Contents that are finished -- written in full or skipped.  The progress screen shows it as
-   "第 N / M 个内容", which is why skipped entries still count here. */
+   "content N of M", which is why skipped entries still count here. */
 int DoneContents(const InstallTask &task);
 
 /* The next run of bytes the installer wants.  `max_size` caps one request (the design fixes it

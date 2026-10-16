@@ -6,9 +6,9 @@ QR code is a grid of black/white squares, so the build step recovers that grid a
 it with the rectangle filler it already has -- crisp at any size, and a 176-byte asset instead of
 a 90 KB JPEG.
 
-The source is the published code of the 《森友物码册》 WeChat mini-app
+The source is the published code image of the WeChat mini-app
 (`src/acnh-chat-code-miniapp/resources/小程序码.jpg`, a standard QR with the mini-app logo in the
-middle).  Recovery: find the dense black block (the code, not the "微信扫一扫" caption), read the
+middle).  Recovery: find the dense black block (the code, not the caption text around the logo), read the
 module pitch from the top-left finder pattern's first row (7 modules wide), sample each cell, and
 erase the cells the logo plate covers -- exactly the area the decoder cannot read in the original
 either, so the result scans like the original does.

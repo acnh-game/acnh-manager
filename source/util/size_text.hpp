@@ -3,7 +3,7 @@
 /* Byte counts as the one-line text the UI shows ("4.3 GB", "352 KB").
 
    The units are binary (1024-based) and named the way the rest of the app already names them
-   (the confirm screen's "大小" line, the storage bars): a package that is 4,650,239,771 bytes is
+   (the confirm screen's size line, the storage bars): a package that is 4,650,239,771 bytes is
    the "4.3 GB" the player sees elsewhere, so the file picker and the confirm screen cannot
    disagree about the same file.  Nothing here is localized: the digits and the unit symbols read
    the same in both languages the app ships. */

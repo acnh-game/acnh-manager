@@ -52,7 +52,9 @@ enum class ContentType {
     Unknown = 0xFF,
 };
 
-/* What the player sees on the confirm page: 本体 / 更新 / DLC. */
+/* A machine label for logs and for the confirm page's fallback: "base" / "update" / "dlc" /
+   "delta" / "dlc-update" / "system" / "unknown".  The three kinds the confirm page names itself go
+   through the translation table there; everything else reaches the screen as this label. */
 const char *MetaTypeLabel(MetaType type);
 
 /* True for the two kinds whose version is the one the agent's gate asks about: the game itself

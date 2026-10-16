@@ -57,7 +57,7 @@ inline int CyclePeerTab(int current, int direction) {
    opening Ⓛ go *before* their label; the ring's closing Ⓡ goes *after* the last page, so the two
    shoulder keys read as the brackets of the group they move through:
 
-       + 游戏安装/更新    Ⓛ 状态  详情  功能说明 Ⓡ
+       + Game Install / Update    Ⓛ Status  Details  Guide Ⓡ
 
    The middle of the ring carries none: no key goes straight to it, and a badge would promise one
    that does not exist. */

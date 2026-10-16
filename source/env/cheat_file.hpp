@@ -20,7 +20,8 @@
    versions.  What does not change is the pair of addresses the code reads -- `main + 0x05255A60`
    (the text-input object) together with `main + 0x5474040` (the first player chain).  That pair is
   specific: the miles entry in the same file reads the player chain on its own, and nothing else in
-   the pack reads the text-input object (docs/text_spawn_to_slot1_guide.md, 关键地址).
+   the pack reads the text-input object (see docs/text_spawn_to_slot1_guide.md, the key-addresses
+   section).
 
    The two addresses are per game version.  Regenerating the chat-code cheat -- a new game version,
    new offsets, a rebuilt pack -- moves them, and nothing here would notice: the check would simply

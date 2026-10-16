@@ -97,10 +97,10 @@ def app_page(path):
     """Which page of the app a capture shows, or the screen name when it is not the app.
 
     home / details / action / guide / unknown.  The decision comes from each page's own content
-    rather than from the header's tab underline: the entries can be reordered or renamed (the
-    header now reads 状态 / 详情 / 功能说明) and a check that keys off "the underline is at the
-    right margin" then quietly answers "home" for the details page -- which would let the cases
-    press Y on the wrong page, and Y toggles a setting there.
+    rather than from the header's tab underline: the entries can be reordered or renamed, and a
+    check that keys off "the underline is at the right margin" then quietly answers "home" for the
+    details page -- which would let the cases press Y on the wrong page, and Y toggles a setting
+    there.
 
     Deliberately conservative: "home" is only reported when the home page's two secondary
     buttons are visible, so a page the classifier does not recognise falls through to "details"
@@ -130,8 +130,9 @@ def app_page(path):
                     teal += 1
         return total and teal / total > 0.3
 
-    # Home: the two half-width buttons (检查更新 / 卸载 agent) sit side by side, each with its
-    # teal badge about 46 px in from the page margin and centred at y=515.
+    # Home: the two half-width secondary buttons (the update check and the agent uninstall) sit
+    # side by side, each with its teal badge about 46 px in from the page margin and centred at
+    # y=515.
     if teal_badge(86, 515) and teal_badge(698, 515):
         return "home"
 

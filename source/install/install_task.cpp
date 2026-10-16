@@ -234,12 +234,12 @@ bool ParseTask(std::string_view text, InstallTask *out, std::string *error) {
     json::Value root;
     std::string json_error;
     if (!json::Parse(text, &root, &json_error) || !root.IsObject()) {
-        *error = "install-task.json 解析失败: " + json_error;
+        *error = "install-task.json could not be parsed: " + json_error;
         return false;
     }
     const json::Value *schema = root.Find("schema");
     if (schema == nullptr || json::IntOr(*schema, 0) != 1) {
-        *error = "install-task.json 的 schema 不认识";
+        *error = "install-task.json has an unknown schema";
         return false;
     }
 
@@ -263,13 +263,13 @@ bool ParseTask(std::string_view text, InstallTask *out, std::string *error) {
 
     const json::Value *contents = root.Find("contents");
     if (contents == nullptr || !contents->IsArray()) {
-        *error = "install-task.json 里没有 contents";
+        *error = "install-task.json has no contents";
         return false;
     }
     for (std::size_t i = 0; i < contents->array.size(); ++i) {
         const json::Value &node = contents->array[i];
         if (!node.IsObject()) {
-            *error = "install-task.json 的 contents 条目不是对象";
+            *error = "install-task.json has a contents entry that is not an object";
             return false;
         }
         TaskContent content;
@@ -279,7 +279,7 @@ bool ParseTask(std::string_view text, InstallTask *out, std::string *error) {
         const json::Value *size = field("size");
         const json::Value *written = field("written");
         if (name == nullptr || offset == nullptr || size == nullptr || written == nullptr) {
-            *error = "install-task.json 的 contents 条目缺字段";
+            *error = "install-task.json has a contents entry missing a field";
             return false;
         }
         content.name = name->StringOr("");
@@ -289,7 +289,7 @@ bool ParseTask(std::string_view text, InstallTask *out, std::string *error) {
         if (content.written > content.size) {
             /* A hand-edited or half-written file must not make the installer ask for a range
                that cannot exist. */
-            *error = "install-task.json 里的进度超过了内容本身";
+            *error = "install-task.json has progress past the end of a content";
             return false;
         }
         const json::Value *id = field("contentId");
