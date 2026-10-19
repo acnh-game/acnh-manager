@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "log.hpp"
+#include "net/http_page.hpp"
 #include "net/socket_session.hpp"
 #include "third_party/picohttpparser/picohttpparser.h"
 
@@ -98,9 +99,15 @@ void HttpServer::Trace(const char *format, ...) {
     char line[256];
     va_list args;
     va_start(args, format);
-    std::vsnprintf(line, sizeof(line), format, args);
+    std::vsnprintf(line, sizeof(line) - 24, format, args);
     va_end(args);
-    m_log->Line("%s", line);
+    /* Every line carries the monotonic clock, so a log read after the fact still shows *when* a
+       connection arrived and when it was answered.  Without it, "the page seemed slow" cannot be
+       split into "the browser sent it late" and "the console answered it late" (2026-10-16). */
+    char stamped[sizeof(line) + 24];
+    std::snprintf(stamped, sizeof(stamped), "[t=%llums] %s",
+                  static_cast<unsigned long long>(NowMs()), line);
+    m_log->Line("%s", stamped);
 }
 
 bool HttpServer::Start(std::uint16_t preferred_port, std::uint16_t *out_port, std::string *error) {
@@ -189,6 +196,7 @@ void HttpServer::Stop() {
         connection.in.clear();
         connection.out.clear();
         connection.written = 0;
+        connection.drain = 0;
         connection.peer.clear();
     }
     if (m_listen_fd >= 0) {
@@ -210,7 +218,27 @@ void HttpServer::Close(Connection &connection) {
     connection.in.clear();
     connection.out.clear();
     connection.written = 0;
+    connection.drain = 0;
     connection.peer.clear();
+}
+
+void HttpServer::DrainBody(Connection &connection) {
+    char scratch[4096];
+    while (connection.drain > 0) {
+        const ssize_t got = recv(connection.fd, scratch, sizeof(scratch), 0);
+        if (got > 0) {
+            const std::size_t taken = static_cast<std::size_t>(got);
+            connection.drain -= taken > connection.drain ? connection.drain : taken;
+            continue;
+        }
+        if (got == 0) {
+            /* The browser gave up mid-body: nothing left to swallow, and the answer below will
+               fail on its own if the other end is gone. */
+            connection.drain = 0;
+            return;
+        }
+        return; /* EAGAIN: the rest arrives next frame */
+    }
 }
 
 void HttpServer::AcceptNew() {
@@ -243,6 +271,7 @@ void HttpServer::AcceptNew() {
         slot->in.clear();
         slot->out.clear();
         slot->written = 0;
+        slot->drain = 0;
         slot->deadline_ms = NowMs() + kRequestTimeoutMs;
         Trace("http: connection from %s", slot->peer.c_str());
     }
@@ -331,6 +360,10 @@ bool HttpServer::TryRequest(Connection &connection) {
             Trace("http: %s %s from %s (%zu-byte body) -> %d", request.method.c_str(),
                   request.path.c_str(), connection.peer.c_str(), body_length, response.status);
             if (!response.handoff) {
+                /* The answer is a refusal of a body that is still coming: swallow what is left of
+                   it before writing, or the close below becomes an RST and the browser never sees
+                   this answer (see DrainBytes). */
+                connection.drain = DrainBytes(body_start, connection.in.size(), body_length);
                 response.status = 413;
                 response.content_type = "text/plain; charset=utf-8";
                 response.body = "body too large\n";
@@ -356,6 +389,15 @@ bool HttpServer::TryRequest(Connection &connection) {
            already read (this must happen *before* the buffer is cleared for the reply, which is why
            it sits here and not down with the response framing).  The head is not sent -- the new
            owner writes its own answer once it has the bytes. */
+        if (m_handoff.fd >= 0) {
+            /* Two hand-offs before the first was taken: nobody owns the earlier connection any
+               more, and a connection nobody answers and nobody closes sits in the browser's pool
+               for ever -- six of those per host and nothing else can be sent (2026-10-16). */
+            Trace("http: a handed-over connection was never taken; closing it");
+            close(m_handoff.fd);
+            m_handoff.fd = -1;
+            m_handoff.prefix.clear();
+        }
         m_handoff.fd = connection.fd;
         m_handoff.offset = response.handoff_offset;
         m_handoff.length = response.handoff_length;
@@ -379,7 +421,9 @@ bool HttpServer::TryRequest(Connection &connection) {
     const int head_length = std::snprintf(
         head, sizeof(head),
         "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n"
-        "Cache-Control: no-store\r\n",
+        /* The same "do not keep any of this" the page's own head carries (see BuildResponseHead):
+           the page, the status and the cover all change under the client's feet. */
+        "Cache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n",
         response.status, StatusText(response.status), response.content_type.c_str(),
         response.body.size());
     connection.out.assign(head, static_cast<std::size_t>(head_length));
@@ -423,6 +467,22 @@ void HttpServer::Poll() {
     for (Connection &connection : m_connections) {
         if (connection.fd < 0) {
             continue;
+        }
+        if (connection.drain > 0) {
+            /* The answer is ready, but the request body is not: swallow the rest before writing it
+               (see DrainBytes).  Closing first would reset the connection and the browser would
+               report a network error instead of the 409 it is supposed to act on. */
+            DrainBody(connection);
+            if (connection.fd < 0) {
+                continue;
+            }
+            if (connection.drain > 0) {
+                if (now > connection.deadline_ms) {
+                    Trace("http: %s never finished sending its body, closing", connection.peer.c_str());
+                    Close(connection);
+                }
+                continue;
+            }
         }
         if (!connection.out.empty()) {
             Flush(connection);

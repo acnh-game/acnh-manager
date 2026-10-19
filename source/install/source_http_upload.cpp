@@ -25,7 +25,14 @@ namespace {
    The wait is also the moment the page gets served, so it cannot be one long block: the loop below
    wakes often, pumps, and checks the clock. */
 constexpr int kPollMs = 50;
-constexpr std::uint64_t kSilenceTimeoutMs = 30 * 1000;
+/* How long a range may go unanswered before the browser counts as gone.  The page itself gives one
+   part 45 seconds before aborting and retrying; the console waits a little longer (50 seconds) so
+   that an honest slow part is not killed a moment before the page's own retry can arrive.  Ninety
+   seconds made a closed tab feel like a hung console: the player had to sit on "receiving" before
+   the failure screen would let them re-open the page and pick the file again.  The pathological
+   stalls that first prompted the long wait were the page's keep-awake audio freezing the browser;
+   that is fixed at the source, so this number now only needs to cover a slow link. */
+constexpr std::uint64_t kSilenceTimeoutMs = 50 * 1000;
 
 std::uint64_t NowMs() {
     return armTicksToNs(armGetSystemTick()) / 1000000ull;
@@ -40,12 +47,17 @@ void HttpUploadSource::Trace(const char *format, ...) {
     char line[192];
     va_list args;
     va_start(args, format);
-    std::vsnprintf(line, sizeof(line), format, args);
+    std::vsnprintf(line, sizeof(line) - 24, format, args);
     va_end(args);
     /* `Block`, not `Line`: a package read runs inside the engine's log burst (see LogBurst), which
        buffers every line until it ends -- and the whole point of these lines is to be readable while
        the read is stuck waiting for the browser. */
-    std::string text = line;
+    /* The same monotonic stamp the server's lines carry: the two together say whether a part was
+       posted late or answered late (2026-10-16). */
+    char stamped[sizeof(line) + 24];
+    std::snprintf(stamped, sizeof(stamped), "[t=%llums] %s",
+                  static_cast<unsigned long long>(NowMs()), line);
+    std::string text = stamped;
     text += "\n";
     m_log->Block(text);
 }
@@ -68,6 +80,7 @@ bool HttpUploadSource::Begin(const std::string &name, std::uint64_t size,
     m_open = true;
     m_task_id = task_id;
     m_abort_reason.clear();
+    m_abort_code.clear();
     m_has_want = false;
     m_slot_offset = 0;
     m_slot.clear();
@@ -105,6 +118,22 @@ void HttpUploadSource::SetPump(std::function<void()> pump) {
     m_pump = std::move(pump);
 }
 
+void HttpUploadSource::SetRequestsProbe(std::function<int()> probe) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_requests_probe = std::move(probe);
+}
+
+void HttpUploadSource::Service() {
+    std::function<void()> pump;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        pump = m_pump;
+    }
+    if (pump) {
+        pump();
+    }
+}
+
 void HttpUploadSource::Abort(const std::string &reason) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -122,6 +151,11 @@ void HttpUploadSource::Abort(const std::string &reason) {
 std::string HttpUploadSource::AbortReason() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_abort_reason;
+}
+
+std::string HttpUploadSource::AbortCode() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_abort_code;
 }
 
 void HttpUploadSource::AttachPart(int fd, std::uint64_t offset, std::size_t length,
@@ -242,7 +276,31 @@ bool HttpUploadSource::Read(std::uint64_t offset, std::size_t size, std::uint8_t
         m_abort_reason = "the browser's file is shorter than the package needs";
         return false;
     }
+    /* Serve the page once per read, not only while this thread happens to be waiting.  Reading a
+       package is not one long wait: between two parts the engine parses and decompresses -- and
+       during that stretch nothing called the server at all, so a browser's status polls piled up
+       until its six connections per host were gone and the next part could not be sent (measured
+       2026-10-16: Chrome's network panel showed the parts stopping and every poll after it
+       pending, while the console sat waiting for a part the page could no longer post). */
+    {
+        const auto pump = m_pump;
+        lock.unlock();
+        if (pump) {
+            pump();
+        }
+        lock.lock();
+        if (!m_open || !m_abort_reason.empty()) {
+            return false;
+        }
+    }
     std::uint64_t silence_begin = NowMs();
+    std::uint64_t heartbeat = silence_begin;
+    int served_at_wait = m_requests_probe ? m_requests_probe() : -1;
+    /* The UI uses this to draw a countdown once the silence is long enough to be worth showing.
+       Normal parts arrive in well under a second, so the first two seconds stay quiet. */
+    m_page_waiting = true;
+    m_page_wait_started_ms = silence_begin;
+    m_page_wait_deadline_ms = silence_begin + kSilenceTimeoutMs;
     for (;;) {
         /* The part that arrived may cover this read (the transfer asks in 4 MiB ranges and so does
            the page, so in practice it covers it exactly). */
@@ -254,9 +312,11 @@ bool HttpUploadSource::Read(std::uint64_t offset, std::size_t size, std::uint8_t
                on the confirm screen, where the package has been read and the transfer has not
                started). */
             m_has_want = false;
+            m_page_waiting = false;
             return true;
         }
         if (!m_abort_reason.empty()) {
+            m_page_waiting = false;
             return false;
         }
         /* Ask for this range: `GET /upload/next` hands it to the page. */
@@ -280,12 +340,45 @@ bool HttpUploadSource::Read(std::uint64_t offset, std::size_t size, std::uint8_t
         }
         lock.lock();
         m_cv.wait_for(lock, std::chrono::milliseconds(kPollMs));
+        /* Every couple of seconds of silence, one live line: the range being waited for, and how many
+           page requests the console answered in the meantime.  That second number is what tells the
+           two possible stories apart -- "the browser stopped sending" and "the browser is asking and
+           getting nothing" -- and it has to be live (`Block`), because inside the engine's burst
+           every other line waits for the answer to this question. */
+        if (NowMs() - heartbeat > 2000) {
+            heartbeat = NowMs();
+            const int served = m_requests_probe ? m_requests_probe() - served_at_wait : -1;
+            Trace("upload: still waiting for %llu+%zu (%d page requests served meanwhile)",
+                  static_cast<unsigned long long>(m_want_offset), m_want_size, served);
+        }
         if (NowMs() - silence_begin > kSilenceTimeoutMs) {
             m_abort_reason = "the browser stopped sending (" + util::FormatSize(offset) + " in)";
+            m_abort_code = kErrorUploadStopped;
+            m_page_waiting = false;
             Trace("upload: %s", m_abort_reason.c_str());
             return false;
         }
     }
+}
+
+bool HttpUploadSource::PageWaitSeconds(int *seconds_left) const {
+    if (seconds_left == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_page_waiting || !m_has_want) {
+        return false;
+    }
+    const std::uint64_t now = NowMs();
+    if (now < m_page_wait_started_ms + 2000) {
+        return false; /* normal traffic: do not flash a countdown between parts */
+    }
+    if (now >= m_page_wait_deadline_ms) {
+        *seconds_left = 0;
+        return true;
+    }
+    *seconds_left = static_cast<int>((m_page_wait_deadline_ms - now + 999) / 1000);
+    return true;
 }
 
 }  // namespace acnh_manager::install

@@ -58,6 +58,16 @@ class ContainerReader {
 public:
     virtual ~ContainerReader() = default;
     virtual bool Read(std::uint64_t offset, std::size_t size, std::uint8_t *out) = 0;
+    /* Called by the engine between the steps of a long operation (one content prepared, one block
+       decompressed, one piece of a transfer read): whatever else has to keep running -- for the
+       upload source, the browser page that feeds it -- gets its turn.  Default: nothing to do.
+
+       This is not decoration.  The console's HTTP server is serviced from this thread, and the read
+       loop is the only place that used to do it: while the engine parsed a package, the server was
+       deaf, so the page's requests sat in the kernel's accept queue -- `/upload/next` came back 5.4 s
+       late and a 512-byte part was accepted 18.9 s late, after which the browser's own 8 s deadlines
+       fired and the console declared the browser gone (measured on hardware, 2026-10-17). */
+    virtual void Service() {}
 };
 
 /* Which file names the SD browser offers and the container layer accepts. */

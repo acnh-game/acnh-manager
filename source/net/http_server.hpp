@@ -121,12 +121,18 @@ private:
         std::string in;      /* bytes read so far */
         std::string out;     /* bytes waiting to go out */
         std::size_t written{0};
+        /* Body bytes still to be swallowed before the ready answer may go out, when a route refused
+           a request without reading its body (see DrainBytes in net/http_page.hpp).  Zero for every
+           connection whose answer does not have to wait. */
+        std::size_t drain{0};
         std::uint64_t deadline_ms{0};
         std::string peer;
     };
 
     void AcceptNew();
     void ReadFrom(Connection &connection);
+    /* Swallows up to `connection.drain` bytes from the socket without keeping them. */
+    void DrainBody(Connection &connection);
     /* Parses `connection.in`; when a whole request is there, answers it and marks the connection
        for closing.  False means "not yet" (or "drop it"). */
     bool TryRequest(Connection &connection);

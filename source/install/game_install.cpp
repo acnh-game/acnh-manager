@@ -1091,6 +1091,10 @@ bool GameInstall::WriteRange(const RangeRequest &range, std::uint64_t content_of
    this thread never touches them -- it keeps its own cursors in `m_fetch`. */
 void GameInstall::ReadLoop() {
     for (std::size_t index = 0; index < m_task.contents.size(); ++index) {
+        /* Before each content: the stretch between two contents is ncm's own work (placeholders,
+           registration), during which nothing reads -- and the page this reader is fed by would go
+           unserved (see ContainerReader::Service). */
+        m_reader.Service();
         const TaskContent &content = m_task.contents[index];
         /* Nothing to fetch when this run already has the content: the meta and the control NCA are
            read out of the package *before* the transfer (Prepare marks them complete by setting
@@ -1139,6 +1143,9 @@ void GameInstall::ReadLoop() {
             stream_size = known->second.payload_size;
         }
         while (m_fetch[index].stream_read < stream_size) {
+            /* Per piece of the transfer: the writer and ncm keep this thread busy between reads, and
+               the page that feeds it has to be served in between (ContainerReader::Service). */
+            m_reader.Service();
             const std::uint64_t missing = stream_size - m_fetch[index].stream_read;
             const std::size_t piece =
                 static_cast<std::size_t>(missing < kBlockSize ? missing : kBlockSize);

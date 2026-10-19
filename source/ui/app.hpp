@@ -29,6 +29,7 @@
 #include "ui/list_view.hpp"
 #include "ui/settings.hpp"
 #include "ui/storage_bars.hpp"
+#include "util/qr_code.hpp"
 #include <memory>
 
 #include "install/game_install.hpp"
@@ -182,6 +183,15 @@ private:
        the player leaves it -- "the server is only alive when it is needed" (design section 3). */
     void StartInstallerServer();
     void StopInstallerServer();
+    /* Whether the page's server has anything to do right now: the two source screens print the
+       address and its code, and a run those screens started keeps the page watching it through
+       `/status.json`.  A file picked from the card needs no page at all. */
+    bool InstallerServerNeeded() const;
+    /* Brings the server in line with `InstallerServerNeeded()`: started when the player walks onto
+       a source screen (or a run from one is still in hand), stopped when they walk off it.  Called
+       once per frame after the input, so a screen that only just appeared is already served when it
+       is drawn -- otherwise its first frame would say "the page service did not start". */
+    void SyncInstallerServer();
     /* One non-blocking pass of the server, called from the UI loop and from the transfer loop
        between steps (so a browser sees progress and can cancel *while* bytes move). */
     void PollInstallerServer();
@@ -194,6 +204,11 @@ private:
     /* What `/status.json` answers: the console's own view of the install, so a browser (or a second
        tab, or another device) can show the same thing without the page keeping any state. */
     std::string InstallerStatusJson() const;
+    /* The one line the result card puts under the title -- "written to microSD · 3 contents · 4.3
+       GB", "this version is already installed", "a newer version (3.0.3) is installed", or the
+       failure's reason.  Shared with the browser page's status payload, because two screens that
+       describe the same run must not word it two ways. */
+    std::string InstallOutcomeLine() const;
     /* "http://<ip>:<port>", the address the screens show and the QR code carries; empty when there
        is no network. */
     std::string InstallerAddressText() const;
@@ -280,12 +295,17 @@ private:
     Page m_game_install_return{Page::Home};
     /* The installer has its own little screens: today "pick a source" and "pick a file"; the
        confirm / progress / result screens join them next. */
-    enum class InstallScreen { Choose, Files, Url, Confirm, Progress, Result, Pending };
+    enum class InstallScreen { Choose, Files, Url, Upload, Confirm, Progress, Result, Pending };
     InstallScreen m_install_screen{InstallScreen::Choose};
     /* The address screen offers two ways in (the system keyboard now, the browser page that can
        submit an address once the server exists).  Neither works without a network, so the screen
        asks first and says so instead of letting a download fail a minute later. */
     bool m_install_no_network{false};
+    /* Whether the page is the one driving the run in hand (it offered the file, or submitted the
+       address).  A page left open from an earlier attempt can do that while the console is on any
+       screen at all -- and then the run has to keep its server, or the page that started it loses
+       the very status it is watching (2026-10-16). */
+    bool m_install_page_drives{false};
     ui::ListView m_file_list;
     std::string m_file_dir{"/"};
     /* Reads the current directory into the list: directories first, then the files this app can
@@ -295,10 +315,25 @@ private:
     /* The download source's own screen: the address to type, and the reason it was refused when
        the address or the network did not hold up. */
     void RenderInstallUrl(Surface surface);
+    /* The upload source's own screen: the same "open this address" block, with nothing above it
+       (the page is the only way in, so the address and its code get the whole screen). */
+    void RenderInstallUpload(Surface surface);
+    /* The block the two source screens share: the caption, the address out of the running server,
+       the line that says what the page is for, the waiting state, and the code.  Returns the y
+       just past it.  `for_upload` selects that one line, which is the only thing that differs. */
+    int RenderInstallerAddressBlock(Surface surface, int y, bool for_upload);
+    /* The address the screens print, encoded once per address (the code is a pure function of it,
+       and this runs every frame while the screen is up).  Empty when there is no address to print. */
+    const util::QrCode &InstallerQrCode();
     /* Enters that screen: clears the last reason and asks the network question. */
     void EnterInstallUrl();
+    /* Same question for the upload source, which reaches the network through the same server. */
+    void EnterInstallUpload();
     /* Re-asks it (the screen's A while the "connect first" card is up, and the retry path). */
     void RefreshNetworkState();
+    /* Lets go of the browser's source when a run is over (skipped, failed, installed): the page's
+       next pick has to be accepted as a new run, not refused as a second one. */
+    void ReleaseUploadSource(const char *why);
     /* The small print under the addresses: the rule an address has to satisfy, and what this app
        installs.  `with_range` is false in the failure state, where the strip above already says it. */
     void DrawInstallUrlNotes(Surface surface, int y, bool with_range);
@@ -330,6 +365,7 @@ private:
        re-open after the target storage changed).  False leaves the address screen showing why. */
     bool OpenDownloadPackage(const std::string &address);
     void RunGameInstall();
+    void DisableAutoSleep();
     /* The agent's own install, on this thread: the payload that matches the manifest's origin,
        the engine, and the per-file progress.  It owns no screen and decides no result -- the home
        screen's button and the step that follows a game install call it and report their own way. */
@@ -390,9 +426,34 @@ private:
        or a kernel-assigned one when that is taken) -- the address on screen is built from it. */
     net::HttpServer m_http_server;
     std::uint16_t m_http_port{0};
+    /* The address the source screens are printing, encoded: `m_address_qr_text` is what the cache
+       was built from, so a port that changed (or a server that stopped) re-encodes exactly once. */
+    util::QrCode m_address_qr;
+    std::string m_address_qr_text;
     /* An address the *browser* handed over (`POST /url`): the UI loop picks it up on the next frame
        and opens it exactly as if the player had typed it, because that is what it is. */
     std::string m_http_pending_url;
+    /* The run in hand as a number the page can quote.  It changes every time a package is opened --
+       including the re-open that a storage switch does -- so a page that is out of date cannot start
+       or retarget a run it was never told about (server-side gate; the page's own peer check is only
+       a courtesy). */
+    int m_run_id{0};
+    /* Two requests from the page that change what the console is doing.  Both are taken by the UI
+       loop rather than by the socket pass, because both touch ncm/engine state. */
+    bool m_http_pending_start{false};
+    bool m_http_pending_back{false};
+    bool m_http_pending_target{false};
+    install::TargetStorage m_http_target{install::TargetStorage::SdCard};
+    /* The two storage blocks as the status payload reports them: refreshed once a second, not on
+       every request (the numbers come from ncm, and the page only needs them to look current). */
+    std::string m_status_storage_text[2];
+    bool m_status_storage_ok[2]{false, false};
+    double m_status_storage_used[2]{0.0, 0.0};
+    std::uint64_t m_status_storage_ms{0};
+    void RefreshStatusStorage();
+    /* The one line under the confirm card's rows: the agent can follow this package, cannot, or this
+       package is none of its business.  Shared with the page, so both devices say the same sentence. */
+    std::string PackageAgentNote(bool *warn) const;
     /* This frame's storage row (see RefreshStorageRow).  `m_storage_row_ready` is cleared at the
        end of every frame so nothing can be drawn from a stale read. */
     bool m_storage_row_ready{false};

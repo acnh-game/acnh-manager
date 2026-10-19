@@ -155,11 +155,16 @@ constexpr Entry kStrings[] = {
     {"支持 nsp / nsz / xci / xcz", "nsp / nsz / xci / xcz"},  /* InstallFormats */
     {"正在等待连接……", "Waiting for a connection..."},  /* InstallWaiting */
     {"用手机或电脑的浏览器打开下面的地址", "Open this address in a phone or computer browser"},  /* InstallOpenAddress */
-    {"在网页里粘贴下载网址,或直接选一个安装包文件", "Paste a download address there, or pick a package file"},  /* InstallAddressHint */
+    {"在网页里粘贴下载网址 —— 不用一个字一个字地敲", "Paste the download address there - no need to type it out"},  /* InstallPagePasteHint */
+    {"在网页里选择要安装的文件", "Pick the file to install there"},  /* InstallPagePickHint */
+    {"上次没传完:再选一次同一个文件就能接着传", "The last upload stopped early - pick the same file again to carry on"},  /* InstallPageResumeHint */
+    {"扫码打开", "Scan to open"},  /* InstallScanQr */
+    {"网页服务没能启动,请改用「下载安装」或「本机文件」", "The page service did not start - use the download or SD-card entry"},  /* InstallNoPage */
     {"输入网址", "Enter address"},  /* InstallTypeUrl */
     {"连不上这个地址,检查地址与端口是否正确", "Cannot connect to this address; check the address and port"},  /* InstallNoNetwork */
     {"这个地址不完整或格式不对,请填写完整网址", "This address is incomplete or malformed; enter a full URL"},  /* InstallBadUrl */
     {"请先完全退出游戏(主页上把游戏关掉)再试一次", "Close the game completely first (HOME screen, then X), then try again"},  /* InstallGameRunning */
+    {"浏览器停止发送了:重新打开页面,再选一次这个文件即可继续", "The browser stopped sending - re-open the page and pick this file again"},  /* InstallUploadStopped */
     {"这个地址不支持断点续传,请换一个地址或用手机上传", "This address cannot be resumed; use another address or upload the file"},  /* InstallRangeUnsupported */
     {"地址打不开(HTTP %s),检查一下地址是否写对", "The address answered HTTP %s; check that it is correct"},  /* InstallHttpStatus */
     {"用系统软键盘输入下载网址", "Type the download address on the system keyboard"},  /* InstallUrlHint */
@@ -180,15 +185,12 @@ constexpr Entry kStrings[] = {
     {"正在接收", "Receiving"},  /* ProgressReceive */
     {"正在写入", "Writing"},  /* ProgressWrite */
     {"正在收尾", "Finishing up"},  /* ProgressFinalize */
+    {"等待手机继续传输… %d 秒", "Waiting for the phone… %d s"},  /* ProgressWaitPhone */
     {"第 %d / %d 个内容", "Content %d of %d"},  /* ProgressContents */
     {"安装完成", "Installed"},  /* ResultInstalled */
     {"已安装,跳过", "Already installed - skipped"},  /* ResultSkippedInstalled */
     {"已有更高版本,已跳过", "A newer version is installed - skipped"},  /* ResultSkippedNewer */
     {"安装失败", "Install failed"},  /* ResultFailed */
-    {"这是什么", "What this was"},  /* ResultWhat */
-    {"已写入", "Written"},  /* ResultWritten */
-    {"结果", "Result"},  /* ResultWhy */
-    {"现在", "Now"},  /* ResultNow */
     {"可以安装 agent 了(首页按 A)", "The agent can be installed now (press A on the home screen)"},  /* ResultAgentReady */
     {"--.--", "--.--"},  /* StorageUnavailable */
     {"microSD", "microSD"},  /* StorageSdCard */
@@ -238,6 +240,7 @@ constexpr Entry kStrings[] = {
     {"放弃并清理", "Give up and clean up"},  /* PendingAbandon */
     {"选择新的安装内容", "Pick something else"},  /* PendingPickNew */
     {"这条任务不能继续(来源是浏览器上传),可以放弃并清理", "This one cannot be continued here (it came from a browser upload) - give up and clean up instead"},  /* PendingUnresumable */
+    {"继续:在浏览器页面里再选一次这个文件", "Continue: pick this file again in the browser page"},  /* PendingUploadResume */
     {"占位已被系统清理(重启会清空占位):继续会从头开始", "The placeholders are gone (a reboot clears them): continuing starts over"},  /* PendingGone */
     {"已接收 %s / %s", "%s of %s received"},  /* PendingProgress */
     {"占位 %s", "%s reserved"},  /* PendingReserved */
@@ -250,20 +253,41 @@ constexpr Entry kStrings[] = {
     {"选择文件", "Choose a file"},  /* PageChooseFile */
     {"或把文件拖到这里", "or drop it here"},  /* PageDropHint */
     {"传输时请让本页留在前台;锁屏或切后台会中断,重新打开本页可从断点继续。", "Keep this page in the foreground while it transfers; locking the screen or switching away interrupts it, and re-opening this page continues from where it stopped."},  /* PageKeepAwake */
-    {"或者 · 粘贴下载网址(主机自己去下)", "or - paste a download address (the console fetches it)"},  /* PageUrlTitle */
+    {"或者 · 粘贴下载网址(由 Switch 主机下载)", "or - paste a download address (the console downloads it)"},  /* PageUrlTitle */
+    {"https://example.com/xxx.nsp", "https://example.com/xxx.nsp"},  /* PageUrlPlaceholder */
     {"下载并安装", "Download and install"},  /* PageUrlButton */
-    {"已交给主机,请看主机屏幕", "The console has it - watch its screen"},  /* PageUrlSent */
-    {"主机没有接受这个地址", "The console did not accept that address"},  /* PageUrlFailed */
+    {"已交给 Switch 主机,请看它的屏幕", "The console has it - watch its screen"},  /* PageUrlSent */
+    {"Switch 主机没有接受这个地址", "The console did not accept that address"},  /* PageUrlFailed */
     {"正在上传", "Uploading"},  /* PageStageUpload */
-    {"取消本次安装", "Cancel this install"},  /* PageCancel */
-    {"取消会丢弃已接收的进度,需要重头再来。", "Cancelling throws away what has been received."},  /* PageCancelNote */
-    {"再次点击以确认。", "Press again to confirm."},  /* PageCancelConfirm */
-    {"已请求取消。", "Cancellation requested."},  /* PageCancelSent */
-    {"主机没有接受取消请求。", "The console did not accept the cancellation."},  /* PageCancelFailed */
-    {"主机已离线(可能已经离开安装页)", "The console is offline (it may have left the install page)"},  /* PageOffline */
-    {"浏览器上传还没有接上主机(下一步就做);现在可以先用上面粘贴网址那条路。", "Uploading from the browser is not wired to the console yet (that is the next step); for now use the address box above."},  /* PageUploadNotReady */
-    {"本页由主机直接提供,全程不需要互联网。", "The console serves this page itself; no internet connection is involved."},  /* PageNoteNoInternet */
-    {"主机屏幕上会同步显示同一份进度。", "The same progress is shown on the console's own screen."},  /* PageNoteHostScreen */
+    {"Switch 主机已离线(可能已经离开安装界面)", "The console is offline (it may have left the install screen)"},  /* PageOffline */
+    {"本页由 Switch 主机直接提供,「上传安装」全程不需要互联网。", "The console serves this page itself; uploading needs no internet connection."},  /* PageNoteNoInternet */
+    {"Switch 主机屏幕上会同步显示同一份进度。", "The same progress is shown on the console's own screen."},  /* PageNoteHostScreen */
+    {"回到 Switch 主机即可安装 agent", "Back on the console, the agent can be installed"},  /* PageAgentReady */
+    {"%d 个内容 · %s → %s", "%d contents · %s → %s"},  /* PageWrittenLine */
+    /* The browser's own upload loop (the page's JavaScript). */
+    {"正在把文件交给 Switch 主机……", "Handing the file to the console…"},  /* PageUploadStarting */
+    {"Switch 主机正在处理,请不要关闭本页……", "The console is working - keep this page open…"},  /* PageUploadWaiting */
+    {"已发送 %d%%", "%d%% sent"},  /* PageUploadProgress */
+    {"Switch 主机上已经有别的安装在进行了", "The console is already installing something else"},  /* PageUploadBusy */
+    {"本页被切到后台了:浏览器会暂停这个页面,回到本页后重新选一次这个文件就能接着传", "This page went to the background: the browser pauses it - come back to this page and pick the file again to carry on"},  /* PageHidden */
+    {"复制日志", "Copy log"},  /* PageCopyLog */
+    {"清空日志", "Clear log"},  /* PageClearLog */
+    {"已复制", "Copied"},  /* PageCopied */
+    {"复制失败,请手动选中", "Copy failed - select it by hand"},  /* PageCopyFailed */
+    {"已有另一个页面在给 Switch 主机供文件:请关掉那个标签页,再在这里选择文件", "Another page is already feeding the console - close that tab, then pick the file here"},  /* PagePeerActive */
+    {"切换存储会重新读取安装包…", "Switching storage re-reads the package…"},  /* PageRereadOnSwitch */
+    {"不可用", "unavailable"},  /* PageStorageUnavailable */
+    {"等待选择安装文件", "Waiting for a file"},  /* PageWaitingPick */
+    {"已就绪", "Ready"},  /* PageWaitingStart */
+    {"已交给 Switch 主机,请稍候…", "The console has it - one moment…"},  /* PageStarting */
+    {"Switch 主机现在不能切换存储(可能已经在安装)", "The console cannot change storage right now (an install may be running)"},  /* PageTargetRefused */
+    {"Switch 主机没有接受这次开始,刷新页面再试", "The console did not accept this start - reload the page and try again"},  /* PageStartRefused */
+    {"本次安装非当前页面发起,请点「返回」重新选择", "This install was started from another page - press Back and pick again"},  /* PageReselectToStart */
+    {"切换存储会重新开始这次上传", "Switching storage restarts this upload"},  /* PageRestartUpload */
+    {"请重新选择文件", "Pick the file again"},  /* PageUploadDropped */
+    {"Switch 主机没有接受这次返回,刷新页面再试", "The console did not accept this back step - reload the page and try again"},  /* PageBackRefused */
+    {"正在读取安装包信息…", "Reading the package information…"},  /* PageUploadInfo */
+    {"传输中断了", "The transfer was interrupted"},  /* PageUploadFailed */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

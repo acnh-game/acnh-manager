@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <string>
+#include <unistd.h> /* close(): a handed-over connection nobody will read */
 
 #include "manifest/manifest.hpp"
 #include "install/content_install.hpp"
@@ -45,9 +46,15 @@ void App::Trace(const char *fmt, ...) {
     char buf[192];
     va_list ap;
     va_start(ap, fmt);
-    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    std::vsnprintf(buf, sizeof(buf) - 24, fmt, ap);
     va_end(ap);
-    m_log->Line("%s", buf);
+    /* Stamped like the server's and the upload source's lines: one clock across all three is what
+       lets a log read afterwards say where a slow step really was (2026-10-16). */
+    char stamped[sizeof(buf) + 24];
+    std::snprintf(stamped, sizeof(stamped), "[t=%llums] %s",
+                  static_cast<unsigned long long>(
+                      armTicksToNs(armGetSystemTick()) / 1000000ull), buf);
+    m_log->Line("%s", stamped);
     m_log->Sync();
 }
 
@@ -205,17 +212,9 @@ inline Color dot_face() { return kHeader; }
 /* Sizes for a human: the file list is the one place we show them, and "73986 B" is noise.
    Two significant digits are plenty when the exact value lives in state.json. */
 std::string FormatSize(u64 bytes) {
-    char buffer[32];
-    if (bytes >= 1024 * 1024) {
-        std::snprintf(buffer, sizeof(buffer), "%.1f MB",
-                      static_cast<double>(bytes) / (1024.0 * 1024.0));
-    } else if (bytes >= 1024) {
-        std::snprintf(buffer, sizeof(buffer), "%.1f KB", static_cast<double>(bytes) / 1024.0);
-    } else {
-        std::snprintf(buffer, sizeof(buffer), "%llu B",
-                      static_cast<unsigned long long>(bytes));
-    }
-    return buffer;
+    /* One formatter for every screen: a 19.6 MB update must read "19.6 MB" on the confirm card,
+       the progress line and the result, not "0.0 GB" (2026-10-19). */
+    return util::FormatSize(bytes);
 }
 
 
@@ -1288,6 +1287,15 @@ void App::HandleKeys(u32 down) {
                 }
                 break;
             }
+            if (m_install_screen == InstallScreen::Upload) {
+                /* The upload screen has no key of its own: everything happens in the browser.  A
+                   is only the "is there a network now" question, which is the one thing the
+                   console can still answer while the page is unreachable. */
+                if ((down & HidNpadButton_A) != 0 && m_install_no_network) {
+                    RefreshNetworkState();
+                }
+                break;
+            }
             if (m_install_screen == InstallScreen::Files) {
                 if ((down & HidNpadButton_Y) != 0) {
                     LeaveDirectory();
@@ -1461,7 +1469,7 @@ void App::ActivateAction(int id) {
             break;
         case kActionInstallUrl: StartDownload(); break;
         case kActionInstallRecheck: RefreshNetworkState(); break;
-        case kActionInstallUpload: Trace("install: source = upload"); break;
+        case kActionInstallUpload: EnterInstallUpload(); break;
         case kActionUninstall:
             if (m_page == Page::Home && m_have_state) {
                 m_page = Page::Uninstall;
@@ -1527,9 +1535,13 @@ void App::Run() {
            console draws is a page that times out every second. */
         PollInstallerServer();
         padUpdate(&pad);
-        HandleKeys(padGetButtonsDown(&pad));
+        const u32 buttons_down = padGetButtonsDown(&pad);
+        HandleKeys(buttons_down);
         HandleStick(pad);
         HandleTouch();
+        /* After the input, before the draw: a key or a tap is what changes the screen, and the
+           screen that just appeared has to be served before its own first frame is drawn. */
+        SyncInstallerServer();
         Render();
         /* The environment block of log.txt goes out after the second frame, not before the first:
            writing it costs about 2.2 s (one open/write/flush/close per line, two sinks), so doing
@@ -1848,13 +1860,25 @@ void App::RenderFooter(Surface surface) {
     /* Two screens of the install flow say something extra here, because the player has to know it
        before pressing anything:
          * the transfer runs on this thread and takes no keys at all, so promising a "back" would
-           be a lie -- the footer asks to stay instead (`Y`/`B` cancel on a worker thread, which is
-           a later piece of work; see the design doc);
+           be a lie -- the footer asks to stay instead, and the page offers no cancel either;
          * the confirm screen can be started with `Ⓐ`, and that hint belongs next to "leave". */
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Progress) {
-        const char *hint = Tr(i18n::StringId::ProgressDoNotInterrupt);
-        const int hint_width = m_font.Measure(hint, kFontSmall);
-        m_font.Draw(surface, (surface.width - hint_width) / 2, y + 12, kFontSmall, kWarn, hint);
+        int wait_seconds = 0;
+        const bool waiting = m_upload_source != nullptr &&
+                             m_upload_source->PageWaitSeconds(&wait_seconds);
+        if (waiting) {
+            /* The browser has gone quiet: say how long the console will wait before the run is
+               declared failed, so the player is not staring at a frozen screen (2026-10-19). */
+            char text[96];
+            std::snprintf(text, sizeof(text), Tr(i18n::StringId::ProgressWaitPhone),
+                          wait_seconds);
+            const int width = m_font.Measure(text, kFontSmall);
+            m_font.Draw(surface, (surface.width - width) / 2, y + 12, kFontSmall, kWarn, text);
+        } else {
+            const char *hint = Tr(i18n::StringId::ProgressDoNotInterrupt);
+            const int hint_width = m_font.Measure(hint, kFontSmall);
+            m_font.Draw(surface, (surface.width - hint_width) / 2, y + 12, kFontSmall, kWarn, hint);
+        }
         return;
     }
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Confirm) {
@@ -1869,17 +1893,20 @@ void App::RenderFooter(Surface surface) {
                     kBuildStamp);
         return;
     }
-    if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Url) {
-        /* The address screen: one control, next to "leave".  Which control depends on whether
-           there is a network -- with none, typing an address cannot lead anywhere, so A asks
-           again instead. */
+    if (m_page == Page::GameInstall &&
+        (m_install_screen == InstallScreen::Url ||
+         (m_install_screen == InstallScreen::Upload && m_install_no_network))) {
+        /* The two source screens, while there is a console-side control to offer.  With no network
+           neither screen has a working one, so its A is the "connect first" retry; the address
+           screen otherwise offers the keyboard.  The upload screen with a network has nothing to
+           offer (the browser is the only way in, design section 8) and falls through to the plain
+           Ⓑ footer below, which is where every other install screen gets its "leave" hint. */
         const int hints_end =
-            m_install_no_network
-                ? DrawFooterHintPair(surface, y, i18n::StringId::InstallRecheck,
-                                     kActionInstallRecheck, i18n::StringId::LabelBack,
-                                     kActionInstallBack)
-                : DrawFooterHintPair(surface, y, i18n::StringId::InstallTypeUrl, kActionInstallUrl,
-                                     i18n::StringId::LabelBack, kActionInstallBack);
+            DrawFooterHintPair(surface, y,
+                               m_install_no_network ? i18n::StringId::InstallRecheck
+                                                    : i18n::StringId::InstallTypeUrl,
+                               m_install_no_network ? kActionInstallRecheck : kActionInstallUrl,
+                               i18n::StringId::LabelBack, kActionInstallBack);
         DrawInstallTargetHint(surface, y + 12, hints_end + 30);
         const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
@@ -2795,8 +2822,12 @@ void App::UpdateProgress(const install::Progress &progress) {
 }
 
 /* Paints the recovered code as squares: one filled rect per black module, on a white plate.
-   `module` is the on-screen size of one module, so the caller picks how large it lands. */
-void DrawQrCode(Surface surface, const ui::QrMatrix &qr, int x, int y, int module) {
+   `module` is the on-screen size of one module, so the caller picks how large it lands.  The
+   matrix comes from either of the two sources in this build -- the mini-app's code recovered from
+   its image (`ui::QrMatrix`) and the installer's address encoded at runtime (`util::QrCode`) --
+   which is why this is a template over the two `Size()` / `At(row, column)` readers. */
+template <typename Matrix>
+void DrawQrCode(Surface surface, const Matrix &qr, int x, int y, int module) {
     const int side = qr.Size() * module;
     FillRect(surface, x, y, side + module * 2, side + module * 2, Color{0xFF, 0xFF, 0xFF, 0xFF});
     for (int row = 0; row < qr.Size(); ++row) {
@@ -2992,9 +3023,11 @@ void App::OpenGameInstall() {
     }
     m_game_install_return = m_page;
     m_page = Page::GameInstall;
-    /* The browser page comes up with the install page and goes away with it: the address and the
-       QR code the screens show are only true while this server is listening. */
-    StartInstallerServer();
+    /* The installer is a modal, long-lived page (file browsing, address typing, waiting for a
+       phone); keep the screen awake from the moment it opens, not only once a transfer starts. */
+    DisableAutoSleep();
+    /* The page's server does *not* come up here: picking a file from the card never needs it, and
+       the address and code are only printed on the two source screens (see SyncInstallerServer). */
     /* An interrupted install comes first: it holds space on one of the storages, and the only two
        ways to get that space back (or to finish what was started) are on that screen. */
     RefreshPendingTask();
@@ -3238,6 +3271,9 @@ void App::PickFocusedFile() {
     }
     m_picked_file = m_file_dir + name;
     Trace("install: picked %s", m_picked_file.c_str());
+    /* A run from the card is the console's, not the page's: nothing here needs a browser, and the
+       server (if a source screen had it up) follows this run's own screens instead. */
+    m_install_page_drives = false;
     OpenPickedPackage();
 }
 
@@ -3274,6 +3310,9 @@ void App::OpenPickedPackage() {
 
 void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
                       std::uint64_t size, install::TaskSource source, const std::string &url) {
+    /* A new run, and a new number for it: the page quotes this when it asks the console to start or
+       to change the target, so "start the run I am looking at" cannot hit an older one. */
+    ++m_run_id;
     m_install_status = install::InstallStatus{};
     m_install_error.clear();
     m_game_install.reset();
@@ -3293,6 +3332,11 @@ void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
     std::string error;
     if (!m_game_install->Prepare(&error)) {
         m_install_error = error;
+        /* Asked before the source is dropped: whether the browser went quiet is the difference
+           between "a phone that stopped sending" and "a file that cannot be read", and only the
+           source knows. */
+        const std::string upload_code =
+            m_upload_source != nullptr ? m_upload_source->AbortCode() : std::string();
         std::string cleanup_error;
         m_game_install->CleanupAfterFailure(&cleanup_error);
         m_game_install.reset();
@@ -3310,6 +3354,15 @@ void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
         Trace("install: %s is not installable: %s", name.c_str(), error.c_str());
         if (error == install::kErrorGameRunning) {
             m_install_screen = m_install_origin;
+            return;
+        }
+        /* A read that failed because the browser went quiet is not a broken file, and saying so
+           would send the player to look at a package that is fine (measured 2026-10-16: a phone
+           that stops sending during the header read ends up here with whatever the parse made of
+           the half-read bytes). */
+        if (upload_code == install::kErrorUploadStopped) {
+            m_install_error = install::kErrorUploadStopped;
+            m_install_screen = InstallScreen::Result;
             return;
         }
         m_install_error = error.find("no installable content") != std::string::npos
@@ -3356,6 +3409,11 @@ void App::OpenPackage(install::ContainerReader &reader, const std::string &name,
     /* A package the console already has writes nothing -- but what it leaves behind is still a
        version the agent may need, so the same follow-up runs here as after a real install. */
     RunAgentFollowUp();
+    if (m_install_status.stage == install::InstallStage::Skipped) {
+        /* The run is over before it started: the browser's part in it is over too, so the page can
+           pick the next file instead of being told the console is busy (see ReleaseUploadSource). */
+        ReleaseUploadSource("the package was already installed");
+    }
     m_install_screen = m_install_status.stage == install::InstallStage::Skipped
                            ? InstallScreen::Result
                            : InstallScreen::Confirm;
@@ -3378,6 +3436,7 @@ void App::StartDownload() {
         Trace("install: no address was entered (%s)", error.c_str());
         return;
     }
+    m_install_page_drives = false; /* typed on the console: not the page's run */
     OpenDownloadPackage(address);
 }
 
@@ -3407,6 +3466,28 @@ bool App::OpenDownloadPackage(const std::string &address) {
     return true;
 }
 
+/* Keep the screen awake from entering the installer page until the applet exits.  Restoring the flag
+   inside the applet did not resume the system's countdown (it either stayed awake or blacked out
+   with the stale idle clock), so the deliberate choice is: disable auto-sleep once, never restore
+   it here.  The setting is applet-scoped and comes back when ACNH-Manager exits. */
+void App::DisableAutoSleep() {
+    bool already_disabled = false;
+    const Result query = appletIsAutoSleepDisabled(&already_disabled);
+    if (R_SUCCEEDED(query) && already_disabled) {
+        Trace("install: auto-sleep already disabled");
+        return;
+    }
+    const Result set = appletSetAutoSleepDisabled(true);
+    const int was = R_SUCCEEDED(query) ? (already_disabled ? 1 : 0) : -1;
+    if (R_FAILED(set)) {
+        Trace("install: auto-sleep disable failed (query=0x%x was=%d set=0x%x)",
+              static_cast<unsigned>(query), was, static_cast<unsigned>(set));
+    } else {
+        Trace("install: auto-sleep disabled until app exit (query=0x%x was=%d)",
+              static_cast<unsigned>(query), was);
+    }
+}
+
 /* Runs the whole transfer on this thread.  The engine's steps are bounded (4 MB each), so the
    screen can be redrawn while it works; redrawing every step would spend more time in the
    compositor than in the copy, so a frame every 64 MB is what the player actually needs. */
@@ -3429,8 +3510,7 @@ void App::RunGameInstall() {
     while (m_game_install->Step(&error)) {
         m_install_status = m_game_install->Status();
         /* The transfer owns this thread for minutes at a time, so the browser page is answered from
-           inside its loop as well: that is what lets a phone watch progress (and, later, cancel)
-           while the bytes move. */
+           inside its loop as well: that is what lets a phone watch progress while the bytes move. */
         PollInstallerServer();
         /* Redraw for every step instead of every sixteenth: a step is one 4 MiB range, which took
            406 ms on average on the gateway path (33.8 s for 83 steps, measured 2026-10-16), so this
@@ -3441,6 +3521,12 @@ void App::RunGameInstall() {
     m_install_status = m_game_install->Status();
     if (m_install_status.stage == install::InstallStage::Failed) {
         m_install_error = m_install_status.error;
+        /* The same distinction as at the open: a transfer that stopped because the browser went
+           quiet gets the sentence the player can act on, not the byte it happened to be reading. */
+        if (m_upload_source != nullptr &&
+            m_upload_source->AbortCode() == install::kErrorUploadStopped) {
+            m_install_error = install::kErrorUploadStopped;
+        }
         /* The failure has to reach log.txt in full: the screen may wrap or clip it, and a
            diagnostic that only exists on a 1280-pixel card is not a diagnostic. */
         Trace("install: transfer failed: %s", m_install_error.c_str());
@@ -3449,6 +3535,9 @@ void App::RunGameInstall() {
            again instead of watching a few gigabytes go to waste (design section 10).  Only the
            placeholders that merely served reading (meta/control) go away with the package. */
         m_game_install->CleanupAfterFailure(&error);
+        /* Its next `/upload/begin` is how the player carries on (the task file kept a line above
+           says what is still missing). */
+        ReleaseUploadSource("the run failed");
         /* The task file (and the bytes it describes) is still there: the next entry into the install
            page offers to continue, and the result page says so below. */
         RefreshPendingTask();
@@ -3481,6 +3570,13 @@ void App::RunGameInstall() {
        for its own step, and the result screen below replaces it when it is done. */
     RunAgentFollowUp();
     m_install_screen = InstallScreen::Result;
+    /* The run may have finished the task the page was told about: re-read what is left on the card
+       so `/status.json` (and the page's "unfinished install" card) does not keep offering a task
+       the engine just deleted. */
+    RefreshPendingTask();
+    /* The install is on the console: the browser is done offering bytes for it, and holding its
+       connection would only make the next pick look like a second install. */
+    ReleaseUploadSource("the install finished");
     /* The package stays in hand for as long as the result page is up: that page names what was
        installed and, when the run failed, quotes the reason the installer gave.  Dropping it here
        is how a failed finish ended up labelled "this file is not an install package" on a package
@@ -3492,6 +3588,7 @@ void App::RunGameInstall() {
 void App::LeaveGameInstall() {
     /* The modal page is what the server existed for, so it goes down with it (design section 3). */
     StopInstallerServer();
+    m_install_page_drives = false; /* a fresh entry into the install page starts from scratch */
     LeaveInstallScreen();
     m_page = m_game_install_return;
 }
@@ -3546,8 +3643,11 @@ void App::InstallStepBack() {
             m_install_screen = InstallScreen::Choose;
             break;
         case InstallScreen::Url:
-            /* The address screen is where the download run starts, so its "back" is the source
-               screen -- and from there the next B leaves the installer. */
+        case InstallScreen::Upload:
+            /* The two source screens are where their runs start, so their "back" is the picker
+               above them -- and from there the next B leaves the installer.  Both clear the same
+               three things: the last reason, the address that caused it, and the download source
+               that may still hold a socket. */
             m_http_source.reset();
             m_download_url.clear();
             m_install_error.clear();
@@ -3580,12 +3680,23 @@ void App::SetInstallTarget(install::TargetStorage target) {
     m_install_target = target;
     Trace("install: target=%s", target == install::TargetStorage::Nand ? "nand" : "sd");
     SaveSettings();
-    if (m_game_install == nullptr) {
+    const bool upload = m_upload_source != nullptr;
+    if (m_game_install == nullptr && !upload) {
         return; /* nothing is open yet: the next open already uses the new storage */
     }
     const bool from_url = m_http_source != nullptr;
     const std::string address = m_download_url;
     LeaveInstallScreen();
+    if (upload) {
+        /* An upload's bytes come from the browser and are already in placeholders on the old
+           target, so its package cannot be re-opened the way a file or an address can: the run
+           starts over and the screen goes back to where the file is picked.  `LeaveInstallScreen`
+           has already aborted the source, which is what tells the page its task id is stale and
+           makes it ask for the file again. */
+        Trace("install: the target changed during an upload; the page starts over");
+        m_install_screen = InstallScreen::Upload;
+        return;
+    }
     if (from_url) {
         OpenDownloadPackage(address);
     } else {
@@ -3703,10 +3814,16 @@ void App::ResumePendingInstall() {
             OpenDownloadPackage(m_pending_task.url);
             return;
         case install::TaskSource::HttpUpload:
-            /* 1.1.0 has no upload source yet (M4), so no task can come from one: if one is there
-               anyway, say so instead of pretending to continue. */
-            Trace("install: the task came from a browser upload, which this build cannot resume");
-            break;
+            /* An upload's bytes come from a browser, so "continue" cannot fetch anything by itself:
+               the console shows the address and waits, and the run picks up when the page offers the
+               same file again (see the adoption in PollInstallerServer).  `m_resume_task` is left
+               as it is -- the adoption sets it once the browser has actually sent something, so a
+               player who walks away with the page still open does not leave a resume armed. */
+            Trace("install: the task came from a browser upload; waiting for the page to offer it");
+            m_resume_task = nullptr;
+            m_install_error.clear();
+            m_install_screen = InstallScreen::Upload;
+            return;
         case install::TaskSource::None:
         default:
             break;
@@ -3765,6 +3882,7 @@ bool App::InstallTargetSelectable() const {
         case InstallScreen::Choose:
         case InstallScreen::Files:
         case InstallScreen::Url:
+        case InstallScreen::Upload:
         case InstallScreen::Confirm:
             return true;
         case InstallScreen::Progress:
@@ -3850,10 +3968,8 @@ void App::RenderInstallProgress(Surface surface) {
        counter for the agent step is already the file in hand. */
     const int counter_done =
         agent_step ? m_progress_index
-                   : (m_install_status.total_contents > 0
-                          ? std::min(m_install_status.done_contents + 1,
-                                     m_install_status.total_contents)
-                          : 0);
+                   : install::CurrentContentNumber(m_install_status.done_contents,
+                                                   m_install_status.total_contents);
     const int counter_total = agent_step ? m_progress_total : m_install_status.total_contents;
     std::snprintf(counter, sizeof(counter), Tr(i18n::StringId::ProgressContents), counter_done,
                   counter_total);
@@ -3890,11 +4006,9 @@ void App::RenderInstallProgress(Surface surface) {
     m_font.DrawBold(surface, bar_x + bar_width + 18, bar_y - 10, kFontHeading, kText, percent);
 
     if (!agent_step) {
-        char detail[96];
-        std::snprintf(detail, sizeof(detail), "%.2f / %.2f GB",
-                      static_cast<double>(done) / (1024.0 * 1024.0 * 1024.0),
-                      static_cast<double>(total) / (1024.0 * 1024.0 * 1024.0));
-        m_font.Draw(surface, text_x, card_top + 236, kFontSmall, kSubtle, detail);
+        const std::string detail =
+            util::FormatSize(done) + " / " + util::FormatSize(total);
+        m_font.Draw(surface, text_x, card_top + 236, kFontSmall, kSubtle, detail.c_str());
     }
     if (finalizing) {
         /* Says the one thing the numbers cannot: this part cannot be cancelled. */
@@ -3903,10 +4017,9 @@ void App::RenderInstallProgress(Surface surface) {
     }
 }
 
-
 /* The installer's web server (M4).  Lifecycle first, because it is a resource: a listening socket
-   that nobody asked for is a port somebody else could have used, so it exists exactly while the
-   install page is up (design section 3). */
+   that nobody asked for is a port somebody else could have used, so it exists exactly while there
+   is something for it to do (design section 3). */
 std::string App::InstallerAddressText() const {
     if (m_http_port == 0) {
         return std::string();
@@ -3917,6 +4030,42 @@ std::string App::InstallerAddressText() const {
         return std::string();
     }
     return "http://" + ip + ":" + std::to_string(static_cast<unsigned>(m_http_port));
+}
+
+/* The two screens the page belongs to, and the runs they start.  `m_install_origin` is what says
+   where the run in hand came from: a file picked from the card (Files), the console's keyboard or
+   the page (Url), or the page's upload (Upload).  Only the last two need a page watching. */
+bool App::InstallerServerNeeded() const {
+    if (m_page != Page::GameInstall) {
+        return false;
+    }
+    if (m_install_screen == InstallScreen::Url || m_install_screen == InstallScreen::Upload) {
+        return true;
+    }
+    /* The screens a run from those two goes through -- including the result screen, which is also
+       where a run that failed *before* it had a package ends up (`m_game_install` is gone by then,
+       so asking "is a run in hand" is not enough): the page watching that run has to be able to
+       read the failure, or it shows "offline" over a console that is answering nothing (measured
+       2026-10-16, right after a browser upload stalled). */
+    switch (m_install_screen) {
+        case InstallScreen::Confirm:
+        case InstallScreen::Progress:
+        case InstallScreen::Result:
+            break;
+        default:
+            return false; /* pick a source, pick a file, or an unfinished install: no page involved */
+    }
+    const bool from_a_source_screen = m_install_origin == InstallScreen::Url ||
+                                      m_install_origin == InstallScreen::Upload;
+    return from_a_source_screen || m_install_page_drives;
+}
+
+void App::SyncInstallerServer() {
+    if (InstallerServerNeeded()) {
+        StartInstallerServer();
+    } else {
+        StopInstallerServer();
+    }
 }
 
 void App::StartInstallerServer() {
@@ -3948,19 +4097,101 @@ void App::StopInstallerServer() {
     Trace("http: the page server stopped");
 }
 
+void App::RefreshStatusStorage() {
+    StorageBarTexts(m_status_storage_text, m_status_storage_ok, m_status_storage_used);
+}
+
+/* The line the confirm card puts under its rows: whether the agent can follow this package.  Three
+   cases, not two -- our game with a supported version (it will be installed), our game with one the
+   agent does not handle (it has to say which version it does), and everything else (an add-on, a data
+   patch, another game: nothing to say).  The console's own card and the page both read this. */
+std::string App::PackageAgentNote(bool *warn) const {
+    if (warn != nullptr) {
+        *warn = false;
+    }
+    if (m_game_install == nullptr) {
+        return std::string();
+    }
+    const install::PackageInfo &package = m_game_install->Package();
+    if (!TitleIsOurs(package.cnmt.title_id) ||
+        !install::MetaTypeCarriesGameVersion(package.cnmt.type)) {
+        return std::string();
+    }
+    if (AgentSupportedFor(package.cnmt.title_id, package.cnmt.version)) {
+        return Tr(i18n::StringId::ConfirmAgentNote);
+    }
+    if (warn != nullptr) {
+        *warn = true;
+    }
+    char note[192];
+    std::snprintf(note, sizeof(note), Tr(i18n::StringId::InstallAgentUnsupported),
+                  AgentSupportedVersionsFor(package.cnmt.title_id).c_str());
+    return std::string(note);
+}
+
 void App::PollInstallerServer() {
     if (!m_http_server.Listening()) {
         return;
     }
+    /* The two storage blocks the page mirrors in its header: same numbers the console draws, asked
+       for once a second rather than once per request. */
+    const std::uint64_t now_ms = armTicksToNs(armGetSystemTick()) / 1000000ull;
+    if (now_ms - m_status_storage_ms > 1000) {
+        m_status_storage_ms = now_ms;
+        RefreshStatusStorage();
+    }
     ServiceInstallerPage();
+    /* `POST /start` is exactly the console's `A` on the confirm screen: the same function, so the
+       two devices cannot drift apart (design section 3).  Taken here, not in the socket pass,
+       because it owns this thread for the whole transfer. */
+    if (m_http_pending_start) {
+        m_http_pending_start = false;
+        if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Confirm &&
+            m_game_install != nullptr) {
+            Trace("install: the page pressed start");
+            RunGameInstall();
+            return;
+        }
+    }
+    /* The page's Ⓑ on the result card: the same step as the console's key, so the next package can
+       be picked from the phone. */
+    if (m_http_pending_back) {
+        m_http_pending_back = false;
+        if (m_page == Page::GameInstall &&
+            (m_install_screen == InstallScreen::Result ||
+             m_install_screen == InstallScreen::Confirm)) {
+            Trace("install: the page went back");
+            InstallStepBack();
+            return;
+        }
+    }
+    /* `POST /target` goes through the same selector the header's blocks use, which re-opens the
+       package on the new storage (design section 8.1). */
+    if (m_http_pending_target) {
+        m_http_pending_target = false;
+        Trace("install: the page picked the target storage");
+        SetInstallTarget(m_http_target);
+    }
     /* A file the browser picked becomes a package from an upload source: Prepare reads its first
        bytes through the page (which is why the source can pump the server while it waits). */
     if (m_http_pending_upload) {
         m_http_pending_upload = false;
+        /* Whatever screen the console happens to be on, this run is the page's: it offered the file,
+           so it keeps its server until the run is over (see InstallerServerNeeded). */
+        m_install_page_drives = true;
         const std::string name = m_http_upload_name;
         const std::uint64_t size = m_http_upload_size;
         m_http_upload_name.clear();
         m_http_upload_size = 0;
+        /* A file the page picks while an unfinished *upload* is still on the card is nearly always
+           that same file: the page tells the player to re-open it and pick it again, and resuming is
+           the whole point of keeping the task.  The engine decides whether it really is the same
+           package (the task file's container id, size and contents); a different file simply starts
+           a fresh run, exactly as it would if the task had never been there. */
+        if (m_have_pending_task && m_pending_task.source == install::TaskSource::HttpUpload) {
+            m_resume_task = &m_pending_task;
+            Trace("install: the page's file is checked against the unfinished upload");
+        }
         m_upload_source = std::make_unique<install::HttpUploadSource>();
         std::string error;
         if (!m_upload_source->Begin(name, size, m_http_upload_task_id, &error)) {
@@ -3970,6 +4201,7 @@ void App::PollInstallerServer() {
             /* The reader serves the page while it waits: without this, reading the package would
                deadlock against the page's own `/upload/next` (see the source's note). */
             m_upload_source->SetPump([this] { ServiceInstallerPage(); });
+            m_upload_source->SetRequestsProbe([this] { return m_http_server.RequestsServed(); });
             m_upload_source->SetLog(m_log);
             Trace("install: the page offers %s (%llu bytes, task %s)", name.c_str(),
                   static_cast<unsigned long long>(size), m_upload_source->TaskId().c_str());
@@ -3981,6 +4213,7 @@ void App::PollInstallerServer() {
     if (!m_http_pending_url.empty()) {
         const std::string address = m_http_pending_url;
         m_http_pending_url.clear();
+        m_install_page_drives = true; /* the page submitted it: same rule as above */
         Trace("install: the page submitted an address; opening it as a download");
         m_install_error.clear();
         OpenDownloadPackage(address);
@@ -3992,13 +4225,35 @@ void App::PollInstallerServer() {
    transfer's fetch thread.  Two callers use this as-is (the frame loop and the transfer loop), and a
    third -- the upload source itself, while it waits -- because otherwise reading the package would
    deadlock against the very request that carries its bytes. */
-void App::ServiceInstallerPage() {
-    m_http_server.Poll();
+/* The browser's part in a run ends when the run does: the source holds one of the page's
+   connections and the task id it quotes, and the page's next `POST /upload/begin` is how the player
+   starts or continues.  A source left over answers that with a 409 "busy" -- which is what a page
+   got after a skipped install, and what the transfer failure path had to work around by hand
+   (2026-10-16). */
+void App::ReleaseUploadSource(const char *why) {
     if (m_upload_source == nullptr) {
         return;
     }
+    Trace("install: the browser is done with this run (%s)", why);
+    m_upload_source->Abort(why);
+    m_upload_source.reset();
+    m_http_pending_upload = false;
+    m_http_upload_name.clear();
+    m_http_upload_size = 0;
+}
+
+void App::ServiceInstallerPage() {
+    m_http_server.Poll();
     net::HttpHandoff handoff;
     if (m_http_server.TakeHandoff(&handoff)) {
+        if (m_upload_source == nullptr) {
+            /* A part arrived after the run let go of its source: nobody will read these bytes, and a
+               connection that is neither answered nor closed stays in the browser's pool until it
+               runs out of them (six per host, 2026-10-16).  Close it and say so. */
+            Trace("http: a part arrived with no upload source; closing it");
+            close(handoff.fd);
+            return;
+        }
         /* One line per part: offset, length, and the first bytes, because "the console refused the
            package" and "the bytes arrived shifted" look the same from the screens. */
         if (m_log != nullptr) {
@@ -4020,53 +4275,237 @@ void App::ServiceInstallerPage() {
     }
 }
 
+/* The one line under the result card's title.  Every branch is wording, not state: which of them
+   applies is decided here, and the browser page's status payload sends the same string instead of
+   keeping a second copy of the rules. */
+std::string App::InstallOutcomeLine() const {
+    const install::InstallStatus &status = m_install_status;
+    switch (status.stage) {
+        case install::InstallStage::Skipped:
+            /* The console's own name for the version it has -- never the title version number,
+               which is Nintendo's build id (3.0.3 is 0x220000, i.e. "34.0.0" if read as one).  When
+               the console has no name for it, the sentence leaves the number out rather than
+               inventing one. */
+            if (status.installed_version > status.package_version) {
+                if (status.installed_version_text.empty()) {
+                    return Tr(i18n::StringId::ResultNewerVersionPlain);
+                }
+                return i18n::Format(i18n::StringId::ResultNewerVersionDetail,
+                                    status.installed_version_text.c_str());
+            }
+            return Tr(i18n::StringId::ResultSameVersionDetail);
+        case install::InstallStage::Done: {
+            return i18n::Format(i18n::StringId::ResultWroteLine,
+                                Tr(m_install_target == install::TargetStorage::Nand
+                                       ? i18n::StringId::StorageSystem
+                                       : i18n::StringId::StorageSdCard),
+                                status.total_contents,
+                                util::FormatSize(status.total_bytes).c_str());
+        }
+        default:
+            /* The one failure whose code the screens word themselves: the browser stopped sending.
+               Everything else is quoted the way the installer said it, because a canned sentence
+               on a failure that came from somewhere else sends the player to the wrong place --
+               and printing the *code* is worse than either (a hardware screen read "upload-stopped"
+               next to the title, 2026-10-16). */
+            if (m_install_error == install::kErrorUploadStopped) {
+                return Tr(i18n::StringId::InstallUploadStopped);
+            }
+            return m_install_error.empty() ? std::string("the install did not finish")
+                                           : m_install_error;
+    }
+}
+
 std::string App::InstallerStatusJson() const {
     /* The state machine the page renders: nothing that happens on the console is invented here, and
        the page keeps no state of its own (design section 14, item 29). */
     const bool transferring = m_page == Page::GameInstall && m_game_install != nullptr &&
                               m_install_screen == InstallScreen::Progress;
-    const bool finished = m_page == Page::GameInstall && m_game_install != nullptr &&
+    /* A finished state describes the run that has *ended* -- and only while nothing new is being
+       read.  The player who picks the next file without walking the console off the result screen
+       starts a run while that screen is still up: reporting "failed" during it made the page stop
+       posting parts on the spot, and the console then declared the browser gone after its thirty
+       seconds of silence (measured in Chrome, 2026-10-16 -- both screens blaming the other). */
+    const bool reading_a_new_run = m_upload_source != nullptr || m_http_pending_upload;
+    const bool finished = !reading_a_new_run && m_page == Page::GameInstall &&
                           m_install_screen == InstallScreen::Result;
-    const char *state = transferring ? "downloading"
-                                     : finished ? (m_install_status.stage == install::InstallStage::Done
-                                                       ? "done"
-                                                       : "failed")
-                                                : "idle";
+    /* The confirm screen is a state of its own: the package is read and described, nothing moves
+       until someone presses start, and the page has to be able to mirror that card (and offer the
+       same start) instead of showing "0%"/"100%" with no explanation (2026-10-19). */
+    const bool confirming = m_page == Page::GameInstall && m_game_install != nullptr &&
+                            m_install_screen == InstallScreen::Confirm;
+    const char *state = "idle";
+    if (transferring) {
+        state = "downloading";
+    } else if (confirming) {
+        state = "confirm";
+    } else if (finished) {
+        switch (m_install_status.stage) {
+            case install::InstallStage::Done: state = "done"; break;
+            case install::InstallStage::Skipped: state = "skipped"; break;
+            default: state = "failed"; break;
+        }
+    }
+    /* The numbers the page draws.  A finished run reports itself as complete: the engine's counters
+       describe what is *left* to transfer, so after the last byte they read 0 -- and a page that
+       showed "100% of 0" as "0%" is exactly what the first hardware look caught. */
+    const std::uint64_t package_bytes =
+        m_game_install != nullptr ? install::PackageBytes(m_game_install->Task()) : 0;
+    std::uint64_t received = m_install_status.done_bytes;
+    std::uint64_t total = m_install_status.total_bytes;
+    if (confirming) {
+        /* Nothing has moved yet: the card is about the package itself, so its size is the package's
+           -- the same number the console's confirm screen prints (design section 8). */
+        received = 0;
+        total = package_bytes;
+    }
+    if (finished) {
+        const bool complete = m_install_status.stage == install::InstallStage::Done ||
+                              m_install_status.stage == install::InstallStage::Skipped;
+        received = complete ? package_bytes : received;
+        total = complete ? package_bytes : total;
+    }
     char buffer[64];
     std::string json = "{\"schema\":1,\"state\":\"";
     json += state;
+    /* The page's labels are injected at load time, so an already-open tab keeps the old language
+       until it reloads.  Naming the console's current language here lets the page notice the
+       switch and reload itself (2026-10-19). */
+    json += "\",\"lang\":\"";
+    json += i18n::Current() == i18n::Language::English ? "en" : "zh-Hans";
+    json += "\",\"source\":\"";
+    json += m_upload_source != nullptr
+                ? "upload"
+                : (m_http_source != nullptr
+                       ? "download"
+                       : (m_game_install != nullptr ? "file" : "none"));
     json += "\",\"busy\":";
     json += transferring ? "true" : "false";
     json += ",\"name\":\"";
-    json += net::EscapeForJs(m_install_status.game_name.empty() ? m_install_status.detail
-                                                                : m_install_status.game_name);
+    /* The console's own name for the run in hand -- the same line its cards print (design section
+       14, item 29: the page invents nothing).  The installer's `detail` is a diagnostic ("meta=…,
+       contents=…"): it belongs in log.txt, and it reached the page as an item name while every
+       test stayed on the console side (2026-10-16). */
+    json += net::EscapeForJs(m_game_install != nullptr ? PackageSummary() : std::string());
     json += "\",\"received\":";
     std::snprintf(buffer, sizeof(buffer), "%llu",
-                  static_cast<unsigned long long>(m_install_status.done_bytes));
+                  static_cast<unsigned long long>(received));
     json += buffer;
     json += ",\"total\":";
     std::snprintf(buffer, sizeof(buffer), "%llu",
-                  static_cast<unsigned long long>(m_install_status.total_bytes));
+                  static_cast<unsigned long long>(total));
     json += buffer;
     json += ",\"received_text\":\"";
-    json += util::FormatSize(m_install_status.done_bytes);
+    json += util::FormatSize(received);
     json += "\",\"total_text\":\"";
-    json += util::FormatSize(m_install_status.total_bytes);
+    json += util::FormatSize(total);
     json += "\",\"eta_text\":\"\",\"rate_text\":\"\",\"content_index\":";
-    std::snprintf(buffer, sizeof(buffer), "%d", m_install_status.done_contents);
+    /* The content being written, not the number finished -- the console's own counter adds one
+       (and clamps at the total), and the page has to say "2 / 3" at the same moment it does
+       (2026-10-19).  At the end done == total, so the clamp keeps it at "3 / 3". */
+    const int current_content = install::CurrentContentNumber(m_install_status.done_contents,
+                                                              m_install_status.total_contents);
+    std::snprintf(buffer, sizeof(buffer), "%d", current_content);
     json += buffer;
     json += ",\"content_total\":";
     std::snprintf(buffer, sizeof(buffer), "%d", m_install_status.total_contents);
     json += buffer;
     json += ",\"content_name\":\"";
     json += net::EscapeForJs(m_install_status.current_name);
+    /* What the console's own card says, so the browser can say it too: the one-line summary of the
+       package, the "written" line of a finished run, and whether there is a cover to fetch. */
+    json += "\",\"summary\":\"";
+    json += net::EscapeForJs(m_game_install != nullptr ? PackageSummary() : std::string());
+    json += "\",\"written\":\"";
+    if (finished && m_install_status.stage == install::InstallStage::Done) {
+        /* The page's own layout for this line: contents, size, and where it went. */
+        char written[160];
+        std::snprintf(written, sizeof(written), Tr(i18n::StringId::PageWrittenLine),
+                      m_install_status.total_contents,
+                      util::FormatSize(m_install_status.total_bytes).c_str(),
+                      Tr(m_install_target == install::TargetStorage::Nand
+                             ? i18n::StringId::StorageSystem
+                             : i18n::StringId::StorageSdCard));
+        json += net::EscapeForJs(written);
+    }
+    json += "\",\"hasCover\":";
+    json += (m_game_install != nullptr && !m_game_install->IconJpeg().empty()) ? "true" : "false";
+    /* Which build is serving this page.  `Cache-Control: no-store` keeps a browser from *keeping* an
+       old page, but nothing makes an already-open tab swap the JavaScript it is running for a newer
+       one -- only a reload does.  So the page compares this with its own stamp and reloads itself
+       (when nothing is running), which is what "the phone picked up the new code" has to mean when
+       nobody is going to press Ctrl-Shift-R on a phone (2026-10-17). */
+    json += ",\"build\":\"";
+    json += kBuildStamp;
+    json += "\"";
     /* The upload task's id: a page that reloaded (or a second tab that wants to take over) reads it
        from here and keeps feeding the same task, which is why the id is in the status payload and
-       not only in the answer to `POST /upload/begin` (design section 29). */
-    json += "\",\"taskId\":\"";
-    json += m_upload_source != nullptr ? m_http_upload_task_id : std::string();
-    json += "\",\"message\":\"";
-    json += net::EscapeForJs(finished ? m_install_error : std::string());
+       not only in the answer to `POST /upload/begin` (design section 29).  It outlives the source on
+       purpose: a page has to be able to tell "this finished state is the run *I* fed" from "that is
+       the previous run's result still on the console's screen" -- without it, a page that picks the
+       next file stops posting parts the moment it reads the old verdict (2026-10-16). */
+    json += ",\"taskId\":\"";
+    json += m_http_upload_task_id;
+    /* The run in hand, and where it would write: what the page needs to mirror the confirm card and
+       to ask for a start or a storage change that the console can check (2026-10-19). */
+    json += "\",\"runId\":";
+    std::snprintf(buffer, sizeof(buffer), "%d", m_game_install != nullptr ? m_run_id : 0);
+    json += buffer;
+    json += ",\"target\":\"";
+    json += m_install_target == install::TargetStorage::Nand ? "nand" : "sd";
+    json += "\",\"target_text\":\"";
+    json += net::EscapeForJs(Tr(m_install_target == install::TargetStorage::Nand
+                                    ? i18n::StringId::StorageSystem
+                                    : i18n::StringId::StorageSdCard));
+    json += "\"";
+    /* The two storage blocks, exactly as the console draws them: text, whether they can be read, how
+       full they are, and which one is selected.  A storage that cannot be read says "unavailable" in
+       its text and carries ok=false -- the page disables that block instead of offering it. */
+    json += ",\"sd\":{\"text\":\"";
+    json += net::EscapeForJs(m_status_storage_text[0]);
+    json += "\",\"ok\":";
+    json += m_status_storage_ok[0] ? "true" : "false";
+    json += ",\"used\":";
+    std::snprintf(buffer, sizeof(buffer), "%.3f", m_status_storage_used[0]);
+    json += buffer;
+    json += ",\"selected\":";
+    json += m_install_target == install::TargetStorage::SdCard ? "true" : "false";
+    json += "},\"nand\":{\"text\":\"";
+    json += net::EscapeForJs(m_status_storage_text[1]);
+    json += "\",\"ok\":";
+    json += m_status_storage_ok[1] ? "true" : "false";
+    json += ",\"used\":";
+    std::snprintf(buffer, sizeof(buffer), "%.3f", m_status_storage_used[1]);
+    json += buffer;
+    json += ",\"selected\":";
+    json += m_install_target == install::TargetStorage::Nand ? "true" : "false";
+    json += "}";
+    /* The confirm card's two extra lines, worded here so both devices say the same thing: whether the
+       agent can follow this package, and how much an interrupted run already has. */
+    bool agent_note_warn = false;
+    const std::string agent_note = PackageAgentNote(&agent_note_warn);
+    json += ",\"agent_note\":\"";
+    json += net::EscapeForJs(agent_note);
+    json += "\",\"agent_note_warn\":";
+    json += agent_note_warn ? "true" : "false";
+    json += ",\"resume_text\":\"";
+    if (confirming && m_resumed_bytes > 0) {
+        json += net::EscapeForJs(i18n::Format(i18n::StringId::ConfirmResumeNote,
+                                              util::FormatSize(m_resumed_bytes).c_str()));
+    }
+    json += "\"";
+    /* The same "what now" the console's result card gives: the agent can go in when this run left a
+       version it supports, and only when it is not already installed. */
+    json += ",\"agent_next\":";
+    const bool agent_next =
+        finished && m_game_install != nullptr && !AgentInstalled() &&
+        AgentSupportedFor(m_game_install->Package().cnmt.title_id,
+                          m_install_status.stage == install::InstallStage::Skipped
+                              ? m_install_status.installed_version
+                              : m_install_status.effective_version);
+    json += agent_next ? "true" : "false";
+    json += ",\"message\":\"";
+    json += net::EscapeForJs(finished ? InstallOutcomeLine() : std::string());
     json += "\",\"pending\":";
     if (m_have_pending_task) {
         json += "{\"name\":\"";
@@ -4080,6 +4519,20 @@ std::string App::InstallerStatusJson() const {
         json += "null";
     }
     json += "}";
+    /* One sanity check on the assembled payload.  This JSON is hand-built, and a missing quote is
+       not something the compiler can see: `"build":"…,"taskId"` shipped like that on 2026-10-17 and
+       the page could only report "the console is offline".  Parsing our own output costs
+       microseconds per status request and turns that whole class into one log line. */
+    {
+        json::Value parsed;
+        std::string parse_error;
+        if (!json::Parse(json, &parsed, &parse_error) && m_log != nullptr) {
+            m_log->Line("[t=%llums] http: the status payload is not valid JSON (%s): %s",
+                        static_cast<unsigned long long>(
+                            armTicksToNs(armGetSystemTick()) / 1000000ull),
+                        parse_error.c_str(), json.c_str());
+        }
+    }
     return json;
 }
 
@@ -4102,12 +4555,29 @@ net::HttpResponse App::ServeHttp(const net::HttpRequest &request) {
         page = net::SubstituteLabels(page, net::kPageLangMarker,
                                      i18n::Current() == i18n::Language::English ? "en" : "zh-Hans");
         page = net::SubstituteLabels(page, net::kPageAddressMarker, InstallerAddressText());
+        page = net::SubstituteLabels(page, net::kPageVersionMarker,
+                                     net::EscapeForJs(kBuildStamp));
         response.body = std::move(page);
         return response;
     }
     if (request.method == "GET" && request.path == "/status.json") {
         response.content_type = "application/json; charset=utf-8";
         response.body = InstallerStatusJson();
+        return response;
+    }
+    if (request.method == "GET" && request.path == "/cover.jpg") {
+        /* The package's own cover, exactly as `ns` handed it over: the browser gets the JPEG the
+           engine already holds in memory (the design's page shows the same picture the console's
+           cards do, and it is the package's, not the installed game's -- a package for a game that
+           is not installed still has one). */
+        if (m_game_install == nullptr || m_game_install->IconJpeg().empty()) {
+            response.status = 404;
+            response.body = "no cover\n";
+            return response;
+        }
+        response.content_type = "image/jpeg";
+        const std::vector<std::uint8_t> &jpeg = m_game_install->IconJpeg();
+        response.body.assign(jpeg.begin(), jpeg.end());
         return response;
     }
     if (request.method == "POST" && request.path == "/url") {
@@ -4123,16 +4593,100 @@ net::HttpResponse App::ServeHttp(const net::HttpRequest &request) {
         response.body = "ok\n";
         return response;
     }
-    if (request.method == "POST" && request.path == "/cancel") {
-        /* Cancelling is refused while the console is finishing an install (that part cannot be
-           undone), and there is nothing to cancel when no run is in flight. */
-        if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Progress) {
-            response.status = 409;
-            response.body = "cancelling during the transfer is not wired yet\n";
+    /* ---- the two things the page does that change what the console is doing ---- */
+    if (request.method == "POST" && request.path == "/start") {
+        /* The page's Ⓐ on the confirm card.  Same gate as the console's own key: a package in hand,
+           the confirm screen up, and the run the page is looking at (`runId`) -- so a stale tab can
+           neither start a run it was not told about nor start the same one twice. */
+        json::Value root;
+        std::string parse_error;
+        if (!json::Parse(request.body, &root, &parse_error) || !root.IsObject()) {
+            response.status = 400;
+            response.content_type = "application/json; charset=utf-8";
+            response.body = "{\"code\":\"bad-request\"}\n";
             return response;
         }
-        response.status = 409;
-        response.body = "nothing to cancel\n";
+        const json::Value *run_value = root.Find("runId");
+        const int run_id =
+            run_value != nullptr ? static_cast<int>(json::IntOr(*run_value, 0)) : 0;
+        if (m_page != Page::GameInstall || m_install_screen != InstallScreen::Confirm ||
+            m_game_install == nullptr || run_id != m_run_id) {
+            response.status = 409;
+            response.content_type = "application/json; charset=utf-8";
+            response.body = "{\"code\":\"not-confirming\"}\n";
+            return response;
+        }
+        /* Not started here: this runs inside the socket pass, and the transfer owns the UI thread for
+           minutes.  The UI loop picks it up on the next frame, exactly like the console's `A`. */
+        m_http_pending_start = true;
+        response.content_type = "application/json; charset=utf-8";
+        response.body = "{\"ok\":true}\n";
+        return response;
+    }
+    if (request.method == "POST" && request.path == "/back") {
+        /* The page's Ⓑ on the confirm and result cards.  Only those screens may step back, and only
+           for the run the page was looking at -- a stale tab cannot close somebody else's result. */
+        json::Value root;
+        std::string parse_error;
+        if (!json::Parse(request.body, &root, &parse_error) || !root.IsObject()) {
+            response.status = 400;
+            response.content_type = "application/json; charset=utf-8";
+            response.body = "{\"code\":\"bad-request\"}\n";
+            return response;
+        }
+        const json::Value *run_value = root.Find("runId");
+        const int run_id =
+            run_value != nullptr ? static_cast<int>(json::IntOr(*run_value, 0)) : 0;
+        const int expected = m_game_install != nullptr ? m_run_id : 0;
+        if (m_page != Page::GameInstall ||
+            (m_install_screen != InstallScreen::Result &&
+             m_install_screen != InstallScreen::Confirm) ||
+            run_id != expected) {
+            response.status = 409;
+            response.content_type = "application/json; charset=utf-8";
+            response.body = "{\"code\":\"not-backable\"}\n";
+            return response;
+        }
+        m_http_pending_back = true;
+        response.content_type = "application/json; charset=utf-8";
+        response.body = "{\"ok\":true}\n";
+        return response;
+    }
+    if (request.method == "POST" && request.path == "/target") {
+        /* The page's storage blocks.  It goes through the same selector the console's header uses,
+           which means the package is re-opened on the new storage -- the page's own note says so. */
+        json::Value root;
+        std::string parse_error;
+        if (!json::Parse(request.body, &root, &parse_error) || !root.IsObject()) {
+            response.status = 400;
+            response.content_type = "application/json; charset=utf-8";
+            response.body = "{\"code\":\"bad-request\"}\n";
+            return response;
+        }
+        const json::Value *run_value = root.Find("runId");
+        const json::Value *target_value = root.Find("target");
+        const int run_id =
+            run_value != nullptr ? static_cast<int>(json::IntOr(*run_value, 0)) : 0;
+        const std::string target =
+            target_value != nullptr ? target_value->StringOr(std::string()) : std::string();
+        if (target != "sd" && target != "nand") {
+            response.status = 400;
+            response.content_type = "application/json; charset=utf-8";
+            response.body = "{\"code\":\"bad-target\"}\n";
+            return response;
+        }
+        if (m_page != Page::GameInstall || !InstallTargetSelectable() ||
+            (m_game_install != nullptr && run_id != m_run_id)) {
+            response.status = 409;
+            response.content_type = "application/json; charset=utf-8";
+            response.body = "{\"code\":\"not-selectable\"}\n";
+            return response;
+        }
+        m_http_pending_target = true;
+        m_http_target = target == "nand" ? install::TargetStorage::Nand
+                                         : install::TargetStorage::SdCard;
+        response.content_type = "application/json; charset=utf-8";
+        response.body = "{\"ok\":true}\n";
         return response;
     }
     /* ---- the upload path: the browser is the source, one posted range at a time ---- */
@@ -4285,6 +4839,12 @@ void App::RenderInstallPending(Surface surface) {
         m_font.Draw(surface, card_x + 36, card_top + 172, kFontSmall, kWarn,
                     m_font.Fit(Tr(i18n::StringId::PendingGone), kFontSmall, card_width - 72, 1)
                         .c_str());
+    } else if (m_pending_task.source == install::TaskSource::HttpUpload) {
+        /* "Continue" for an upload happens in the browser, not on this screen, so the card says
+           where that is before the player presses anything. */
+        m_font.Draw(surface, card_x + 36, card_top + 172, kFontSmall, kSubtle,
+                    m_font.Fit(Tr(i18n::StringId::PendingUploadResume), kFontSmall, card_width - 72, 1)
+                        .c_str());
     } else if (!m_install_error.empty()) {
         m_font.Draw(surface, card_x + 36, card_top + 172, kFontSmall, kWarn,
                     m_font.Fit(m_install_error, kFontSmall, card_width - 72, 1).c_str());
@@ -4338,6 +4898,10 @@ void App::RenderGameInstall(Surface surface) {
         RenderInstallUrl(surface);
         return;
     }
+    if (m_install_screen == InstallScreen::Upload) {
+        RenderInstallUpload(surface);
+        return;
+    }
     switch (m_install_screen) {
         case InstallScreen::Progress: RenderInstallProgress(surface); return;
         case InstallScreen::Result: RenderInstallResult(surface); return;
@@ -4345,6 +4909,7 @@ void App::RenderGameInstall(Surface surface) {
         case InstallScreen::Choose:
         case InstallScreen::Files:
         case InstallScreen::Url:
+        case InstallScreen::Upload:
         case InstallScreen::Confirm: break;
     }
 
@@ -4485,6 +5050,22 @@ void App::RenderInstallFiles(Surface surface) {
    The second way in (open the console's page on a phone and paste the address there, which saves
    typing every character) needs the HTTP server, so it lands with it; this screen is laid out so
    that adding it below the card changes nothing else (design section 8). */
+/* One card, both source screens, and the only thing they can say with no network: the keyboard and
+   the page both live on the network, so neither source has a way in until settings say otherwise.
+   The reason is deliberately absent -- "no network" is one of the few states the player fixes
+   themselves, and the sentence is already the fix. */
+static void DrawNoNetworkCard(Surface surface, Font &font, const char *title, const char *hint) {
+    const int card_x = kMargin;
+    const int card_w = surface.width - kMargin * 2;
+    const int card_y = kHeaderHeight + 52;
+    const int card_h = 148;
+    FillRoundedRect(surface, card_x, card_y, card_w, card_h, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 15, kCard);
+    DrawKeyBadge(surface, font, card_x + 46, card_y + 42, 22, "!", kWarn, kOnHeader);
+    font.DrawBold(surface, card_x + 82, card_y + 24, kFontHeading, kText, title);
+    font.Draw(surface, card_x + 82, card_y + 72, kFontSmall, kSubtle, hint, card_w - 120);
+}
+
 void App::RenderInstallUrl(Surface surface) {
     m_actions.clear();
     const int card_x = kMargin;
@@ -4496,16 +5077,9 @@ void App::RenderInstallUrl(Surface surface) {
     if (m_install_no_network) {
         /* No network: say what to do about it, and nothing else.  An address or a page nobody can
            reach would be worse than none at all, so neither is drawn. */
-        const int card_y = kHeaderHeight + 52;
-        const int card_h = 148;
-        FillRoundedRect(surface, card_x, card_y, card_w, card_h, 18, kBorder);
-        FillRoundedRect(surface, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 15, kCard);
-        DrawKeyBadge(surface, m_font, card_x + 46, card_y + 42, 22, "!", kWarn, kOnHeader);
-        m_font.DrawBold(surface, card_x + 82, card_y + 24, kFontHeading, kText,
-                        Tr(i18n::StringId::InstallNoNetworkTitle));
-        m_font.Draw(surface, card_x + 82, card_y + 72, kFontSmall, kSubtle,
-                    Tr(i18n::StringId::InstallNoNetworkHint), card_w - 120);
-        DrawInstallUrlNotes(surface, card_y + card_h + 20, true);
+        DrawNoNetworkCard(surface, m_font, Tr(i18n::StringId::InstallNoNetworkTitle),
+                          Tr(i18n::StringId::InstallNoNetworkHint));
+        DrawInstallUrlNotes(surface, kHeaderHeight + 52 + 148 + 20, true);
         return;
     }
 
@@ -4565,7 +5139,118 @@ void App::RenderInstallUrl(Surface surface) {
         DrawInstallUrlNotes(surface, y + 24, false);
         return;
     }
-    DrawInstallUrlNotes(surface, y + 44, true);
+    /* The second way in, and the one the design calls the main one for this source: the phone or
+       the computer opens the address below and pastes the download address into the page, so
+       nothing has to be typed letter by letter on a console. */
+    y = RenderInstallerAddressBlock(surface, y + 20, false);
+    DrawInstallUrlNotes(surface, y + 22, true);
+}
+
+/* The upload source's screen: nothing above the block, because there is no console-side action at
+   all -- the page is the way in.  The design keeps the two source screens on one layout so that a
+   player who has seen one recognises the other at a glance (section 8). */
+void App::RenderInstallUpload(Surface surface) {
+    m_actions.clear();
+    m_font.Draw(surface, kMargin, kHeaderHeight + 22, kFontSmall, kSubtle,
+                Tr(i18n::StringId::InstallUploadSub));
+    if (m_install_no_network) {
+        DrawNoNetworkCard(surface, m_font, Tr(i18n::StringId::InstallNoNetworkTitle),
+                          Tr(i18n::StringId::InstallNoNetworkHint));
+        /* No Range rule here: an upload posts its bytes in chunks, it never range-requests. */
+        DrawInstallUrlNotes(surface, kHeaderHeight + 52 + 148 + 20, false);
+        return;
+    }
+    const int y = RenderInstallerAddressBlock(surface, kHeaderHeight + 52, true);
+    DrawInstallUrlNotes(surface, y + 22, false);
+}
+
+/* The address of the page the console is serving right now, as a code.  Re-encoded only when the
+   address changed: this is drawn every frame while its screen is up, and the address changes when
+   the server starts (which is what turns it from empty into a real one). */
+const util::QrCode &App::InstallerQrCode() {
+    const std::string address = InstallerAddressText();
+    if (address != m_address_qr_text) {
+        m_address_qr_text = address;
+        m_address_qr = address.empty() ? util::QrCode{} : util::EncodeQr(address);
+        if (!address.empty() && m_address_qr.Empty()) {
+            Trace("http: the address is too long to encode as a code (%zu chars)", address.size());
+        }
+    }
+    return m_address_qr;
+}
+
+/* The block the two source screens share: what to open, the address itself, what the page is for,
+   and the state the console is in while it waits.  `for_upload` picks the one line that differs --
+   the page is the same page and offers both ("paste an address", "pick a file"), so the console
+   says which of the two this screen is waiting for. */
+int App::RenderInstallerAddressBlock(Surface surface, int y, bool for_upload) {
+    const int card_x = kMargin;
+    const int card_w = surface.width - kMargin * 2;
+    const int card_h = 216;
+    const int plate_side = 170;
+    const int plate_x = card_x + card_w - 24 - plate_side;
+    const int plate_y = y + 14;
+    const int text_x = card_x + 28;
+    const int text_w = plate_x - 20 - text_x;
+
+    FillRoundedRect(surface, card_x, y, card_w, card_h, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, y + 3, card_w - 6, card_h - 6, 15, kCard);
+
+    m_font.Draw(surface, text_x, y + 18, kFontSmall, kSubtle,
+                Tr(i18n::StringId::InstallOpenAddress), text_w);
+
+    const util::QrCode &qr = InstallerQrCode();
+    const std::string address = InstallerAddressText();
+    if (qr.Empty() || address.empty()) {
+        /* The server did not come up (or its address cannot be encoded): there is nothing to open,
+           and the two console-side entries are still there -- unless this is the upload screen,
+           where the page *is* the entry.  The line says which screen it is on, so it stays honest
+           in both. */
+        m_font.DrawBold(surface, text_x, y + 56, kFontBody, kWarn,
+                        Tr(i18n::StringId::InstallNoPage), text_w);
+        return y + card_h;
+    }
+
+    /* The address is the point of this block, so it gets the biggest text on the screen; a long one
+       (an IPv6 literal, say) wraps onto a second line rather than being cut, because a truncated
+       address is an address the player cannot type. */
+    const std::string shown = m_font.Fit(address, kFontHeading + 8, text_w, 2);
+    m_font.DrawBold(surface, text_x, y + 52, kFontHeading + 8, kHeader, shown.c_str(), text_w);
+
+    /* Which file the page is for.  An unfinished upload turns "pick a file" into "pick *this*
+       file": the console is holding the bytes of the last attempt, and the page is where the
+       player lets it carry on. */
+    const bool resuming = for_upload && m_have_pending_task &&
+                          m_pending_task.source == install::TaskSource::HttpUpload;
+    const i18n::StringId hint = for_upload
+                                    ? (resuming ? i18n::StringId::InstallPageResumeHint
+                                                : i18n::StringId::InstallPagePickHint)
+                                    : i18n::StringId::InstallPagePasteHint;
+    m_font.Draw(surface, text_x, y + 122, kFontSmall, kSubtle, Tr(hint), text_w);
+    /* The waiting line: a filled dot, the way the app's other "this is a state, not a sentence"
+       lines are drawn, and the one thing the player needs to know while nothing happens. */
+    const int dot_centre_y = y + 172;
+    FillRoundedRect(surface, text_x, dot_centre_y - 6, 12, 12, 6, kHeader);
+    m_font.DrawBold(surface, text_x + 24,
+                    dot_centre_y - m_font.LineHeight(kFontBody) / 2, kFontBody, kText,
+                    Tr(i18n::StringId::InstallWaiting));
+
+    /* The code sits on its own white plate: a scanner wants a quiet zone, and the plate is what
+       gives it one without shrinking the code to a size nobody can scan across a room. */
+    FillRoundedRect(surface, plate_x, plate_y, plate_side, plate_side, 14,
+                    Color{0xFF, 0xFF, 0xFF, 0xFF});
+    StrokeRect(surface, plate_x, plate_y, plate_side, plate_side, 2, kBorder);
+    const int module = plate_side / (qr.Size() + 4); /* + 2 modules of quiet zone per side */
+    const int code_side = qr.Size() * module;
+    const int code_x = plate_x + (plate_side - code_side) / 2;
+    const int code_y = plate_y + (plate_side - code_side) / 2;
+    /* The painter draws its own white margin one module wide, so it is asked to start one module
+       up and left of the code: the plate is white too, which makes that margin invisible. */
+    DrawQrCode(surface, qr, code_x - module, code_y - module, module);
+    const std::string caption = Tr(i18n::StringId::InstallScanQr);
+    m_font.Draw(surface, plate_x + (plate_side - m_font.Measure(caption, kFontSmall)) / 2,
+                plate_y + plate_side + 6, kFontSmall, kSubtle, caption.c_str());
+    return y + card_h;
 }
 
 void App::DrawInstallUrlNotes(Surface surface, int y, bool with_range) {
@@ -4614,6 +5299,16 @@ void App::EnterInstallUrl() {
     m_install_error.clear();
     m_install_screen = InstallScreen::Url;
     RefreshNetworkState();
+}
+
+/* The upload source: the same question about the network, because the page is served over it, and
+   nothing else -- there is no console-side control on this screen at all. */
+void App::EnterInstallUpload() {
+    m_install_origin = InstallScreen::Upload;
+    m_install_error.clear();
+    m_install_screen = InstallScreen::Upload;
+    RefreshNetworkState();
+    Trace("install: source = upload");
 }
 
 void App::RefreshNetworkState() {
@@ -4714,14 +5409,11 @@ void App::RenderInstallConfirm(Surface surface) {
             break;
     }
     {
-        char buffer[32];
         /* The package's own size, not what is left to fetch: a package whose contents are all
            already on the console has nothing to fetch, and printing "0.0 GB" next to a name and a
            version reads as "this file is empty" (measured on the console). */
-        std::snprintf(buffer, sizeof(buffer), "%.1f GB",
-                      static_cast<double>(install::PackageBytes(m_game_install->Task())) /
-                          (1024.0 * 1024.0 * 1024.0));
-        row(i18n::StringId::ConfirmSize, buffer);
+        row(i18n::StringId::ConfirmSize,
+            util::FormatSize(install::PackageBytes(m_game_install->Task())));
     }
     /* Where this run would write, which is the choice the header's two blocks make -- naming the
        storage here is what makes that choice visible on the card the player actually reads. */
@@ -4800,6 +5492,8 @@ void App::RenderInstallResult(Surface surface) {
             reason = i18n::StringId::InstallNoContent;
         } else if (m_install_error == install::kErrorGameRunning) {
             reason = i18n::StringId::InstallGameRunning;
+        } else if (m_install_error == install::kErrorUploadStopped) {
+            reason = i18n::StringId::InstallUploadStopped;
         } else if (!m_install_error.empty() && m_install_error != "not-a-package" &&
                    m_install_error != "no file picked") {
             canned = false;
@@ -4857,49 +5551,9 @@ void App::RenderInstallResult(Surface surface) {
     m_font.Draw(surface, card_x + 40, card_top + 118, kFontBody + 4, kText,
                 m_font.Fit(what, kFontBody + 4, text_width, 1).c_str());
 
-    /* What happened. */
-    char happened[256];
-    switch (status.stage) {
-        case install::InstallStage::Skipped: {
-            if (status.installed_version > status.package_version) {
-                /* The name the console gives the version it has -- never the title version number,
-                   which is Nintendo's build id (3.0.3 is 0x220000, i.e. "34.0.0" if read as one).
-                   When the console has no name for it, the sentence simply leaves the number
-                   out instead of inventing one. */
-                if (status.installed_version_text.empty()) {
-                    std::snprintf(happened, sizeof(happened), "%s",
-                                  Tr(i18n::StringId::ResultNewerVersionPlain));
-                } else {
-                    std::snprintf(happened, sizeof(happened),
-                                  Tr(i18n::StringId::ResultNewerVersionDetail),
-                                  status.installed_version_text.c_str());
-                }
-            } else {
-                std::snprintf(happened, sizeof(happened), "%s",
-                              Tr(i18n::StringId::ResultSameVersionDetail));
-            }
-            break;
-        }
-        default:
-            if (status.stage != install::InstallStage::Done) {
-                std::snprintf(happened, sizeof(happened), "%s",
-                              m_install_error.empty() ? "the install did not finish" : m_install_error.c_str());
-                break;
-            }
-            [[fallthrough]];
-        case install::InstallStage::Done:
-        {
-            char size[32];
-            std::snprintf(size, sizeof(size), "%.1f GB",
-                          static_cast<double>(status.total_bytes) / (1024.0 * 1024.0 * 1024.0));
-            std::snprintf(happened, sizeof(happened), Tr(i18n::StringId::ResultWroteLine),
-                          Tr(m_install_target == install::TargetStorage::Nand
-                                 ? i18n::StringId::StorageSystem
-                                 : i18n::StringId::StorageSdCard),
-                          status.total_contents, size);
-            break;
-        }
-    }
+    /* What happened: the same line the browser page shows (InstallOutcomeLine), so the two screens
+       cannot describe one run two ways. */
+    const std::string happened = InstallOutcomeLine();
     /* Wrapped to the card: a diagnostic like "writing into the placeholder failed (0x307202) at
        offset ..." ran off the screen edge when it was drawn as one line.  The "what now" line
        below then follows however many lines that took (never higher than it used to sit): the

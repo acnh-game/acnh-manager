@@ -80,6 +80,18 @@ struct TaskContent {
     bool skipped{false}; /* already on the console, or a kind this run does not install */
 };
 
+/* The content being written, as the 1-based number both the console card and the page show.
+   `done_contents` only counts finished ones; at the end done == total, so the result is the
+   total.  One function for both screens keeps "2 / 3" from meaning different things on each
+   (2026-10-19). */
+inline int CurrentContentNumber(int done_contents, int total_contents) {
+    if (total_contents <= 0) {
+        return 0;
+    }
+    const int current = done_contents + 1;
+    return current > total_contents ? total_contents : current;
+}
+
 struct InstallTask {
     std::string task_id;   /* opaque, handed to the browser page; empty for local installs */
     TaskSource source{TaskSource::None};

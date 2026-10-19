@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <tuple>
 #include <regex>
 #include <set>
@@ -207,6 +209,18 @@ void Check(bool condition, const char *expr, const char *file, int line) {
 }
 
 #define CHECK(expr) Check((expr), #expr, __FILE__, __LINE__)
+
+/* A checked-in file out of the repository, as bytes.  The tests run from `tests/`, so the path is
+   relative to that; a missing file is a failure of the test's own setup (the file is in the repo,
+   not in the environment), which is why the caller checks for the empty string. */
+std::string ReadRepoFile(const char *relative_path) {
+    std::ifstream input(std::string("../") + relative_path, std::ios::binary);
+    if (!input) {
+        std::printf("test input not found: %s\n", relative_path);
+        return std::string();
+    }
+    return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+}
 
 /* printf conversions of a string, with the literal %% escape ignored: used to prove the i18n
    columns agree, so a translation can never drop an argument the caller still passes. */
@@ -1604,8 +1618,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::PageNoteHostScreen) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::PageNoteHostScreen); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::PageUploadFailed) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::PageUploadFailed); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -1894,6 +1908,7 @@ void TestUploadProtocol() {
 void TestHttpPage() {
     using acnh_manager::net::BuildPageLabelsJson;
     using acnh_manager::net::BuildResponseHead;
+    using acnh_manager::net::DrainBytes;
     using acnh_manager::net::EscapeForJs;
     using acnh_manager::net::SubstituteLabels;
 
@@ -1910,6 +1925,16 @@ void TestHttpPage() {
     CHECK(SubstituteLabels("no marker here", "__X__", "L") == "no marker here");
     CHECK(SubstituteLabels("__X__", "__X__", "") == "");
 
+    /* A refusal must swallow the body it is refusing (see DrainBytes): the counts are the head's,
+       what is already buffered, and the answer is never negative -- a request with no body, or one
+       whose bytes are all in hand, has nothing to drain. */
+    CHECK(DrainBytes(0, 0, 0) == 0);
+    CHECK(DrainBytes(20, 20, 0) == 0);
+    CHECK(DrainBytes(20, 20 + 1024, 4096) == 3072); /* 1 KB of the 4 KB body is in hand */
+    CHECK(DrainBytes(20, 20 + 4096, 4096) == 0); /* all of it is in hand */
+    CHECK(DrainBytes(20, 20 + 8192, 4096) == 0); /* more than the head promised: still zero */
+    CHECK(DrainBytes(4, 2, 4096) == 4096); /* a body that has not started arriving */
+
     /* One response, framed so a browser cannot misread it: the status line first, the length that
        matches the body, and a close. */
     const std::string head = BuildResponseHead(200, "OK", "text/html; charset=utf-8", 42);
@@ -1917,18 +1942,159 @@ void TestHttpPage() {
     CHECK(head.find("Content-Type: text/html; charset=utf-8\r\n") != std::string::npos);
     CHECK(head.find("Content-Length: 42\r\n") != std::string::npos);
     CHECK(head.find("Connection: close\r\n") != std::string::npos);
+    /* Nothing this console serves is worth keeping, and the belt is for clients that only know the
+       older spelling of "do not keep this" (2026-10-17). */
+    CHECK(head.find("Cache-Control: no-store, no-cache, must-revalidate\r\n") != std::string::npos);
+    CHECK(head.find("Pragma: no-cache\r\n") != std::string::npos);
+    CHECK(head.find("Expires: 0\r\n") != std::string::npos);
     CHECK(head.size() >= 4);
     CHECK(head.compare(head.size() - 4, 4, "\r\n\r\n") == 0);
 
-    /* The labels object: every key the page asks for, and nothing a JS string cannot carry. */
+    /* The labels object: every key the page asks for, and nothing a JS string cannot carry.  The
+       keys come out of the page itself rather than from a list typed here: a key the console does
+       not send renders as the key on the phone (which is how "pageUrlPlaceholder" reached a real
+       browser), and only the page knows what it started asking for. */
+    const std::string page = ReadRepoFile("data/installer_page.html.bin");
+    CHECK(!page.empty());
+    std::set<std::string> asked;
+    for (std::size_t at = 0; (at = page.find("t(\"", at)) != std::string::npos;) {
+        const std::size_t start = at + 3;
+        const std::size_t end = page.find('"', start);
+        CHECK(end != std::string::npos);
+        /* Only a call: `fetchWithTimeout("cancel")` also contains `t("`, and a scan that takes its
+           keys would have the test demanding labels for API paths.  A call sits after something
+           that is not part of a name. */
+        const char before = at > 0 ? page[at - 1] : ' ';
+        const bool call = !((before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z') ||
+                            (before >= '0' && before <= '9') || before == '_');
+        if (call) {
+            asked.insert(page.substr(start, end - start));
+        }
+        at = start;
+    }
+    /* A scan that found nothing would satisfy every check below, so it has to find the page's
+       labels (the page has more than thirty of them, all of this shape). */
+    CHECK(asked.size() > 25);
+    CHECK(asked.count("pageStep1") == 1);
+
     const std::string labels = BuildPageLabelsJson();
     CHECK(labels.size() > 2);
     CHECK(labels.front() == '{');
     CHECK(labels.back() == '}');
-    for (const char *key : {"pageTitle", "pageStep1", "pageChooseFile", "pageCancel",
-                            "pageOffline", "pageNoteHostScreen"}) {
-        CHECK(labels.find(std::string("\"") + key + "\":\"") != std::string::npos);
+    for (const std::string &key : asked) {
+        CHECK(labels.find("\"" + key + "\":\"") != std::string::npos);
     }
+    /* The page substitutes a label with a two-token printf (`%s`, `%d`) and collapses `%%`; any
+       other percent in a label reaches the phone as its own source text, which is how "第 %d / %d
+       个内容" and "已发送 %d%%" got onto a real screen (2026-10-16). */
+    for (std::size_t at = 0; (at = labels.find('%', at)) != std::string::npos; at += 2) {
+        const char next = at + 1 < labels.size() ? labels[at + 1] : '\0';
+        CHECK(next == 's' || next == 'd' || next == '%');
+    }
+    /* And the substitution those labels are written for is the one the page actually carries. */
+    CHECK(page.find("replace(/%[sd]/") != std::string::npos);
+    CHECK(page.find("replace(/%%/g") != std::string::npos);
+    /* Every `__ACNH_…__` the page carries is one the server substitutes.  A marker nobody replaces
+       is printed to the player as its own name -- the same failure as a missing label, and one this
+       page has already shipped once (`pageUrlPlaceholder`, 2026-10-16). */
+    const char *const markers[] = {acnh_manager::net::kPageLabelsMarker,
+                                   acnh_manager::net::kPageLangMarker,
+                                   acnh_manager::net::kPageAddressMarker,
+                                   acnh_manager::net::kPageVersionMarker};
+    int marker_count = 0;
+    for (std::size_t at = 0; (at = page.find("__ACNH_", at)) != std::string::npos; ++marker_count) {
+        bool known = false;
+        for (const char *marker : markers) {
+            const std::string token(marker);
+            if (page.compare(at, token.size(), token) == 0) {
+                known = true;
+                at += token.size();
+                break;
+            }
+        }
+        CHECK(known);
+        if (!known) {
+            at += 8;
+        }
+    }
+    CHECK(marker_count == 4); /* three in the header plus the label object */
+    /* Every request the page makes carries a deadline: a bare `await fetch(` is how a console that
+       went quiet for a few seconds filled the browser's six connections per host, after which the
+       upload loop could not send a part at all (Chrome, 2026-10-16). */
+    CHECK(page.find("await fetch(") == std::string::npos);
+    CHECK(page.find("fetchWithTimeout(") != std::string::npos);
+    /* A finished state only ends the run it belongs to: the console keeps reporting the last run's
+       result while its result screen is up, and a page that took that for its own stopped posting
+       parts the moment the player picked the next file (Chrome, 2026-10-16). */
+    CHECK(page.find("function runOver(") != std::string::npos);
+    CHECK(page.find("runOver(status, taskId)") != std::string::npos);
+    /* A page the browser has pushed to the background stops running its timers and its requests --
+       which from the console looks like "the browser stopped sending" with no explanation on either
+       screen.  The page says it instead (Chrome and the in-app browser, 2026-10-16). */
+    CHECK(page.find("visibilitychange") != std::string::npos);
+    CHECK(page.find("t(\"pageHidden\")") != std::string::npos);
+    /* The cover is keyed to the *package*, not to the <img> element: keying it to the element kept
+       the previous package's picture on the new package's card (2026-10-17). */
+    CHECK(page.find("dataset.ready") == std::string::npos);
+    CHECK(page.find("dataset.key") != std::string::npos);
+    /* A page already loaded cannot be un-loaded by a cache header: it has to notice the console's
+       build changed and reload itself, and only when nothing is running (2026-10-17). */
+    CHECK(page.find("status.build !== BUILD_TEXT") != std::string::npos);
+    CHECK(page.find("status.lang !== PAGE_LANG") != std::string::npos);
+    CHECK(page.find("location.reload()") != std::string::npos);
+    /* The on-page debug trace (`?debug=1`): a frozen tab has to show what it was doing, without
+       devtools and without the console's log (2026-10-17). */
+    CHECK(page.find("id=\"debug\"") != std::string::npos);
+    CHECK(page.find("(?debug=1)") != std::string::npos || page.find("debug") != std::string::npos);
+    CHECK(page.find("URLSearchParams(location.search).get(\"debug\")") != std::string::npos);
+    CHECK(page.find("sessionStorage.setItem(\"acnhDebug\"") != std::string::npos);
+    CHECK(page.find("dbg(\"read \"") != std::string::npos);
+    CHECK(page.find("dbg(\"part \"") != std::string::npos);
+    /* One click to hand the trace over (the clipboard API needs https, so the old command is the
+       fallback), and a guard against two pages feeding one console at once. */
+    CHECK(page.find("execCommand(\"copy\")") != std::string::npos);
+    CHECK(page.find("BroadcastChannel(\"acnh-installer\")") != std::string::npos);
+    CHECK(page.find("t(\"pagePeerActive\")") != std::string::npos);
+    /* A network error keeps the loop going for a minute (the console waits ninety seconds), and the
+       card says what the page is doing instead of one frozen sentence (2026-10-17). */
+    CHECK(page.find("stallAttempts > 30") != std::string::npos);
+    /* One line, one writer at a time: the "sending" wording is gone, the "console is working" line
+       only appears before anything has been sent, and only a real step rewrites the percentage
+       (2026-10-17: the same line flickered between three sentences every 90 ms). */
+    CHECK(page.find("pageUploadSending") == std::string::npos);
+    CHECK(page.find("if (sent_max === 0)") != std::string::npos);
+    CHECK(page.find("t(\"pageUploadInfo\")") != std::string::npos);
+    CHECK(page.find("t(\"pageUploadProgress\", percent)") == std::string::npos);
+    /* No looping silent media, ever: it was the "keep the phone awake" trick, and it froze the whole
+       browser process (media service) instead -- minutes of no network, no tab switching, nothing
+       (Chrome and the in-app browser, 2026-10-17). */
+    CHECK(page.find("new Audio(") == std::string::npos);
+    CHECK(page.find("keepAwake") == std::string::npos);
+    /* Clearing the trace: the panel, the stored copy, and nothing else (2026-10-17). */
+    CHECK(page.find("id=\"debugClear\"") != std::string::npos);
+    CHECK(page.find("sessionStorage.removeItem(\"acnhDebug\")") != std::string::npos);
+    /* The page is the console's remote mirror: the header's target blocks, the footer's build
+       stamp, and a confirm card whose button starts the same run the console's Ⓐ does.  It has no
+       cancel of its own -- neither does the console's progress screen (2026-10-19). */
+    CHECK(page.find("id=\"chipSd\"") != std::string::npos);
+    CHECK(page.find("id=\"chipNand\"") != std::string::npos);
+    CHECK(page.find("id=\"confirmCard\"") != std::string::npos);
+    CHECK(page.find("id=\"startBtn\"") != std::string::npos);
+    CHECK(page.find("fetchWithTimeout(\"start\"") != std::string::npos);
+    CHECK(page.find("fetchWithTimeout(\"target\"") != std::string::npos);
+    CHECK(page.find("id=\"build\"") != std::string::npos);
+    CHECK(page.find("id=\"resultBack\"") != std::string::npos);
+    CHECK(page.find("id=\"confirmBack\"") != std::string::npos);
+    CHECK(page.find("fetchWithTimeout(\"back\"") != std::string::npos);
+    /* A page that owns an upload task must not offer a second package while the console is still
+       reading the first one's header. */
+    CHECK(page.find("const starting = uploading && !confirming && !finished") != std::string::npos);
+    CHECK(page.find("chooseBtn\").disabled = starting") != std::string::npos);
+    CHECK(page.find("fileInput\").disabled = starting") != std::string::npos);
+    CHECK(page.find("id=\"pickSpinner\"") != std::string::npos);
+    CHECK(page.find("function setNote(text, loading = false)") != std::string::npos);
+    CHECK(page.find("id=\"cancelCard\"") == std::string::npos);
+    CHECK(page.find("pageCancel") == std::string::npos);
     CHECK(labels.find('\n') == std::string::npos);
     CHECK(labels.find("</") == std::string::npos);
 }
@@ -2116,9 +2282,24 @@ void TestFormatSize() {
     CHECK(FormatSize(1024 * 1024) == "1.0 MB");
     /* The two packages on the card: the same numbers the confirm screen prints. */
     CHECK(FormatSize(1512448) == "1.4 MB");
+    /* A 19.6 MB update is a real package, not "0.0 GB": the install screens use this formatter so
+       the console and the page cannot disagree about it (2026-10-19). */
+    CHECK(FormatSize(20531712) == "19.6 MB");
     CHECK(FormatSize(4231129936ULL) == "3.9 GB");
     CHECK(FormatSize(4650239771ULL) == "4.3 GB");
     CHECK(FormatSize(1024ULL * 1024 * 1024) == "1.0 GB");
+}
+
+/* The console and the page both number the content being written (not the finished count): with
+   3 contents, while the second is in hand both say "2 / 3"; the last one says "3 / 3". */
+void TestCurrentContentNumber() {
+    using acnh_manager::install::CurrentContentNumber;
+
+    CHECK(CurrentContentNumber(0, 0) == 0);
+    CHECK(CurrentContentNumber(0, 3) == 1);
+    CHECK(CurrentContentNumber(1, 3) == 2);
+    CHECK(CurrentContentNumber(2, 3) == 3);
+    CHECK(CurrentContentNumber(3, 3) == 3);
 }
 
 /* Which package kinds the agent's version gate is about: only the game and its update change the
@@ -2944,6 +3125,7 @@ int main() {
     TestUploadProtocol();
     TestPeerRing();
     TestFormatSize();
+    TestCurrentContentNumber();
     TestMetaTypeCarriesGameVersion();
     TestHomeState();
     TestSettings();

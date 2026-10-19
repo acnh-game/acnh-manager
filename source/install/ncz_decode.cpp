@@ -52,6 +52,9 @@ bool NczDecoder::DecodeUntil(std::uint64_t need_until, std::string *error) {
         return false;
     }
     while (m_decoded_end < need_until) {
+        /* One block of decompression is a long stretch for the thread that also feeds the browser
+           page: let it serve whatever is waiting before going on (see ContainerReader::Service). */
+        m_reader.Service();
         if (m_input_pos >= m_input.size()) {
             if (m_source_exhausted) {
                 *error = "the compressed content ended before the whole NCA was decoded";

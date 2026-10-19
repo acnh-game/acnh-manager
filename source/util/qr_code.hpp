@@ -23,6 +23,9 @@ struct QrCode {
     std::vector<std::uint8_t> bits; /* (size * size + 7) / 8 bytes, MSB first */
 
     bool Empty() const { return size <= 0; }
+    /* Modules per side.  The code and the embedded mini-app matrix are painted by one loop
+       (`DrawQrCode` in the app), so both expose the same `Size()` / `At(row, column)` pair. */
+    int Size() const { return size; }
     bool At(int row, int column) const;
     int ByteCount() const { return (size * size + 7) / 8; }
 };

@@ -6,44 +6,183 @@
 <title>ACNH-Manager</title>
 <style>
   :root { --teal:#2fbfa8; --teal-dark:#259b88; --cream:#f6f1e3; --card:#fffdf7;
-          --border:#d8cfb6; --text:#2b2b2b; --subtle:#6b6b6b; --warn:#9a6200; --bad:#c0392b; }
+          --border:#d8cfb6; --text:#2b2b2b; --subtle:#6b6b6b; --warn:#9a6200; --bad:#c0392b;
+          --good:#1b7f5a; }
   * { box-sizing:border-box; }
+  /* Some Android browsers (OPPO's included) inflate text in narrow columns by default, which made
+     the confirm buttons huge and wrapped.  Keep the page's own pixel sizes instead. */
+  html { -webkit-text-size-adjust:100%; text-size-adjust:100%; }
   body { margin:0; background:var(--cream); color:var(--text);
          font-family:-apple-system,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif; }
-  header { background:var(--teal); color:#fff; padding:18px 20px; }
+  header { background:var(--teal); color:#fff; padding:18px 20px 14px; position:relative;
+           display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between;
+           gap:10px 20px; }
+  header .brand { min-width:0; }
   header h1 { margin:0; font-size:24px; font-weight:600; }
   header .sub { margin-top:6px; font-size:13px; color:#d5f2ec; }
-  main { padding:16px; max-width:760px; margin:0 auto; }
+  /* The page could not reach the console: this is not a normal sub-line, and it must not read like
+     one.  Amber on the teal header, bold, in a pill. */
+  header .sub.offline { display:inline-block; margin-top:8px; padding:4px 10px; border-radius:999px;
+                        background:rgba(0,0,0,.22); color:#ffe6a7; font-weight:700; }
+  /* The console's header, as a phone can hold it: "install to:" and the two storage blocks, each one
+     tappable.  Wide screens put them on one line, narrow ones wrap them -- never a sideways scroll. */
+  .targets { display:flex; flex-wrap:wrap; gap:8px; align-items:stretch; margin-left:auto; }
+  .targets .targetLabel { align-self:center; font-weight:700; font-size:14px; color:#fff; }
+  .chip { display:flex; flex-direction:column; gap:6px; min-width:132px; padding:7px 10px;
+          border:2px solid rgba(255,255,255,.35); border-radius:12px; background:rgba(255,255,255,.10);
+          color:#fff; font:inherit; font-size:12px; line-height:1.25; text-align:left; cursor:pointer; }
+  .chip.on { border-color:#fff; background:rgba(255,255,255,.24); box-shadow:0 3px 12px rgba(0,0,0,.18); }
+  .chip:disabled { opacity:.45; cursor:default; }
+  /* A span, not <i>: OPPO's browser collapsed the italic element's flex item to zero height. */
+  .chipBar { display:block; flex:0 0 5px; width:100%; height:5px; min-height:5px;
+             border-radius:3px; background:rgba(255,255,255,.28); overflow:hidden; }
+  .chipFill { display:block; width:0; height:100%; background:#fff; }
+  /* The console keeps its title on the left and the two storage blocks on the right of the same
+     line.  A phone cannot; there the blocks take a line of their own. */
+  @media (max-width:640px) {
+    .targets { flex-basis:100%; margin-left:0; margin-top:4px; flex-wrap:nowrap; gap:6px; }
+    .targets .targetLabel { font-size:12px; white-space:nowrap; }
+    .chip { flex:1 1 0; min-width:0; padding:5px 6px; font-size:10.5px; border-radius:10px; }
+    /* One line even on a 375px screen: a wrapped size made the SD block taller than the system
+       block and pushed the whole header down.  Anything that still does not fit is ellipsized;
+       the full text stays available to assistive tech and the block remains one row high. */
+    .chip > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .chipBar { flex-basis:4px; height:4px; min-height:4px; }
+  }
+  /* The console's footer: what this screen is waiting for on the left, the build stamp on the right
+     (the same string the console prints -- tap it to copy; phones cannot hover). */
+  footer { position:fixed; left:0; right:0; bottom:0; z-index:50; display:flex; gap:12px;
+           flex-wrap:nowrap; justify-content:space-between; align-items:center;
+           padding-top:8px;
+           padding-bottom:calc(8px + env(safe-area-inset-bottom));
+           /* Rounded phone corners can clip the first and last characters of a full-width bar. */
+           padding-left:max(24px, env(safe-area-inset-left));
+           padding-right:max(24px, env(safe-area-inset-right));
+           background:rgba(255,253,247,.97); border-top:2px solid var(--border);
+           font-size:12px; color:var(--subtle); }
+  footer .state { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* One line, always.  The stamp is truncated with an ellipsis; its full text stays in the element
+     and a tap copies it, so a phone does not spend two extra lines on a build id. */
+  footer .stamp { flex:0 1 auto; min-width:0; max-width:58%; text-align:right; color:#8a8377; cursor:copy;
+                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+                  font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; }
+  /* The debug trace: every step the page takes, with the millisecond it took, so a tab that has
+     stopped answering still shows where it stopped.  Only with `?debug=1` in the address (2026-10-17:
+     a frozen tab left nothing behind to look at). */
+  #debug { position:fixed; right:10px; bottom:54px; width:min(560px,52vw); max-height:46vh;
+           background:rgba(18,20,22,.94); border:1px solid #3b4a48; border-radius:12px;
+           z-index:99; box-shadow:0 10px 30px rgba(0,0,0,.25); display:flex; flex-direction:column; }
+  #debug .debugActions { display:flex; gap:8px; justify-content:flex-end; margin:8px 10px 0; }
+  #debug button { padding:4px 10px; font:11px/1.4 inherit;
+                  background:#2b4a44; color:#cdeee4; border:1px solid #3b6a60; border-radius:8px;
+                  cursor:pointer; }
+  #debugText { margin:6px 0 0; padding:0 12px 10px; overflow:auto; color:#9fe8d6;
+               font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; white-space:pre-wrap; }
+  /* The footer is fixed and always on screen: this is the room it gets.  It must live in this rule
+     (the one that actually applies) -- a `padding-bottom` declared before the shorthand `padding`
+     here was silently replaced by 16px, and the last notes line sat under the bar (2026-10-19). */
+  main { padding:16px 16px calc(80px + env(safe-area-inset-bottom));
+         max-width:760px; margin:0 auto; }
   .card { background:var(--card); border:2px solid var(--border); border-radius:18px;
           padding:18px; margin-bottom:16px; }
   .card h2 { margin:0 0 12px; font-size:15px; font-weight:600; color:var(--subtle); }
   .drop { border:2px dashed var(--border); border-radius:14px; padding:26px 16px; text-align:center; }
   .drop.over { border-color:var(--teal); background:#f2fbf8; }
+  .drop.disabled { opacity:.55; }
   button { font:inherit; border:0; border-radius:14px; padding:14px 18px; background:var(--teal);
            color:#fff; font-weight:600; cursor:pointer; }
   button:disabled { background:#c9c2ae; cursor:default; }
-  button.danger { background:#fff; color:var(--bad); border:2px solid var(--bad); }
+  button.secondary { background:var(--card); color:var(--text); border:2px solid var(--border); }
   button.block { width:100%; }
+  .buttonRow { display:flex; gap:10px; margin-top:14px; }
+  .buttonRow #startBtn { flex:2 1 0; }
+  .buttonRow #confirmBack { flex:1 1 0; padding-left:10px; padding-right:10px; }
+  /* Explicit button metrics: `font:inherit` let Android text autosizing turn "开始安装" into a
+     two-line headline.  These labels must stay one line beside each other. */
+  .buttonRow button { font-size:15px; line-height:1.25; white-space:nowrap; padding:12px 8px; }
   input[type=text] { width:100%; font:inherit; padding:12px 14px; border:2px solid var(--border);
                      border-radius:12px; background:#fdfbf4; margin-bottom:10px; }
+  input[type=text]:disabled { background:#f0ece0; color:#9a9588; }
   .row { display:flex; gap:10px; align-items:center; }
   .bar { height:14px; border-radius:7px; background:#ece7d8; overflow:hidden; }
   .bar > i { display:block; height:100%; width:0; background:var(--teal); }
+  .progressLine { display:flex; align-items:center; gap:14px; margin-top:12px; }
+  .progressLine .bar { flex:1; }
+  #progressPercent { min-width:4.2em; text-align:right; font-size:24px; font-weight:700;
+                     font-variant-numeric:tabular-nums; }
   .big { font-size:26px; font-weight:700; margin:10px 0 6px; }
   .muted { color:var(--subtle); font-size:13px; }
   .warn { color:var(--warn); font-size:13px; }
+  .spinner { display:inline-block; width:14px; height:14px; margin-right:8px;
+             vertical-align:-2px; border:2px solid rgba(154,98,0,.25);
+             border-top-color:var(--warn); border-radius:50%;
+             animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   .bad { color:var(--bad); font-size:13px; }
   .mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; word-break:break-all; }
   ul.notes { padding-left:18px; color:var(--subtle); font-size:13px; line-height:1.7; }
   .hidden { display:none !important; }
+  .cover { width:160px; height:160px; border-radius:14px; border:2px solid var(--border);
+           object-fit:cover; margin-right:16px; flex:0 0 auto; }
+  /* The console draws the text column on the left and the cover on the right of every install
+     card (confirm, progress, result).  Keep that order here too. */
+  .media-right { flex-direction:row-reverse; }
+  .media-right .cover { margin-right:0; margin-left:16px; }
+  /* The text column must be allowed to shrink; without this a long unbroken error string (the
+     failure result's hex offset) gives it its min-content width and it overflows to the left of a
+     row-reverse card (OPPO browser, 2026-10-19). */
+  .mediaText { flex:1 1 0; min-width:0; }
+  #resultWritten, #resultNow, #resultKept { overflow-wrap:anywhere; word-break:break-word; }
+  @media (max-width:520px) {
+    .cover { width:104px; height:104px; }
+    .media-right .cover { margin-left:12px; }
+    /* The percentage is a fixed column beside the bar.  At 24px it ate half the text column on a
+       phone and left the bar tiny; this keeps the bar the dominant element. */
+    #progressPercent { font-size:18px; min-width:2.6em; }
+    .progressLine { gap:10px; }
+    .progressLine .bar { height:16px; }
+  }
+  .name { font-size:17px; font-weight:600; }
+  /* The console's result title is the biggest thing on the card, in the result's colour. */
+  #resultTitle { margin:0 0 18px; font-size:clamp(30px,5.5vw,40px); font-weight:700;
+                 line-height:1.15; color:var(--good); }
+  #resultTitle.bad { color:var(--bad); }
+  #resultSummary { font-size:clamp(19px,3.2vw,24px); font-weight:600; }
+  #confirmSummary { font-size:clamp(22px,4vw,30px); font-weight:600; }
+  #confirmTitle { font-size:15px; color:var(--subtle); font-weight:600; }
+  #stageText { font-size:22px; font-weight:700; color:var(--text); margin:2px 0 6px; }
+  #progressName { font-size:20px; }
+  #progressBytes, #progressContents, #resultWritten, #resultNow { font-size:15px; line-height:1.55; }
+  #confirmSize, #confirmTarget, #confirmResume, #confirmAgent { font-size:15px; line-height:1.55; }
+  #resultNow.good { color:var(--good); }
+  #resultKept { margin-top:6px; }
+  .label { color:var(--subtle); font-size:13px; margin-top:10px; }
+  /* Label and value on one line when they fit (they almost always do), instead of a label line
+     followed by a value line. */
+  .kv { display:flex; gap:10px; align-items:baseline; margin-top:10px; }
+  .kv .label { margin-top:0; white-space:nowrap; }
+  .kv .value { color:var(--subtle); font-size:15px; line-height:1.5; min-width:0; }
   code.addr { background:#fdfbf4; border:2px solid var(--border); border-radius:10px;
               padding:2px 8px; }
 </style>
 </head>
 <body>
 <header>
-  <h1 id="title">ACNH-Manager</h1>
-  <div class="sub" id="subtitle"></div>
+  <div class="brand">
+    <h1 id="title">ACNH-Manager</h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <div class="targets" id="targets">
+    <span class="targetLabel" id="targetsLabel"></span>
+    <button class="chip" id="chipSd" type="button">
+      <span id="chipSdText"></span>
+      <span class="chipBar"><span class="chipFill" id="chipSdBar"></span></span>
+    </button>
+    <button class="chip" id="chipNand" type="button">
+      <span id="chipNandText"></span>
+      <span class="chipBar"><span class="chipFill" id="chipNandBar"></span></span>
+    </button>
+  </div>
 </header>
 <main>
   <div class="card hidden" id="queueCard">
@@ -59,7 +198,9 @@
       <div class="muted" id="dropHint" style="margin-top:12px"></div>
       <div class="muted" id="formats" style="margin-top:6px"></div>
     </div>
-    <div class="warn" id="pickNote" style="margin-top:12px"></div>
+    <div class="warn" id="pickNote" style="margin-top:12px">
+      <span class="spinner hidden" id="pickSpinner"></span><span id="pickNoteText"></span>
+    </div>
   </div>
 
   <div class="card" id="urlCard">
@@ -69,50 +210,226 @@
   </div>
 
   <div class="card hidden" id="progressCard">
-    <h2 id="stageText"></h2>
-    <div class="mono" id="progressName"></div>
-    <div class="bar" style="margin-top:12px"><i id="progressBar"></i></div>
-    <div class="big" id="progressPercent">0%</div>
-    <div class="muted" id="progressBytes"></div>
-    <div class="muted" id="progressContents" style="margin-top:6px"></div>
-    <div class="mono" id="progressFile" style="margin-top:6px"></div>
-    <div class="muted" id="progressRate" style="margin-top:6px"></div>
-  </div>
-
-  <div class="card hidden" id="cancelCard">
-    <button class="danger block" id="cancelBtn"></button>
-    <div class="muted" id="cancelNote" style="margin-top:10px"></div>
+    <div class="row media-right" style="align-items:flex-start">
+      <img id="cover" class="cover hidden" alt="">
+      <div class="mediaText">
+        <div class="name" id="progressName"></div>
+        <h2 id="stageText"></h2>
+        <div class="muted" id="progressContents"></div>
+        <div class="mono" id="progressFile" style="margin-top:4px"></div>
+        <div class="progressLine">
+          <div class="bar"><i id="progressBar"></i></div>
+          <div id="progressPercent">0%</div>
+        </div>
+        <div class="muted" id="progressBytes"></div>
+        <div class="muted" id="progressRate" style="margin-top:6px"></div>
+      </div>
+    </div>
   </div>
 
   <div class="card hidden" id="resultCard">
     <h2 id="resultTitle"></h2>
-    <div class="muted" id="resultDetail"></div>
+    <div class="row media-right" style="align-items:flex-start">
+      <img id="resultCover" class="cover hidden" alt="">
+      <div class="mediaText">
+        <div class="name" id="resultSummary"></div>
+        <div class="muted" id="resultWritten"></div>
+        <div class="muted" id="resultNow"></div>
+        <div class="warn hidden" id="resultKept"></div>
+      </div>
+    </div>
+    <!-- The console leaves the result screen with Ⓑ; the page offers the same step as a button so a
+         phone can start the next package without walking back to the console. -->
+    <button class="secondary block" id="resultBack" style="margin-top:18px"></button>
+    <div class="muted" id="resultNote" style="margin-top:8px"></div>
+  </div>
+
+  <!-- The console's confirm screen, mirrored: the package it has read, where it would write, and the
+       one button that starts it -- the same action as the console's Ⓐ (2026-10-19). -->
+  <div class="card hidden" id="confirmCard">
+    <h2 id="confirmTitle"></h2>
+    <div class="row media-right" style="align-items:flex-start; margin-top:12px">
+      <img id="confirmCover" class="cover hidden" alt="">
+      <div class="mediaText">
+        <div class="name" id="confirmSummary"></div>
+        <div class="kv">
+          <span class="label" id="confirmSizeLabel"></span>
+          <span class="value" id="confirmSize"></span>
+        </div>
+        <div class="kv">
+          <span class="label" id="confirmTargetLabel"></span>
+          <span class="value" id="confirmTarget"></span>
+        </div>
+        <div class="muted" id="confirmResume" style="margin-top:8px"></div>
+        <div class="muted" id="confirmAgent" style="margin-top:8px"></div>
+        <div class="buttonRow">
+          <button id="startBtn"></button>
+          <button class="secondary" id="confirmBack"></button>
+        </div>
+        <div class="muted" id="confirmNote" style="margin-top:10px"></div>
+      </div>
+    </div>
   </div>
 
   <ul class="notes" id="notes"></ul>
 </main>
+<footer>
+  <span class="state" id="stateText"></span>
+  <span class="stamp" id="build"></span>
+</footer>
+<div id="debug" class="hidden"><div class="debugActions"><button id="debugClear" type="button"></button><button id="debugCopy" type="button"></button></div><pre id="debugText"></pre></div>
 <input type="file" id="fileInput" class="hidden" accept=".nsp,.nsz,.xci,.xcz,.msp">
 <script>
 const L = __ACNH_LABELS__;
 const PORT_TEXT = "__ACNH_ADDRESS__";
+const BUILD_TEXT = "__ACNH_VERSION__";
+/* The labels below were injected in this language when the page was served. */
+const PAGE_LANG = document.documentElement.lang;
+/* Debug trace, enabled with `?debug=1` in the address.  Every step is stamped twice: the wall clock
+   (to line it up with the console's log) and the seconds since this page loaded (to see a stall for
+   what it is).  The lines are kept in `sessionStorage`, so a reload -- which is what a frozen tab
+   usually gets -- still shows what happened before it died (2026-10-17). */
+const DEBUG_ON = new URLSearchParams(location.search).get("debug") === "1";
+const debugEl = document.getElementById("debug");
+const debugText = document.getElementById("debugText");
+let debugLines = [];
+if (DEBUG_ON) {
+  debugEl.classList.remove("hidden");
+  try { debugLines = (sessionStorage.getItem("acnhDebug") || "").split("\n").filter(Boolean); } catch {}
+  if (debugLines.length) debugText.textContent = debugLines.join("\n");
+}
+function dbg(message) {
+  if (!DEBUG_ON) return;
+  const clock = new Date().toTimeString().slice(0, 8) + "." + String(new Date().getMilliseconds()).padStart(3, "0");
+  debugLines.push(`${clock} +${(performance.now() / 1000).toFixed(2)}s  ${message}`);
+  if (debugLines.length > 240) debugLines.splice(0, debugLines.length - 240);
+  debugText.textContent = debugLines.join("\n");
+  debugText.scrollTop = debugText.scrollHeight;
+  /* Storage lives in the browser process, and this page talks to it while the browser is under
+     strain: one write a second keeps the trace without turning every line into an IPC round trip. */
+  const now = Date.now();
+  if (now - dbgLastSave > 1000) {
+    dbgLastSave = now;
+    try { sessionStorage.setItem("acnhDebug", debugText.textContent); } catch {}
+  }
+}
+let dbgLastSave = 0;
+/* One click to hand the trace over.  `navigator.clipboard` needs a secure context, and this page is
+   plain http on a LAN address, so the old `execCommand("copy")` is the fallback that actually works
+   here (2026-10-17). */
+document.getElementById("debugCopy").textContent = t("pageCopyLog");
+document.getElementById("debugClear").textContent = t("pageClearLog");
+/* Clear the panel and what it keeps: a run that went wrong should not colour the next one, and the
+   stored copy is the one that survives a reload (2026-10-17). */
+document.getElementById("debugClear").addEventListener("click", () => {
+  debugLines = [];
+  debugText.textContent = "";
+  try { sessionStorage.removeItem("acnhDebug"); } catch {}
+});
+document.getElementById("debugCopy").addEventListener("click", async () => {
+  const copied = await copyToClipboard(debugText.textContent);
+  const button = document.getElementById("debugCopy");
+  button.textContent = copied ? t("pageCopied") : t("pageCopyFailed");
+  setTimeout(() => { button.textContent = t("pageCopyLog"); }, 1500);
+});
+dbg("boot " + BUILD_TEXT);
+/* Other pages on the same console.  Two tabs of this page can both try to feed a file, and a browser
+   allows only six connections per host: one stuck loop is enough to consume the budget, and then
+   *both* pages look dead while the console reports "the browser stopped sending".  Every page
+   announces itself so the debug trace names the situation; the actual serialization is the console's
+   (`/upload/begin` is the one gate that says "already taking an upload"). */
+const myPageId = Math.random().toString(36).slice(2);
+const peers = new Map();
+let pageChannel = null;
+try { pageChannel = new BroadcastChannel("acnh-installer"); } catch {}
+function announceSelf(type) {
+  if (pageChannel) {
+    pageChannel.postMessage({ type: type, id: myPageId });
+  }
+}
+if (pageChannel) {
+  pageChannel.addEventListener("message", (event) => {
+    const msg = event.data || {};
+    if (!msg.id || msg.id === myPageId) return;
+    peers.set(msg.id, Date.now());
+    if (msg.type === "hello") announceSelf("alive");
+  });
+  announceSelf("hello");
+  setInterval(() => {
+    announceSelf("alive");
+    for (const [id, seen] of peers) {
+      if (Date.now() - seen > 6000) peers.delete(id);
+    }
+  }, 2000);
+}
+/* The console's labels are printf-shaped ("第 %d / %d 个内容", "已发送 %d%%"), so this is a printf
+   substitute: %s and %d both take the next argument, and a doubled %% is the literal percent the
+   console meant.  Only handling %s left "%d / %d" and "已发送 %d%%" on a real screen (2026-10-16). */
 function t(key, ...args) {
   let s = L[key] || key;
-  args.forEach(a => { s = s.replace("%s", a); });
-  return s;
+  args.forEach(a => { s = s.replace(/%[sd]/, a); });
+  return s.replace(/%%/g, "%");
 }
 function show(id, on) { document.getElementById(id).classList.toggle("hidden", !on); }
+/* Every request gets a deadline.  A console that is busy parsing or decompressing answers nothing
+   for a while, and a request with no deadline sits in the browser's connection pool for ever --
+   six of those per host and nothing else can be sent any more (Chrome, 2026-10-16).  The deadline
+   turns that into a failed request, which the upload loop already knows how to retry. */
+function fetchWithTimeout(url, options, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, Object.assign({}, options, { signal: controller.signal }))
+    .finally(() => clearTimeout(timer));
+}
+/* The cover comes from the console (the package's own picture, /cover.jpg).  It is re-fetched when
+   the *package* changes and not once per status change, so a page that sits on a result screen does
+   not re-download it every second -- and, just as important, the previous package's picture does not
+   stay on the new package's card: the guard used to be per <img> element, so "Lost Twins 2" was shown
+   with Unravel TWO's cover for the rest of the session (2026-10-17). */
+function showCover(id, status) {
+  const image = document.getElementById(id);
+  if (!status.hasCover) { image.classList.add("hidden"); return; }
+  const key = (status.summary || "") + "|" + (status.taskId || "");
+  if (image.dataset.key !== key) {
+    image.dataset.key = key;
+    image.src = "cover.jpg?a=" + encodeURIComponent(key);
+  }
+  image.classList.remove("hidden");
+}
 document.getElementById("title").textContent = t("pageTitle");
 document.getElementById("subtitle").textContent = t("pageSubtitle") + " · " + PORT_TEXT;
+/* Which build this page came from, in the footer's right corner: the whole stamp, the same string the
+   console prints there -- so "is this tab older than the console?" is answered by looking at both, and
+   a tap copies it (a phone cannot hover; 2026-10-19). */
+{
+  const stamp = document.getElementById("build");
+  /* The footer only needs enough of the stamp to tell two builds apart; the full string (with the
+     commit, dirty flag and timestamp) is what a tap copies. */
+  const shortBuild = (BUILD_TEXT.match(/src:[0-9a-f]+(?:\+(?:devaids|rel))?/) || [BUILD_TEXT])[0];
+  stamp.textContent = shortBuild;
+  stamp.title = BUILD_TEXT;
+  stamp.addEventListener("click", async () => {
+    const copied = await copyToClipboard(BUILD_TEXT);
+    stamp.textContent = copied ? t("pageCopied") : shortBuild;
+    setTimeout(() => { stamp.textContent = shortBuild; }, 1200);
+  });
+}
+document.getElementById("targetsLabel").textContent = t("pageInstallTo");
+document.getElementById("confirmTitle").textContent = t("pageConfirmTitle");
+document.getElementById("confirmSizeLabel").textContent = t("pageConfirmSize") + ":";
+document.getElementById("confirmTargetLabel").textContent = t("pageConfirmTarget") + ":";
+document.getElementById("startBtn").textContent = t("pageStart");
+document.getElementById("resultBack").textContent = t("pageBack");
+document.getElementById("confirmBack").textContent = t("pageBack");
+document.getElementById("resultKept").textContent = t("pageResultTaskKept");
 document.getElementById("pickTitle").textContent = t("pageStep1");
 document.getElementById("chooseBtn").textContent = t("pageChooseFile");
 document.getElementById("dropHint").textContent = t("pageDropHint");
 document.getElementById("formats").textContent = t("pageFormats");
-document.getElementById("pickNote").textContent = t("pageKeepAwake");
+setNote(t("pageKeepAwake"));
 document.getElementById("urlTitle").textContent = t("pageUrlTitle");
 document.getElementById("urlInput").placeholder = t("pageUrlPlaceholder");
 document.getElementById("urlBtn").textContent = t("pageUrlButton");
-document.getElementById("cancelBtn").textContent = t("pageCancel");
-document.getElementById("cancelNote").textContent = t("pageCancelNote");
 document.getElementById("notes").innerHTML =
   "<li>" + t("pageNoteForeground") + "</li><li>" + t("pageNoteNoInternet") + "</li>" +
   "<li>" + t("pageNoteHostScreen") + "</li>";
@@ -122,17 +439,231 @@ document.getElementById("queueTitle").textContent = t("pageQueueTitle");
    console's own view of the install.  Reload, a second tab, or another device all land on the same
    state -- and an install that keeps running while this page is backgrounded still shows up. */
 let lastState = null;
-let cancelArmed = false;
+let startRequested = false;
+
+/* Clipboard: `navigator.clipboard` needs a secure context and this page is plain http on a LAN
+   address, so the old command is the path that actually works here (2026-10-17). */
+async function copyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.style.position = "fixed";
+  box.style.opacity = "0";
+  document.body.appendChild(box);
+  box.select();
+  let copied = false;
+  try { copied = document.execCommand("copy"); } catch {}
+  document.body.removeChild(box);
+  return copied;
+}
+
+/* The two storage blocks, as the console draws them: name and "free / total", how full, which one is
+   selected -- and, when it cannot be read, that it is unavailable and not tappable. */
+function renderTargets(status, selectable) {
+  for (const [suffix, info] of [["Sd", status.sd], ["Nand", status.nand]]) {
+    const button = document.getElementById("chip" + suffix);
+    if (!info) { button.classList.add("hidden"); continue; }
+    button.classList.remove("hidden");
+    document.getElementById("chip" + suffix + "Text").textContent =
+      info.text.replace(/\s+/g, " ") + (info.ok ? "" : " · " + t("pageStorageUnavailable"));
+    const filled = Math.round((info.used || 0) * 100);
+    document.getElementById("chip" + suffix + "Bar").style.width = filled + "%";
+    button.disabled = !info.ok || !selectable;
+    button.classList.toggle("on", !!info.selected);
+  }
+}
+
+/* The console's footer, mirrored: what this screen is waiting for on the left. */
+function renderFooterState(status, busy, finished, confirming) {
+  const el = document.getElementById("stateText");
+  if (busy) {
+    const percent = status.total > 0 ? Math.floor(status.received * 100 / status.total) : 0;
+    el.textContent = t(status.source === "upload" ? "pageStageUpload" : "pageStageDownload") +
+                     " · " + percent + "%";
+  } else if (confirming) {
+    el.textContent = t("pageWaitingStart");
+  } else if (finished) {
+    el.textContent = t(status.state === "done" ? "pageResultDone"
+                     : status.state === "skipped" ? "pageResultSkipped" : "pageResultFailed");
+  } else {
+    el.textContent = t("pageWaitingPick");
+  }
+}
+
+/* The header's blocks are the same control the console's are: tapping one asks the console to write
+   there.  With a package already read that re-opens it on the new storage, which the card says. */
+function pickTarget(target) {
+  if (!lastState || lastState.target === target) return;
+  const runId = lastState.runId || 0;
+  dbg("target -> " + target);
+  if (runId !== 0 && lastState.state === "confirm") {
+    document.getElementById("confirmNote").textContent =
+      t(lastState.source === "upload" ? "pageRestartUpload" : "pageRereadOnSwitch");
+  }
+  fetchWithTimeout("target", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: runId, target: target })
+  }, 20000).then(answer => {
+    if (!answer.ok) throw new Error(answer.status);
+  }).catch(error => {
+    dbg("target failed: " + (error && error.name) + " " + ((error && error.message) || ""));
+    if (lastState && lastState.state === "confirm") {
+      document.getElementById("confirmNote").textContent = t("pageTargetRefused");
+    } else {
+      setNote(t("pageTargetRefused"));
+    }
+  });
+}
+document.getElementById("chipSd").addEventListener("click", () => pickTarget("sd"));
+document.getElementById("chipNand").addEventListener("click", () => pickTarget("nand"));
+
+/* The button under the confirm card is the console's Ⓐ: the same endpoint, the same gate. */
+document.getElementById("startBtn").addEventListener("click", async () => {
+  if (!lastState || lastState.state !== "confirm") return;
+  const button = document.getElementById("startBtn");
+  button.disabled = true;
+  dbg("start ->");
+  try {
+    const answer = await fetchWithTimeout("start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId: lastState.runId })
+    }, 20000);
+    if (!answer.ok) throw new Error(answer.status);
+    startRequested = true;
+    document.getElementById("confirmNote").textContent = t("pageStarting");
+  } catch (error) {
+    dbg("start failed: " + (error && error.name) + " " + ((error && error.message) || ""));
+    document.getElementById("confirmNote").textContent = t("pageStartRefused");
+    button.disabled = false;
+  }
+});
+
+/* The console's Ⓑ on the confirm card: give the package back before anything is written, so the
+   player can pick another file from the phone. */
+document.getElementById("confirmBack").addEventListener("click", async () => {
+  if (!lastState || lastState.state !== "confirm") return;
+  const button = document.getElementById("confirmBack");
+  button.disabled = true;
+  dbg("confirm back ->");
+  try {
+    const answer = await fetchWithTimeout("back", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId: lastState.runId || 0 })
+    }, 15000);
+    if (!answer.ok) throw new Error(answer.status);
+    refresh();
+  } catch (error) {
+    dbg("confirm back failed: " + (error && error.name) + " " + ((error && error.message) || ""));
+    document.getElementById("confirmNote").textContent = t("pageBackRefused");
+    button.disabled = false;
+  }
+});
+
+/* The console's Ⓑ on the result screen: back to where this run started, so the next package can be
+   picked without touching the console. */
+document.getElementById("resultBack").addEventListener("click", async () => {
+  if (!lastState) return;
+  const button = document.getElementById("resultBack");
+  button.disabled = true;
+  dbg("back ->");
+  try {
+    const answer = await fetchWithTimeout("back", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId: lastState.runId || 0 })
+    }, 15000);
+    if (!answer.ok) throw new Error(answer.status);
+    document.getElementById("resultNote").textContent = "";
+    refresh();
+  } catch (error) {
+    dbg("back failed: " + (error && error.name) + " " + ((error && error.message) || ""));
+    document.getElementById("resultNote").textContent = t("pageBackRefused");
+    button.disabled = false;
+  }
+});
 
 function render(status) {
+  const prevState = lastState ? lastState.state : null;
+  const stateChanged = !lastState || lastState.state !== status.state;
   lastState = status;
+  /* Coming back from a confirm/result run resets the pick card to its opening state; otherwise the
+     last run's "reading the package…" line stays there as if something were still happening. */
+  if (status.state === "idle" && prevState && prevState !== "idle") {
+    setNote(t("pageKeepAwake"));
+  }
+  if (status.state !== "confirm") { startRequested = false; }
+  if (status.state !== "done" && status.state !== "skipped" && status.state !== "failed") {
+    document.getElementById("resultNote").textContent = "";
+  }
+  if (stateChanged) {
+    dbg("status " + status.state + (status.taskId ? " task=" + status.taskId : "") +
+        (status.build && status.build !== BUILD_TEXT ? " (console build differs)" : ""));
+  }
+  /* The console names the build and language that served this page.  A newer build means this tab
+     runs older JavaScript, and a different language means its labels were injected in the old
+     language; neither can be changed without a reload (the page is already loaded).  Reload here,
+     but only when it cannot hurt: nothing running, and nothing typed into the address box (an
+     update must never land in the middle of an install, or under the player's hands)
+     (2026-10-17, language 2026-10-19). */
+  const consoleChanged = (status.build && status.build !== BUILD_TEXT) ||
+                         (status.lang && status.lang !== PAGE_LANG);
+  if (consoleChanged && status.state === "idle" && !uploading &&
+      document.getElementById("urlInput").value === "") {
+    dbg((status.lang && status.lang !== PAGE_LANG ? "console language changed"
+                                                  : "console build changed") + " -> reload");
+    location.reload();
+    return;
+  }
   const busy = status.state === "downloading" || status.state === "uploading";
-  show("progressCard", busy || status.state === "done" || status.state === "failed");
-  show("cancelCard", busy);
-  show("pickCard", !busy && status.state !== "done");
-  show("urlCard", !busy && status.state !== "done");
-  show("resultCard", status.state === "done" || status.state === "failed");
-  show("queueCard", !busy && !!status.pending);
+  const finished = status.state === "done" || status.state === "skipped" ||
+                   status.state === "failed";
+  const confirming = status.state === "confirm";
+  /* The first seconds of an upload are "idle" on the console while it reads the package header;
+     the pick/url cards were still live there and invited a second selection.  While this page owns
+     an upload task, the source controls stay disabled until the run is over or the user returns. */
+  const starting = uploading && !confirming && !finished;
+  /* The progress card belongs to a transfer: once the run is over the result card says everything,
+     and a bar frozen at "100% of 0" was the first thing hardware showed us. */
+  show("progressCard", busy);
+  show("confirmCard", confirming);
+  show("pickCard", !busy && !finished && !confirming);
+  show("urlCard", !busy && !finished && !confirming);
+  document.getElementById("chooseBtn").disabled = starting;
+  document.getElementById("fileInput").disabled = starting;
+  document.getElementById("urlBtn").disabled = starting;
+  document.getElementById("urlInput").disabled = starting;
+  document.getElementById("drop").classList.toggle("disabled", starting);
+  if (starting) {
+    setNote(t("pageUploadInfo"), true);
+  }
+  show("resultCard", finished);
+  show("queueCard", !busy && !finished && !!status.pending);
+  /* The console locks the target while a transfer runs and after the run ends.  The page keeps the
+     selected block's shadow (it still says where the run is writing) and only drops the ability to
+     change it -- the same thing the console's own blocks do. */
+  renderTargets(status, !busy && !finished);
+  renderFooterState(status, busy, finished, confirming);
+  if (confirming) {
+    /* The console's confirm card, word for word: what it read, where it would write, whether the
+       agent can follow, and the one button that starts it (the same action as the console's Ⓐ). */
+    document.getElementById("confirmSummary").textContent = status.summary || "";
+    document.getElementById("confirmSize").textContent = status.total_text || "";
+    document.getElementById("confirmTarget").textContent = status.target_text || "";
+    document.getElementById("confirmResume").textContent = status.resume_text || "";
+    const agent = document.getElementById("confirmAgent");
+    agent.textContent = status.agent_note || "";
+    agent.classList.toggle("warn", !!status.agent_note_warn);
+    /* Only a page that is actually feeding this upload can start it: a reload, or a second tab
+       opened at the confirm screen, has no File object and would start a run nobody feeds (the
+       console then waits fifty seconds and fails).  Those pages say how to get back. */
+    const feeding = uploading || status.source !== "upload";
+    const start = document.getElementById("startBtn");
+    start.disabled = !feeding || startRequested;
+    document.getElementById("confirmBack").disabled = false;
+    document.getElementById("confirmNote").textContent =
+      !feeding ? t("pageReselectToStart")
+               : (startRequested ? t("pageStarting") : "");
+    showCover("confirmCover", status);
+  }
   if (status.pending) {
     document.getElementById("queueName").textContent = status.pending.name || "";
     document.getElementById("queueSize").textContent =
@@ -140,7 +671,7 @@ function render(status) {
   }
   if (busy) {
     document.getElementById("stageText").textContent =
-      t(status.state === "uploading" ? "pageStageUpload" : "pageStageDownload");
+      t(status.source === "upload" ? "pageStageUpload" : "pageStageDownload");
     document.getElementById("progressName").textContent = status.name || "";
     const percent = status.total > 0 ? Math.floor(status.received * 100 / status.total) : 0;
     document.getElementById("progressBar").style.width = percent + "%";
@@ -152,76 +683,335 @@ function render(status) {
       t("pageContents", status.content_index, status.content_total);
     document.getElementById("progressFile").textContent = status.content_name || "";
     document.getElementById("progressRate").textContent = status.rate_text || "";
+    showCover("cover", status);
   }
-  if (status.state === "done" || status.state === "failed") {
-    document.getElementById("resultTitle").textContent =
-      t(status.state === "done" ? "pageResultDone" : "pageResultFailed");
-    document.getElementById("resultDetail").textContent = status.message || "";
+  if (finished) {
+    const titles = { done: "pageResultDone", skipped: "pageResultSkipped",
+                     failed: "pageResultFailed" };
+    const title = document.getElementById("resultTitle");
+    title.textContent = t(titles[status.state]);
+    title.classList.toggle("bad", status.state === "failed");
+    document.getElementById("resultSummary").textContent = status.summary || "";
+    /* A failed run has one reason, not two: it belongs in the "now" line below.  Putting it in
+       both made the same long ncm error repeat twice on the phone (2026-10-19). */
+    document.getElementById("resultWritten").textContent =
+      status.state === "failed" ? "" : (status.written || status.message || "");
+    const now = document.getElementById("resultNow");
+    now.textContent = status.state === "failed" ? (status.message || "")
+                      : (status.agent_next ? t("pageAgentReady") : "");
+    now.classList.toggle("warn", status.state === "failed");
+    now.classList.toggle("good", status.state !== "failed" && !!status.agent_next);
+    /* A failed transfer keeps its placeholders and the task file: the console says so on its own
+       result card, and the phone must not leave the player thinking the bytes are gone. */
+    show("resultKept", status.state === "failed" && !!status.pending);
+    document.getElementById("resultBack").disabled = false;
+    /* Three lines and no labels above them, exactly like the console's own result screen: the
+       player is reading "Unravel TWO 1.0.1 (更新) / 机器上已经有这个版本,没有改动", not a form
+       with "这是什么:" and "结果:" in front of it (2026-10-16).  A line with nothing in it simply
+       stays empty -- the skipped case has no "now" line. */
+    showCover("resultCover", status);
   }
-  if (!busy) { cancelArmed = false; document.getElementById("cancelBtn").disabled = false; }
 }
 
+/* One poll in flight at a time: the interval is 1 s, and a poll that takes longer than that used to
+   start a second one, a third, ... until the pool was full. */
+let polling = false;
 async function refresh() {
+  if (polling) return;
+  polling = true;
   try {
-    const answer = await fetch("status.json", { cache: "no-store" });
+    const answer = await fetchWithTimeout("status.json", { cache: "no-store" }, 8000);
     if (!answer.ok) throw new Error(answer.status);
+    setSubtitle(false);
     render(await answer.json());
   } catch (error) {
     /* The console stopped serving: the install page was left, or the console went to sleep.  Say so
-       instead of pretending the last numbers still mean something. */
-    document.getElementById("subtitle").textContent = t("pageOffline");
+       instead of pretending the last numbers still mean something -- and take it back the moment it
+       answers again, or one bad second leaves "offline" in the header for the rest of the session
+       (which is what a reload after a stopped upload showed, 2026-10-16). */
+    dbg("status fetch failed: " + (error && error.name) + " " + ((error && error.message) || ""));
+    setSubtitle(true);
   }
+  polling = false;
+}
+function setSubtitle(offline) {
+  const subtitle = document.getElementById("subtitle");
+  subtitle.textContent =
+    offline ? t("pageOffline") : (t("pageSubtitle") + " · " + PORT_TEXT);
+  subtitle.classList.toggle("offline", offline);
 }
 
-document.getElementById("cancelBtn").addEventListener("click", async () => {
-  if (!cancelArmed) {
-    cancelArmed = true;
-    document.getElementById("cancelBtn").disabled = true;
-    document.getElementById("cancelNote").textContent = t("pageCancelConfirm");
-    setTimeout(() => {
-      cancelArmed = false;
-      document.getElementById("cancelBtn").disabled = false;
-      document.getElementById("cancelNote").textContent = t("pageCancelNote");
-    }, 5000);
-    return;
-  }
-  const answer = await fetch("cancel", { method: "POST" });
-  document.getElementById("cancelNote").textContent =
-    answer.ok ? t("pageCancelSent") : t("pageCancelFailed");
-});
-
 document.getElementById("urlBtn").addEventListener("click", async () => {
+  if (uploading) return;
   const address = document.getElementById("urlInput").value.trim();
   if (!address) return;
-  const answer = await fetch("url", { method: "POST",
-    headers: { "Content-Type": "text/plain" }, body: address });
-  document.getElementById("pickNote").textContent =
-    answer.ok ? t("pageUrlSent") : t("pageUrlFailed");
+  const answer = await fetchWithTimeout("url", { method: "POST",
+    headers: { "Content-Type": "text/plain" }, body: address }, 8000);
+  setNote(answer.ok ? t("pageUrlSent") : t("pageUrlFailed"));
 });
 
 document.getElementById("fileInput").addEventListener("change", (event) => {
   const file = event.target.files[0];
-  if (file) startUpload(file);
+  if (file) {
+    startUpload(file);
+    /* Clear it so choosing the *same* file again (the resume path) fires `change` again. */
+    event.target.value = "";
+  }
 });
 const drop = document.getElementById("drop");
 ["dragenter", "dragover"].forEach(name => drop.addEventListener(name, (event) => {
   event.preventDefault();
+  if (uploading) return;
   drop.classList.add("over");
 }));
 ["dragleave", "drop"].forEach(name => drop.addEventListener(name, () => drop.classList.remove("over")));
 drop.addEventListener("drop", (event) => {
   event.preventDefault();
+  if (uploading) return;
   const file = event.dataTransfer.files[0];
   if (file) startUpload(file);
 });
-document.getElementById("chooseBtn").addEventListener("click", () =>
-  document.getElementById("fileInput").click());
+document.getElementById("chooseBtn").addEventListener("click", () => {
+  if (uploading) return;
+  document.getElementById("fileInput").click();
+});
 
-/* Uploading is not wired to the console yet (the browser half of M4); the button says so instead of
-   pretending to send something. */
-function startUpload(file) {
-  document.getElementById("pickNote").textContent = t("pageUploadNotReady");
+/* Uploading: the console asks for a range, this slices exactly that out of the File and posts it.
+   The file is never read into memory as a whole -- one asked-for range at a time -- which is what
+   lets a 4 GB package go through a phone.  A 409 means "that was not the range I want any more"
+   (a reload, a second tab, a dropped part): the answer carries the range that *is* wanted, and the
+   loop simply carries on with it. */
+/* Whether a finished state belongs to *this* upload.  The console keeps reporting the last run's
+   result while it sits on its result screen -- so a player who picks the next file without walking
+   the console back first would have the new upload abandoned on the spot: the page saw "failed" and
+   stopped, the console waited for a part that never came, and both sides blamed each other
+         (measured in Chrome, 2026-10-16: zero parts posted, and the console's silence then ran out).
+   A result counts
+   for this run when the console names the same task -- and only then: while no upload is running
+   (a download's result, or a page that has not begun one) the console's `taskId` is somebody else's
+   or empty, and neither is a reason to stop serving this file. */
+function runOver(status, taskId) {
+  if (status.state !== "done" && status.state !== "skipped" && status.state !== "failed") {
+    return false;
+  }
+  return status.taskId === taskId;
 }
+
+let uploading = false;
+async function startUpload(file) {
+  if (!file || uploading) return;
+  /* The console is the authority on "one upload at a time": if it is already taking bytes from
+     another page, say so instead of starting a second loop.  A page that is merely open (a second
+     tab watching, a phone left on the page) is not a reason to refuse -- it may be the very page
+     that should supply the file, and the console's `/upload/begin` still serializes the two. */
+  if (lastState && lastState.busy && lastState.source === "upload") {
+    setNote(t("pagePeerActive"));
+    dbg("refused: the console is already taking an upload (" + (lastState.taskId || "") + ")");
+    return;
+  }
+  uploading = true;
+  setNote(t("pageUploadStarting"));
+  dbg("upload start " + file.name + " (" + file.size + " B)");
+  /* The whole run sits inside one try, and this is the reason: an exception anywhere in the loop
+     (a File the browser invalidated, a throw nobody thought of) used to end the upload *silently* --
+     the page went back to its pick screen, the console sat waiting for a part that would never
+     come, and nothing on either screen said what happened (2026-10-16, Chrome).  Now anything
+     unexpected lands on the card as "the transfer was interrupted". */
+  try {
+    await runUpload(file);
+  } catch (error) {
+    dbg("upload exception: " + (error && error.name) + " " + ((error && error.message) || ""));
+    setNote(t("pageUploadFailed"));
+  }
+  uploading = false;
+  refresh();
+}
+
+async function runUpload(file) {
+  let sent_max = 0;
+  let stallAttempts = 0;
+  let taskId = "";
+  let beginAt = 0;
+  try {
+    dbg("begin ->");
+    const begun = await fetchWithTimeout("upload/begin", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: file.name, size: file.size })
+    }, 15000);
+    if (!begun.ok) {
+      setNote(begun.status === 409 ? t("pageUploadBusy") : t("pageUploadFailed"));
+      return;
+    }
+    taskId = (await begun.json()).taskId;
+    beginAt = performance.now();
+    dbg("begin " + begun.status + " task=" + taskId);
+  } catch (error) {
+    dbg("begin failed: " + (error && error.name) + " " + ((error && error.message) || ""));
+    setNote(t("pageUploadFailed"));
+    return;
+  }
+  let sent = 0;
+  while (uploading) {
+    let want;
+    try {
+      dbg("next ->");
+      const answer = await fetchWithTimeout(`upload/next?taskId=${taskId}`, { cache: "no-store" }, 8000);
+      if (answer.status === 409) {
+        dbg("next 409 (resync)");
+        const status = await fetchWithTimeout("status.json", { cache: "no-store" }, 8000)
+          .then(r => r.json());
+        if (runOver(status, taskId)) {
+          dbg("run over: " + status.state);
+          break;
+        }
+        /* The console dropped this upload without a verdict -- the one action that does that is a
+           storage switch at the confirm screen, which restarts an upload (the local bytes are in
+           placeholders on the old target).  Say it instead of polling a task that no longer
+           exists.  Give `begin` a few seconds to be taken; after that, a missing upload source means
+           the console has already returned to the source screen (even if zero bytes were sent). */
+        if (status.source !== "upload" &&
+            (sent_max > 0 || performance.now() - beginAt > 3000)) {
+          dbg("upload dropped by the console");
+          setNote(t("pageUploadDropped"));
+          break;
+        }
+        await sleep(300);
+        continue;
+      }
+      if (!answer.ok) break;
+      want = await answer.json();
+      dbg(want.wait ? "next wait" : "next " + want.offset + "+" + want.size);
+    } catch (error) {
+      dbg("next failed: " + (error && error.name) + " " + ((error && error.message) || ""));
+      await sleep(300);
+      continue;
+    }
+    if (want.wait) {
+      /* Nothing wanted this instant: the console is showing its confirm screen, or reading the
+         package.  Stop when the run is over. */
+      const status = await fetchWithTimeout("status.json", { cache: "no-store" }, 8000)
+        .then(r => r.json());
+      if (runOver(status, taskId)) {
+        dbg("run over: " + status.state);
+        break;
+      }
+      /* Say "the console is working on it" only before anything has been sent.  Once pieces are
+         flowing the line already says how far they got, and rewriting it every time the console
+         answers `wait` (which happens between pieces while it parses) made one line flicker between
+         three sentences, dozens of times a run (2026-10-17). */
+      if (sent_max === 0) {
+        setNote(t("pageUploadWaiting"));
+      }
+      await sleep(300);
+      continue;
+    }
+    let slice = null;
+    try {
+      /* Inside the try as well: a File the browser has invalidated (the picker was re-opened, the
+         page was moved) throws here, and an exception outside the try ends the run silently. */
+      /* Read the range into memory *before* the request is made.  Posting a Blob makes the browser
+         read the file while the request is in flight, and every abort (the deadline below, a tab
+         that is closed, a page that is reloaded) then interrupts a file read that is half done --
+         which is how both Chrome and the Codex in-app browser ended up with a tab that answered
+         nothing at all (2026-10-16).  Reading first keeps the disk read and the request strictly
+         one after the other, so nothing can be cancelled in the middle of the other. */
+      const readStarted = performance.now();
+      dbg("read " + want.offset + "+" + want.size + " ->");
+      slice = await file.slice(want.offset, want.offset + want.size).arrayBuffer();
+      dbg("read done in " + Math.round(performance.now() - readStarted) + " ms");
+      /* A part gets three quarters of a minute: long enough for four megabytes over a slow phone
+         link, short enough to notice a socket that is never coming back.  It is also well inside the
+         console's patience (ninety seconds), so the retry below always happens while the console is
+         still waiting for this very range -- which is what makes "abort and ask again" safe. */
+      const part = await fetchWithTimeout(`upload/part?taskId=${taskId}&offset=${want.offset}`, {
+        method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: slice
+      }, 45000);
+      dbg("part " + want.offset + " " + part.status + " in " +
+          Math.round(performance.now() - readStarted) + " ms");
+      if (part.status === 409) continue; /* re-sync: the next answer says what is wanted now */
+      if (!part.ok) {
+        /* Refused, not answered: a body that arrived short, a range the console no longer wants.
+           Retried like a dead connection rather than ending the run on the spot. */
+        stallAttempts += 1;
+        dbg("part " + want.offset + " refused (" + part.status + "), attempt " + stallAttempts);
+        if (stallAttempts > 30) {
+          setNote(t("pageUploadFailed") + " (" + part.status + ")");
+          break;
+        }
+        await sleep(500);
+        continue;
+      }
+      sent = want.offset + want.size;
+      stallAttempts = 0;
+    /* The console re-reads early regions while it parses, so an offset percentage can jump back
+       (100% then 0%): keep the highest one for the "some bytes moved" gate below.  Do not turn it
+       into a sentence: before the confirm screen only the package metadata has been read, and
+       "100%" there would claim the whole file was uploaded (2026-10-19). */
+    sent_max = Math.max(sent_max, sent);
+    if (sent_max > 0) {
+      setNote(t("pageUploadInfo"), true);
+    }
+    } catch (error) {
+      /* One failed request is not the end of a four-gigabyte transfer.  Ask the console whether the
+         run is still there, and carry on when it is: a phone that switched networks, or a refusal
+         the browser reported as a network error rather than as the 409 it was.  Breaking here is
+         what let a single refused part end an upload while the console kept waiting (2026-10-16). */
+      const status = await fetchWithTimeout("status.json", { cache: "no-store" }, 8000)
+        .then(r => r.json()).catch(() => null);
+      dbg("part failed: " + (error && error.name) + " " + ((error && error.message) || "") +
+          " (console says " + (status ? status.state : "nothing") + ")");
+      /* A network error is not a verdict.  The console's own patience is ninety seconds now, and a
+         stalled socket has come back after twenty and after sixty; so keep asking (up to a minute of
+         attempts) instead of ending the run on the first one.  Only what the console *says* ends it
+         -- or a minute of silence, which is the honest moment to call it offline (2026-10-17). */
+      stallAttempts += 1;
+      if (runOver(status || {}, taskId) || (!status && stallAttempts > 30)) {
+        setNote(t("pageOffline"));
+        break;
+      }
+      if (!status) {
+        await sleep(1000);
+        continue;
+      }
+      stallAttempts = 0;
+      if (sent_max === 0) {
+        setNote(t("pageUploadWaiting"));
+      }
+      await sleep(500);
+      continue;
+    }
+  }
+}
+function setNote(text, loading = false) {
+  document.getElementById("pickNoteText").textContent = text;
+  document.getElementById("pickSpinner").classList.toggle("hidden", !loading);
+}
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+/* There is deliberately no "keep the page awake" audio here any more.  A silent, looping element was
+   the obvious way to stop a phone from sleeping -- and the version this page used froze the browser
+   instead: a **zero-length** stream looping forever keeps the *media service* busy, which on macOS
+   sits next to the browser's own process, so the tab stops sending, the network panel stops
+   updating and even switching tabs stops responding -- for minutes, with no network trouble at all
+   (Chrome and the in-app browser, 2026-10-17; the headless browser used for testing has no audio
+   device, which is why it never showed).  Keeping a phone awake is still worth trying again -- with
+   a real one-to-five-second silent clip rather than an empty one, and measured on hardware before it
+   ships.  Until then the honest pair is what is left: the page says to keep it in front, and the
+   console's task file makes an interruption resumable. */
+
+/* A page the browser has pushed to the background gets its timers throttled and, if it stays hidden
+   and silent, frozen outright -- timers and network requests simply stop, which from the console's
+   side looks exactly like "the browser stopped sending", with the page itself still there.  So the
+   page says it out loud, and says what to do about it: keep this page in front, and if it was already
+   interrupted, pick the same file again -- the console resumes from what it has. */
+document.addEventListener("visibilitychange", () => {
+  dbg("visibility " + document.visibilityState);
+  if (document.visibilityState === "hidden") {
+    setNote(t("pageHidden"));
+  } else {
+    refresh();
+  }
+});
 
 refresh();
 setInterval(refresh, 1000);
