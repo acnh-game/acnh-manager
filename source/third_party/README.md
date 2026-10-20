@@ -35,6 +35,15 @@ body into memory, which is exactly what a 4.65 GB upload must not do.
 -fno-rtti`, and the C++ version throws.  The C version allocates nothing, needs no C++ runtime
 and is called from `source/util/qr_code.cpp`, which owns the buffers.
 
+## Embedded keep-awake media
+
+The page's keep-awake fallback uses the two short silent WebM/MP4 data URIs from
+[NoSleep.js](https://github.com/richtr/NoSleep.js) **v0.12.0** (commit
+`1d15cc88dd8c1b62fe5b5f910c6ff7396b280d68`, 2020-12-16).  No library code is vendored; the page
+implements only the native Wake Lock attempt, the video playback/random-seek loop and the
+page-lifecycle handling it needs.  The upstream license is MIT and is reproduced in
+`nosleep-media-LICENSE` next to this file.
+
 ## Updating
 
 1. Fetch the file from a **pinned commit** (never `master`) and record that commit in the table

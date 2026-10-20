@@ -208,7 +208,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 - `source/third_party/`:vendored 第三方源码(**只放上游原文件,不本地修改**),每个目录一个库,
   来源 URL / commit / sha256 / 许可证记在同目录 `README.md`,并由 `tools/verify-release.py` 核对:
   `picohttpparser/`(HTTP 报文解析,MIT)、`qrcodegen/`(QR 编码,Nayuki C 版,MIT)。1.1.0 的
-  通用安装器用它们做上传页面与二维码,细节见 `docs/game_installer_design.md` 第 3、8 节。
+  通用安装器用它们做上传页面与二维码;页面防熄屏的两段短视频 data URI 取自 NoSleep.js v0.12.0,
+  只保留媒体与精简包装(MIT,许可证见 `nosleep-media-LICENSE`)。细节见
+  `docs/game_installer_design.md` 第 3、8 节。
 - `data/`:内嵌发布清单与 payload 的 bin2s 构建输入(由导入工具生成,入库),外加
   `data/agent_pubkey.bin`(验签公钥,由 `tools/make-signing-key.py` 生成)与 `data/qr_miniapp.bin`
   (《森友物码册》小程序码的模块矩阵,由 `tools/make-qr.py` 从 miniapp 仓库的 `resources/小程序码.jpg`

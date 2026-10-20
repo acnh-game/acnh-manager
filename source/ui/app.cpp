@@ -4029,7 +4029,21 @@ std::string App::InstallerAddressText() const {
     if (!install::CurrentIpAddressText(&ip, &error)) {
         return std::string();
     }
-    return "http://" + ip + ":" + std::to_string(static_cast<unsigned>(m_http_port));
+    std::string address =
+        "http://" + ip + ":" + std::to_string(static_cast<unsigned>(m_http_port));
+    /* The QR code and the printed address must be the same URL.  Development builds (DEV_AIDS or a
+       +devaids stamp) open the debug trace by default; release builds keep the plain address. */
+    bool development = false;
+#if ACNH_DEV_AIDS
+    development = true;
+#endif
+    if (std::string(kBuildStamp).find("+devaids") != std::string::npos) {
+        development = true;
+    }
+    if (development) {
+        address += "/?debug=1";
+    }
+    return address;
 }
 
 /* The two screens the page belongs to, and the runs they start.  `m_install_origin` is what says

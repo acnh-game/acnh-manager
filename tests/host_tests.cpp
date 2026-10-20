@@ -2065,11 +2065,13 @@ void TestHttpPage() {
     CHECK(page.find("if (sent_max === 0)") != std::string::npos);
     CHECK(page.find("t(\"pageUploadInfo\")") != std::string::npos);
     CHECK(page.find("t(\"pageUploadProgress\", percent)") == std::string::npos);
-    /* No looping silent media, ever: it was the "keep the phone awake" trick, and it froze the whole
-       browser process (media service) instead -- minutes of no network, no tab switching, nothing
-       (Chrome and the in-app browser, 2026-10-17). */
+    /* Keep-awake is a distilled NoSleep-style real video/native wake lock, not the zero-length
+       looping audio that froze the whole browser process (media service) in the earlier attempt. */
     CHECK(page.find("new Audio(") == std::string::npos);
-    CHECK(page.find("keepAwake") == std::string::npos);
+    CHECK(page.find("keepAwakeMedia") != std::string::npos);
+    CHECK(page.find("navigator.wakeLock") != std::string::npos);
+    CHECK(page.find("video.play()") != std::string::npos);
+    CHECK(page.find("keepAwakeStart()") != std::string::npos);
     /* Clearing the trace: the panel, the stored copy, and nothing else (2026-10-17). */
     CHECK(page.find("id=\"debugClear\"") != std::string::npos);
     CHECK(page.find("sessionStorage.removeItem(\"acnhDebug\")") != std::string::npos);
