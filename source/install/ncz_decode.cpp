@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 
 #include "install/dev_stats.hpp"
 
@@ -15,16 +16,36 @@ namespace {
    while a 4 MB chunk needs one. */
 constexpr std::size_t kChunk = 4 * 1024 * 1024;
 
+/* One zstd decoder context for the whole process.
+
+   Why it is shared: an `.nsz` may compress with a large window -- the Lost Twins 2 package's frame
+   declares 128 MiB -- and `ZSTD_decompressStream` has to hold a buffer of that size.  Allocating it
+   afresh for every run worked in a fresh process and then failed on the next run in the same
+   process, when the heap was fragmented enough that 128 MiB contiguous was no longer there (2026-10-
+   20: the second run of the same package rejected a byte-identical first block).  Keeping the
+   context (and its window) for the life of the app means the buffer is allocated once and reused;
+   each new stream only needs `ZSTD_initDStream`.
+
+   The contract that makes sharing safe: exactly one NCZ stream is decoded at a time.  That is how
+   the installer works (the read-out during Prepare finishes before the transfer starts, and the
+   transfer walks its contents one after another); the mutex keeps a future caller from breaking
+   that by accident. */
+std::mutex g_dstream_mutex;
+ZSTD_DStream *g_dstream = nullptr;
+
+ZSTD_DStream *SharedDStream() {
+    if (g_dstream == nullptr) {
+        g_dstream = ZSTD_createDStream();
+    }
+    return g_dstream;
+}
+
 }  // namespace
 
 NczDecoder::NczDecoder(const NczInfo &info, ContainerReader &reader, std::uint64_t container_offset)
     : m_info(info), m_reader(reader), m_container_offset(container_offset) {}
 
-NczDecoder::~NczDecoder() {
-    if (m_dstream != nullptr) {
-        ZSTD_freeDStream(m_dstream);
-    }
-}
+NczDecoder::~NczDecoder() = default;
 
 bool NczDecoder::Refill(std::string *error) {
     const std::uint64_t left = m_info.payload_size - m_payload_read;
@@ -47,6 +68,9 @@ bool NczDecoder::Refill(std::string *error) {
 }
 
 bool NczDecoder::DecodeUntil(std::uint64_t need_until, std::string *error) {
+    /* See the shared-context note above: one stream at a time, and this lock covers the whole
+       stream (not one step), so a future caller cannot interleave two frames. */
+    std::lock_guard<std::mutex> stream_lock(g_dstream_mutex);
     if (need_until > m_info.nca_size) {
         *error = "the compressed content was asked for bytes past the NCA it rebuilds";
         return false;
@@ -81,12 +105,20 @@ bool NczDecoder::DecodeUntil(std::uint64_t need_until, std::string *error) {
 }
 
 bool NczDecoder::Step(std::string *error) {
-    if (m_dstream == nullptr) {
-        m_dstream = ZSTD_createDStream();
-        if (m_dstream == nullptr || ZSTD_isError(ZSTD_initDStream(m_dstream))) {
+    /* Called with g_dstream_mutex held (see DecodeUntil and Feed). */
+    ZSTD_DStream *dstream = SharedDStream();
+    const bool first_use = !m_stream_started;
+    if (dstream == nullptr) {
+        *error = "cannot start the decoder for the compressed content";
+        return false;
+    }
+    if (first_use) {
+        /* A new stream in the shared context: reset the stream state, keep the window buffer. */
+        if (ZSTD_isError(ZSTD_initDStream(dstream))) {
             *error = "cannot start the decoder for the compressed content";
             return false;
         }
+        m_stream_started = true;
     }
     if (m_scratch.size() < kChunk) {
         m_scratch.resize(kChunk);
@@ -117,9 +149,30 @@ bool NczDecoder::Step(std::string *error) {
     } else {
         ZSTD_inBuffer in{m_input.data() + m_input_pos, span, 0};
         ZSTD_outBuffer out{m_scratch.data(), m_scratch.size(), 0};
-        const std::size_t result = ZSTD_decompressStream(m_dstream, &out, &in);
+        const std::size_t result = ZSTD_decompressStream(dstream, &out, &in);
         if (ZSTD_isError(result)) {
-            *error = "the compressed content could not be decoded";
+            /* Where in the payload the stream stopped making sense.  The absolute offset is what
+               answers "did the file arrive shifted?" without a second run: compare it with the
+               container on the card (2026-10-20, a browser upload failed after two refreshes while
+               the same ranges from the terminal client decoded fine). */
+            const std::uint64_t payload_offset =
+                m_payload_read - (m_input.size() - m_input_pos);
+            const auto byte_at = [this](std::size_t ahead) -> unsigned {
+                return m_input_pos + ahead < m_input.size()
+                           ? static_cast<unsigned>(m_input[m_input_pos + ahead])
+                           : 0u;
+            };
+            char detail[224];
+            std::snprintf(detail, sizeof(detail),
+                          "the compressed content could not be decoded (%s; payload offset %llu, "
+                          "%zu bytes in hand, consumed %zu, fresh=%d, "
+                          "next %02x %02x %02x %02x %02x %02x %02x %02x)",
+                          ZSTD_getErrorName(result),
+                          static_cast<unsigned long long>(payload_offset),
+                          m_input.size() - m_input_pos, in.pos, first_use ? 1 : 0, byte_at(0),
+                          byte_at(1), byte_at(2), byte_at(3), byte_at(4), byte_at(5), byte_at(6),
+                          byte_at(7));
+            *error = detail;
             return false;
         }
         produced = out.pos;
@@ -162,6 +215,7 @@ bool NczDecoder::Step(std::string *error) {
 }
 
 bool NczDecoder::Feed(const std::uint8_t *payload, std::size_t size, std::string *error) {
+    std::lock_guard<std::mutex> stream_lock(g_dstream_mutex);
     if (size == 0) {
         return true;
     }

@@ -80,7 +80,9 @@ private:
     const NczInfo m_info;
     ContainerReader &m_reader;
     const std::uint64_t m_container_offset;
-    ZSTD_DStream *m_dstream{nullptr};
+    /* The zstd context is process-wide (see ncz_decode.cpp): this only says whether this stream
+       has been initialised in it yet. */
+    bool m_stream_started{false};
     std::vector<std::uint8_t> m_input; /* payload bytes pulled, not yet consumed */
     std::size_t m_input_pos{0};
     std::uint64_t m_payload_read{0};

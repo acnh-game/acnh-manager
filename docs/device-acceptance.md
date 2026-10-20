@@ -1482,3 +1482,30 @@ must-revalidate` + `Pragma` + `Expires` 三个头都在、`/status.json` 的 `bu
 解码后的写入按 `content.size` 截断(压缩流的最后一个块可能带填充),`ContentInstaller::Write()`
 对越过内容末尾的写入直接给出可读错误,不再落到 ncm 的 `0x00307202`。host tests 新增取数起点
 与速率窗口的用例。
+
+## NSZ 第二次续传:128 MiB 的 zstd 窗口(2026-10-20)
+
+现象:网页上传 NSZ(Lost Twins 2,压缩内容 451.3 MB)到一部分后刷新页面,等主机超时,返回并重选
+同一文件;压缩内容按设计从头重来,但**第一个 4 MiB payload 就报 "the compressed content could
+not be decoded"**,偶尔随后在 `App::Render()` 的 `framebufferBegin` 处崩溃(User Break)。
+
+取证(全部来自真机 `log.txt`):
+
+- 网页分段 `upload: part 384997+4194304 checksum=4c191cda` 与送入解码器的
+  `install: feed 384997+4194304 checksum=4c191cda` **完全一致**,也都等于卡上文件;
+- 这段流以正确的 zstd 魔数 `28 b5 2f fd` 开始,帧头声明 **`windowSize = 134217728`(128 MiB)**;
+- 同一任务、相同偏移用终端客户端(`tools/upload-client.py`)在**同一进程**里可以完整解出
+  472,891,392 字节并安装成功——字节与解码规则都没有问题。
+
+根因:每次运行都新建 zstd 解码上下文。第一次运行使用并释放过 128 MiB 窗口后,同一进程里第二次
+运行再申请一块 128 MiB 连续内存时被堆碎片挡住,`ZSTD_decompressStream` 拒绝了一段本身完好的流;
+随后的崩溃是同一轮内存压力/状态破坏的后果。
+
+修复:`NczDecoder` 的 zstd 上下文改成**进程内单例**——窗口只分配一次,每个新流用
+`ZSTD_initDStream` 复位;`DecodeUntil`/`Feed` 整段加锁,保证同一时刻只解一条流(现有流程本来
+就是顺序解码)。另外,传输期间读取线程不再 pump 网页(状态/封面由 UI 线程处理),避免 App 状态
+字符串被两个线程同时访问;解码失败信息现在带 zstd 错误名、已消费字节数、是否新流与前 8 字节。
+
+复验:本机用同一份 NSZ 连续两轮完整解码,各解出 472,891,392 字节;真机上"上传 15% → 刷新 →
+超时 → 返回 → 重选同一文件"第二次续传**安装成功**。压缩内容仍按 `PlanResume` 规则整段重来,
+这是 zstd 单流无法从中间进入的既定行为,不是本次修复的目标。

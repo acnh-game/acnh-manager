@@ -3497,6 +3497,16 @@ void App::RunGameInstall() {
     }
     m_install_screen = InstallScreen::Progress;
     m_install_error.clear();
+    /* From here on the page is answered by this thread only.  The upload source's pump exists so
+       that a package being read during the confirm screen can still answer `/upload/next`; during
+       the transfer the reader thread kept calling it too, so `/status.json` and `/cover.jpg` were
+       built on that thread while this one rewrites the status strings every step.  The race
+       corrupted the decoder's state (valid zstd bytes rejected at offset 0) and the app crashed in
+       Render the moment it had to allocate (2026-10-20).  The loop below polls the server after
+       every step, so the page is still served -- just never concurrently. */
+    if (m_upload_source != nullptr) {
+        m_upload_source->SetPump(nullptr);
+    }
     Render();
     std::string error;
     if (!m_game_install->Begin(&error)) {
