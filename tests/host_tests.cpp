@@ -38,6 +38,7 @@
 #include "install/ncz.hpp"
 #include "install/ncz_decode.hpp"
 #include "install/range_probe.hpp"
+#include "install/rate_meter.hpp"
 #include "install/title_name.hpp"
 #include "install/transfer_queue.hpp"
 #include "net/update_policy.hpp"
@@ -1618,8 +1619,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::PageUploadFailed) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::PageUploadFailed); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::ProgressEtaHoursOnly) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ProgressEtaHoursOnly); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -2048,6 +2049,11 @@ void TestHttpPage() {
     CHECK(page.find("(?debug=1)") != std::string::npos || page.find("debug") != std::string::npos);
     CHECK(page.find("URLSearchParams(location.search).get(\"debug\")") != std::string::npos);
     CHECK(page.find("sessionStorage.setItem(\"acnhDebug\"") != std::string::npos);
+    CHECK(page.find("id=\"debugMin\"") != std::string::npos);
+    CHECK(page.find("id=\"debugMax\"") != std::string::npos);
+    CHECK(page.find("id=\"debugLatest\"") != std::string::npos);
+    CHECK(page.find("debugLines.length > 500") != std::string::npos);
+    CHECK(page.find("const stick = debugMinimized || debugAtBottom()") != std::string::npos);
     CHECK(page.find("dbg(\"read \"") != std::string::npos);
     CHECK(page.find("dbg(\"part \"") != std::string::npos);
     /* One click to hand the trace over (the clipboard API needs https, so the old command is the
@@ -2172,6 +2178,99 @@ void TestResumePlan() {
         const auto plan = PlanResume(TaskContent{}, content(id.c_str(), 1000, false, 0, nullptr),
                                     true);
         CHECK(plan.restart);
+    }
+}
+
+/* Where the fetch thread starts reading (game_install.cpp's ReadLoop).  A resumed plain content
+   already has `written` bytes in its placeholder, so its source has to start at that same byte;
+   reading from zero while the writer appends at the resumed offset shifted every byte and made the
+   last block cross the content's end -- the 0x00307202 of the interrupted ACNH 2.0.0 update
+   (measured 2026-10-20).  A compressed content always restarts, so its stream starts at zero. */
+void TestInitialStreamRead() {
+    using acnh_manager::install::InitialStreamRead;
+    using acnh_manager::install::TaskContent;
+
+    TaskContent plain;
+    plain.size = 0xFC168E00;
+    plain.written = 0x7C000000;
+    CHECK(InitialStreamRead(plain) == 0x7C000000);
+
+    /* A fresh run starts where the placeholder starts. */
+    plain.written = 0;
+    CHECK(InitialStreamRead(plain) == 0);
+
+    /* A corrupt task file that claims more than the content holds cannot make the reader seek past
+       the end: the fetch loop's `stream_read < stream_size` would then never run, and the write
+       side would ask for bytes nobody has. */
+    plain.written = plain.size + 1;
+    CHECK(InitialStreamRead(plain) == plain.size);
+
+    /* A compressed content is decoded from its first block, whatever the task file says. */
+    TaskContent compressed = plain;
+    compressed.compressed = true;
+    compressed.written = 0x400000;
+    CHECK(InitialStreamRead(compressed) == 0);
+}
+
+/* The progress card's speed and time left: a sliding window, not an average since the start.  The
+   cases below are the two a person actually notices -- the first seconds of a run (slow) and a
+   transfer that has stalled (the old speed must stop being reported). */
+void TestRateMeter() {
+    using acnh_manager::install::RateMeter;
+    constexpr std::uint64_t kMB = 1024 * 1024;
+
+    /* A steady 10 MB/s over five seconds. */
+    {
+        RateMeter meter;
+        meter.Reset(0, 0);
+        for (int i = 1; i <= 5; ++i) {
+            meter.Sample(static_cast<std::uint64_t>(i) * 1000,
+                         static_cast<std::uint64_t>(i) * 10 * kMB);
+        }
+        CHECK(meter.Rate() == 10 * kMB);
+    }
+    /* A stall: the same byte count for five seconds is 0 B/s, not the speed from before it. */
+    {
+        RateMeter meter;
+        meter.Reset(0, 0);
+        meter.Sample(1000, 10 * kMB);
+        meter.Sample(2000, 20 * kMB);
+        for (int i = 3; i <= 8; ++i) {
+            meter.Sample(static_cast<std::uint64_t>(i) * 1000, 20 * kMB);
+        }
+        CHECK(meter.SampleCount() <= 8);
+        CHECK(meter.Rate() == 0);
+    }
+    /* The window forgets the slow start: 100 MB in the first second, 10 MB in each of the next
+       five -- at the end the window holds only the last five seconds. */
+    {
+        RateMeter meter;
+        meter.Reset(0, 0);
+        meter.Sample(1000, 100 * kMB);
+        for (int i = 2; i <= 6; ++i) {
+            meter.Sample(static_cast<std::uint64_t>(i) * 1000,
+                         static_cast<std::uint64_t>(100 + (i - 1) * 10) * kMB);
+        }
+        /* Samples at 1..6 s, window 5 s: the baseline is the 1 s point, so 50 MB over 5 s. */
+        CHECK(meter.Rate() == 10 * kMB);
+    }
+    /* One sample says nothing yet (and a window shorter than half a second is noise). */
+    {
+        RateMeter meter;
+        meter.Reset(0, 0);
+        CHECK(meter.Rate() == 0);
+        meter.Sample(100, 10 * kMB);
+        CHECK(meter.Rate() == 0);
+    }
+    /* Samples that arrive faster than the idle interval and do not move the counter are dropped, so
+       the queue a stalled run keeps cannot grow with the frame rate. */
+    {
+        RateMeter meter;
+        meter.Reset(0, 0);
+        for (int i = 0; i < 100; ++i) {
+            meter.Sample(static_cast<std::uint64_t>(i) * 8, 0);
+        }
+        CHECK(meter.SampleCount() == 1);
     }
 }
 
@@ -3123,6 +3222,8 @@ int main() {
     TestHeaderTabs();
     TestStorageBars();
     TestResumePlan();
+    TestInitialStreamRead();
+    TestRateMeter();
     TestHttpPage();
     TestUploadProtocol();
     TestPeerRing();

@@ -286,7 +286,17 @@ enum class StringId {
     PageUploadDropped,
     PageBackRefused,
     PageUploadInfo,
+    PageDebugTitle,
+    PageDebugMinimize,
+    PageDebugMaximize,
+    PageDebugRestore,
+    PageDebugLatest,
     PageUploadFailed,
+    ProgressRate,
+    ProgressEtaSeconds,
+    ProgressEtaMinutes,
+    ProgressEtaHours,
+    ProgressEtaHoursOnly,
 };
 
 const char *Text(StringId id, Language language);

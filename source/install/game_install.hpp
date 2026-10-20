@@ -25,6 +25,7 @@
 #include "install/ncz_decode.hpp"
 #include "install/options.hpp"
 #include "install/package.hpp"
+#include "install/rate_meter.hpp"
 #include "install/transfer_queue.hpp"
 
 namespace acnh_manager {
@@ -104,6 +105,11 @@ struct InstallStatus {
        answered with this one, not with the base game's version. */
     std::uint32_t effective_version{0};
     std::string effective_title_id;
+    /* The transfer's own speed over a short sliding window (rate_meter.hpp), and the time that
+       speed implies for what is left.  Zero means "nothing moved in the window" / "no estimate",
+       which the screens render by leaving the two notes out instead of printing a false one. */
+    std::uint64_t bytes_per_second{0};
+    std::uint64_t eta_seconds{0};
 };
 
 class GameInstall {
@@ -266,6 +272,9 @@ private:
     std::thread m_reader_thread;
     /* One cursor per content for the fetch thread (see FetchCursor). */
     std::vector<FetchCursor> m_fetch;
+    /* Speed samples for the progress line; reset when Begin() starts the transfer, because the
+       bytes a resumed run already has are its baseline, not a burst of speed. */
+    RateMeter m_rate;
     /* Development aid (install/dev_stats.*): when Begin() started this run's clock, 0 when no run
        is in flight.  Kept unconditional so the call sites need no #if. */
     std::uint64_t m_transfer_begin_ms{0};

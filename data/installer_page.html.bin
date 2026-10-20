@@ -69,15 +69,31 @@
   /* The debug trace: every step the page takes, with the millisecond it took, so a tab that has
      stopped answering still shows where it stopped.  Only with `?debug=1` in the address (2026-10-17:
      a frozen tab left nothing behind to look at). */
-  #debug { position:fixed; right:10px; bottom:54px; width:min(560px,52vw); max-height:46vh;
-           background:rgba(18,20,22,.94); border:1px solid #3b4a48; border-radius:12px;
-           z-index:99; box-shadow:0 10px 30px rgba(0,0,0,.25); display:flex; flex-direction:column; }
-  #debug .debugActions { display:flex; gap:8px; justify-content:flex-end; margin:8px 10px 0; }
-  #debug button { padding:4px 10px; font:11px/1.4 inherit;
+  #debug { position:fixed; left:0; right:0; bottom:calc(54px + env(safe-area-inset-bottom));
+           width:auto; max-height:46vh; background:rgba(18,20,22,.94); border:1px solid #3b4a48;
+           border-radius:12px 12px 0 0; z-index:99; box-shadow:0 10px 30px rgba(0,0,0,.25);
+           display:flex; flex-direction:column; }
+  #debug .debugHead { display:flex; align-items:center; gap:8px; justify-content:space-between;
+                      padding:8px 10px 0; }
+  #debug .debugTag { color:#cdeee4; font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;
+                     letter-spacing:.08em; white-space:nowrap; }
+  #debug .debugActions { display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; }
+  #debug button { padding:4px 8px; font:11px/1.4 inherit;
                   background:#2b4a44; color:#cdeee4; border:1px solid #3b6a60; border-radius:8px;
                   cursor:pointer; }
-  #debugText { margin:6px 0 0; padding:0 12px 10px; overflow:auto; color:#9fe8d6;
+  #debugText { flex:1; min-height:0; margin:6px 0 0; padding:0 12px 10px; overflow:auto; color:#9fe8d6;
                font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; white-space:pre-wrap; }
+  /* Minimized: only a small circular + button; the log and every other control are gone. */
+  #debug.min { left:auto; right:10px; width:auto; max-height:none; border-radius:50%; padding:3px; }
+  #debug.min #debugText, #debug.min #debugLatest, #debug.min #debugTitle,
+  #debug.min #debugMax, #debug.min #debugClear, #debug.min #debugCopy { display:none; }
+  #debug.min .debugHead { padding:0; }
+  #debug.min .debugActions { gap:0; flex-wrap:nowrap; }
+  #debug.min #debugMin { width:32px; height:32px; padding:0; border-radius:50%;
+                         font-size:17px; line-height:1; }
+  /* Maximized: cover the page; the log gets the rest of the viewport. */
+  #debug.max { inset:0; bottom:0; width:auto; max-height:none; border-radius:0; }
+  #debug.max #debugText { flex:1; max-height:none; }
   /* The footer is fixed and always on screen: this is the room it gets.  It must live in this rule
      (the one that actually applies) -- a `padding-bottom` declared before the shorthand `padding`
      here was silently replaced by 16px, and the last notes line sat under the bar (2026-10-19). */
@@ -108,7 +124,10 @@
   .bar > i { display:block; height:100%; width:0; background:var(--teal); }
   .progressLine { display:flex; align-items:center; gap:14px; margin-top:12px; }
   .progressLine .bar { flex:1; }
-  #progressPercent { min-width:4.2em; text-align:right; font-size:24px; font-weight:700;
+  /* The percentage keeps a fixed column so the bar does not twitch as the digits change, but the
+     column only needs to be as wide as "100%": at 4.2em the wide layout left a ~45 px hole
+     between the bar and the number (2026-10-20). */
+  #progressPercent { min-width:2.6em; text-align:right; font-size:24px; font-weight:700;
                      font-variant-numeric:tabular-nums; }
   .big { font-size:26px; font-weight:700; margin:10px 0 6px; }
   .muted { color:var(--subtle); font-size:13px; }
@@ -153,6 +172,11 @@
   #stageText { font-size:22px; font-weight:700; color:var(--text); margin:2px 0 6px; }
   #progressName { font-size:20px; }
   #progressBytes, #progressContents, #resultWritten, #resultNow { font-size:15px; line-height:1.55; }
+  /* "652.7 MB / 748.8 MB · about 3.2 MB/s · about 31 s left" is one sentence, and a phone's width
+     fits it at 15 px only down to the last character -- the ETA then dangled on a line of its
+     own.  Scaling the line with the viewport keeps the whole sentence together; at a tablet or a
+     desktop it stays at the 15 px of every other detail line. */
+  #progressBytes { font-size:clamp(11.5px, 3.6vw, 15px); }
   #confirmSize, #confirmTarget, #confirmResume, #confirmAgent { font-size:15px; line-height:1.55; }
   #resultNow.good { color:var(--good); }
   #resultKept { margin-top:6px; }
@@ -217,14 +241,17 @@
         <h2 id="stageText"></h2>
         <div class="muted" id="progressContents"></div>
         <div class="mono" id="progressFile" style="margin-top:4px"></div>
-        <div class="progressLine">
-          <div class="bar"><i id="progressBar"></i></div>
-          <div id="progressPercent">0%</div>
-        </div>
-        <div class="muted" id="progressBytes"></div>
-        <div class="muted" id="progressRate" style="margin-top:6px"></div>
       </div>
     </div>
+    <!-- The bar and the byte line run the card's full width, under the cover: on a phone the
+         text column beside a 104 px cover is too narrow for one line of
+         "264.7 MB / 748.8 MB · about 3.1 MB/s · about 3 min left", and a wrapped progress line
+         reads as two unrelated numbers. -->
+    <div class="progressLine" style="margin-top:16px">
+      <div class="bar"><i id="progressBar"></i></div>
+      <div id="progressPercent">0%</div>
+    </div>
+    <div class="muted" id="progressBytes" style="margin-top:6px"></div>
   </div>
 
   <div class="card hidden" id="resultCard">
@@ -262,13 +289,15 @@
         </div>
         <div class="muted" id="confirmResume" style="margin-top:8px"></div>
         <div class="muted" id="confirmAgent" style="margin-top:8px"></div>
-        <div class="buttonRow">
-          <button id="startBtn"></button>
-          <button class="secondary" id="confirmBack"></button>
-        </div>
-        <div class="muted" id="confirmNote" style="margin-top:10px"></div>
       </div>
     </div>
+    <!-- The card's two actions belong to the card, not to the narrow column beside the cover:
+         they run its full width, the same way the progress card's bar and byte line do. -->
+    <div class="buttonRow">
+      <button id="startBtn"></button>
+      <button class="secondary" id="confirmBack"></button>
+    </div>
+    <div class="muted" id="confirmNote" style="margin-top:10px"></div>
   </div>
 
   <ul class="notes" id="notes"></ul>
@@ -277,7 +306,19 @@
   <span class="state" id="stateText"></span>
   <span class="stamp" id="build"></span>
 </footer>
-<div id="debug" class="hidden"><div class="debugActions"><button id="debugClear" type="button"></button><button id="debugCopy" type="button"></button></div><pre id="debugText"></pre></div>
+<div id="debug" class="hidden">
+  <div class="debugHead">
+    <span class="debugTag" id="debugTitle"></span>
+    <div class="debugActions">
+      <button id="debugLatest" type="button"></button>
+      <button id="debugMin" type="button"></button>
+      <button id="debugMax" type="button"></button>
+      <button id="debugClear" type="button"></button>
+      <button id="debugCopy" type="button"></button>
+    </div>
+  </div>
+  <pre id="debugText"></pre>
+</div>
 <input type="file" id="fileInput" class="hidden" accept=".nsp,.nsz,.xci,.xcz,.msp">
 <script>
 const L = __ACNH_LABELS__;
@@ -406,19 +447,56 @@ function keepAwakeResume() {
 const DEBUG_ON = new URLSearchParams(location.search).get("debug") === "1";
 const debugEl = document.getElementById("debug");
 const debugText = document.getElementById("debugText");
+const debugTitle = document.getElementById("debugTitle");
+const debugLatest = document.getElementById("debugLatest");
+const debugMin = document.getElementById("debugMin");
+const debugMax = document.getElementById("debugMax");
 let debugLines = [];
+let debugMinimized = false;
+let debugMaximized = false;
+function debugAtBottom() {
+  return debugText.scrollHeight - debugText.scrollTop - debugText.clientHeight < 8;
+}
+function saveDebugLayout() {
+  try {
+    sessionStorage.setItem("acnhDebugLayout",
+      debugMinimized ? "min" : (debugMaximized ? "max" : ""));
+  } catch {}
+}
+function applyDebugLayout() {
+  const stick = debugMinimized || debugAtBottom();
+  debugEl.classList.toggle("min", debugMinimized);
+  debugEl.classList.toggle("max", debugMaximized);
+  debugTitle.textContent = t("pageDebugTitle");
+  debugMin.textContent = debugMinimized ? "+" : "−";
+  debugMax.textContent = debugMaximized ? "❐" : "□";
+  debugMin.title = t(debugMinimized ? "pageDebugRestore" : "pageDebugMinimize");
+  debugMax.title = t(debugMaximized ? "pageDebugRestore" : "pageDebugMaximize");
+  debugLatest.textContent = t("pageDebugLatest");
+  debugLatest.classList.toggle("hidden", debugMinimized || debugAtBottom());
+  if (stick) debugText.scrollTop = debugText.scrollHeight;
+}
 if (DEBUG_ON) {
   debugEl.classList.remove("hidden");
   try { debugLines = (sessionStorage.getItem("acnhDebug") || "").split("\n").filter(Boolean); } catch {}
   if (debugLines.length) debugText.textContent = debugLines.join("\n");
+  try {
+    const saved = sessionStorage.getItem("acnhDebugLayout");
+    debugMinimized = saved === "min";
+    debugMaximized = saved === "max";
+  } catch {}
+  applyDebugLayout();
 }
 function dbg(message) {
   if (!DEBUG_ON) return;
   const clock = new Date().toTimeString().slice(0, 8) + "." + String(new Date().getMilliseconds()).padStart(3, "0");
+  const stick = debugMinimized || debugAtBottom();
+  const keep = debugText.scrollTop;
   debugLines.push(`${clock} +${(performance.now() / 1000).toFixed(2)}s  ${message}`);
-  if (debugLines.length > 240) debugLines.splice(0, debugLines.length - 240);
+  if (debugLines.length > 500) debugLines.splice(0, debugLines.length - 500);
   debugText.textContent = debugLines.join("\n");
-  debugText.scrollTop = debugText.scrollHeight;
+  debugText.scrollTop = stick ? debugText.scrollHeight : keep;
+  if (!debugMinimized) debugLatest.classList.toggle("hidden", debugAtBottom());
   /* Storage lives in the browser process, and this page talks to it while the browser is under
      strain: one write a second keeps the trace without turning every line into an IPC round trip. */
   const now = Date.now();
@@ -428,6 +506,25 @@ function dbg(message) {
   }
 }
 let dbgLastSave = 0;
+debugMin.addEventListener("click", () => {
+  debugMinimized = !debugMinimized;
+  if (debugMinimized) debugMaximized = false;
+  applyDebugLayout();
+  saveDebugLayout();
+});
+debugMax.addEventListener("click", () => {
+  debugMaximized = !debugMaximized;
+  if (debugMaximized) debugMinimized = false;
+  applyDebugLayout();
+  saveDebugLayout();
+});
+debugLatest.addEventListener("click", () => {
+  debugText.scrollTop = debugText.scrollHeight;
+  debugLatest.classList.add("hidden");
+});
+debugText.addEventListener("scroll", () => {
+  debugLatest.classList.toggle("hidden", debugMinimized || debugAtBottom());
+});
 /* One click to hand the trace over.  `navigator.clipboard` needs a secure context, and this page is
    plain http on a LAN address, so the old `execCommand("copy")` is the fallback that actually works
    here (2026-10-17). */
@@ -438,6 +535,7 @@ document.getElementById("debugClear").textContent = t("pageClearLog");
 document.getElementById("debugClear").addEventListener("click", () => {
   debugLines = [];
   debugText.textContent = "";
+  debugLatest.classList.add("hidden");
   try { sessionStorage.removeItem("acnhDebug"); } catch {}
 });
 document.getElementById("debugCopy").addEventListener("click", async () => {
@@ -792,11 +890,11 @@ function render(status) {
     document.getElementById("progressPercent").textContent = percent + "%";
     document.getElementById("progressBytes").textContent =
       status.received_text + " / " + status.total_text +
+      (status.rate_text ? " · " + status.rate_text : "") +
       (status.eta_text ? " · " + status.eta_text : "");
     document.getElementById("progressContents").textContent =
       t("pageContents", status.content_index, status.content_total);
     document.getElementById("progressFile").textContent = status.content_name || "";
-    document.getElementById("progressRate").textContent = status.rate_text || "";
     showCover("cover", status);
   }
   if (finished) {

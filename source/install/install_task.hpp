@@ -165,6 +165,13 @@ struct ResumePlan {
 ResumePlan PlanResume(const TaskContent &recorded, const TaskContent &fresh,
                       bool placeholder_present);
 
+/* Where the fetch thread starts reading a content's source stream.
+
+   A plain content picks up at the byte the placeholder is waiting for: those are the same bytes in
+   the file (the placeholder's next offset is the container's next offset).  A compressed content
+   always starts over (rule 2 of PlanResume), so its NCZ stream starts at zero. */
+std::uint64_t InitialStreamRead(const TaskContent &content);
+
 /* `install-task.json` (same shape as the in-memory struct; the caller owns the file IO). */
 std::string DumpTask(const InstallTask &task);
 bool ParseTask(std::string_view text, InstallTask *out, std::string *error);

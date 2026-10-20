@@ -219,6 +219,13 @@ ResumePlan PlanResume(const TaskContent &recorded, const TaskContent &fresh,
     return plan;
 }
 
+std::uint64_t InitialStreamRead(const TaskContent &content) {
+    if (content.compressed) {
+        return 0;
+    }
+    return content.written < content.size ? content.written : content.size;
+}
+
 std::string DumpTask(const InstallTask &task) {
     json::Value root;
     root.type = json::Type::Object;

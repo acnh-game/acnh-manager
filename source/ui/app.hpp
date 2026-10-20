@@ -454,6 +454,11 @@ private:
     /* The one line under the confirm card's rows: the agent can follow this package, cannot, or this
        package is none of its business.  Shared with the page, so both devices say the same sentence. */
     std::string PackageAgentNote(bool *warn) const;
+    /* The progress card's two notes, built once here so the console's card and the page's status
+       payload print the same words (and the same rounding) for the same numbers.  Empty when the
+       installer has no honest answer: nothing moved in the window, or nothing is left. */
+    std::string InstallRateText() const;
+    std::string InstallEtaText() const;
     /* This frame's storage row (see RefreshStorageRow).  `m_storage_row_ready` is cleared at the
        end of every frame so nothing can be drawn from a stale read. */
     bool m_storage_row_ready{false};

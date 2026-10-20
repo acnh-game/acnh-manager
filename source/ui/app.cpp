@@ -4006,9 +4006,17 @@ void App::RenderInstallProgress(Surface surface) {
     m_font.DrawBold(surface, bar_x + bar_width + 18, bar_y - 10, kFontHeading, kText, percent);
 
     if (!agent_step) {
-        const std::string detail =
-            util::FormatSize(done) + " / " + util::FormatSize(total);
-        m_font.Draw(surface, text_x, card_top + 236, kFontSmall, kSubtle, detail.c_str());
+        std::string detail = util::FormatSize(done) + " / " + util::FormatSize(total);
+        const std::string rate = InstallRateText();
+        if (!rate.empty()) {
+            detail += " · " + rate;
+        }
+        const std::string eta = InstallEtaText();
+        if (!eta.empty()) {
+            detail += " · " + eta;
+        }
+        m_font.Draw(surface, text_x, card_top + 236, kFontSmall, kSubtle,
+                    m_font.Fit(detail, kFontSmall, text_width, 1).c_str());
     }
     if (finalizing) {
         /* Says the one thing the numbers cannot: this part cannot be cancelled. */
@@ -4141,6 +4149,42 @@ std::string App::PackageAgentNote(bool *warn) const {
     std::snprintf(note, sizeof(note), Tr(i18n::StringId::InstallAgentUnsupported),
                   AgentSupportedVersionsFor(package.cnmt.title_id).c_str());
     return std::string(note);
+}
+
+std::string App::InstallRateText() const {
+    /* Only while bytes are moving: once the transfer is in its closing steps the last number is
+       history, and printing it next to a full bar reads like the run is still downloading. */
+    if (m_install_status.stage != install::InstallStage::Fetching ||
+        m_install_status.bytes_per_second == 0) {
+        return std::string();
+    }
+    return i18n::Format(i18n::StringId::ProgressRate,
+                        util::FormatSize(m_install_status.bytes_per_second).c_str());
+}
+
+std::string App::InstallEtaText() const {
+    const std::uint64_t seconds = m_install_status.eta_seconds;
+    /* Same gate as the speed: a number left over from the last fetch is history once the run has
+       moved on (the transfer's closing steps have no meaningful "time left"). */
+    if (m_install_status.stage != install::InstallStage::Fetching || seconds == 0) {
+        return std::string();
+    }
+    if (seconds < 60) {
+        return i18n::Format(i18n::StringId::ProgressEtaSeconds, static_cast<int>(seconds));
+    }
+    /* Rounded up to the next minute: a card that says "8 minutes" and finishes in seven is a
+       better card than one that keeps saying "1 minute" for ninety seconds. */
+    const std::uint64_t minutes = (seconds + 59) / 60;
+    if (minutes < 60) {
+        return i18n::Format(i18n::StringId::ProgressEtaMinutes, static_cast<int>(minutes));
+    }
+    if (minutes % 60 == 0) {
+        /* A whole hour reads better without "and 0 minutes". */
+        return i18n::Format(i18n::StringId::ProgressEtaHoursOnly,
+                            static_cast<int>(minutes / 60));
+    }
+    return i18n::Format(i18n::StringId::ProgressEtaHours,
+                        static_cast<int>(minutes / 60), static_cast<int>(minutes % 60));
 }
 
 void App::PollInstallerServer() {
@@ -4413,7 +4457,13 @@ std::string App::InstallerStatusJson() const {
     json += util::FormatSize(received);
     json += "\",\"total_text\":\"";
     json += util::FormatSize(total);
-    json += "\",\"eta_text\":\"\",\"rate_text\":\"\",\"content_index\":";
+    json += "\",\"eta_text\":\"";
+    /* The same sentences the console's card prints, worded once (InstallEtaText/InstallRateText):
+       the page shows them next to the same byte counts, so the two screens agree to the digit. */
+    json += net::EscapeForJs(transferring ? InstallEtaText() : std::string());
+    json += "\",\"rate_text\":\"";
+    json += net::EscapeForJs(transferring ? InstallRateText() : std::string());
+    json += "\",\"content_index\":";
     /* The content being written, not the number finished -- the console's own counter adds one
        (and clamps at the total), and the page has to say "2 / 3" at the same moment it does
        (2026-10-19).  At the end done == total, so the clamp keeps it at "3 / 3". */

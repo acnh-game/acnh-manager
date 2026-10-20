@@ -568,6 +568,13 @@ bool ContentInstaller::Write(const InstallTask &task, const RangeRequest &range,
                   static_cast<unsigned long long>(size), content.content_id.c_str(),
                   static_cast<unsigned long long>(range.offset),
                   static_cast<unsigned long long>(content.size));
+    /* ncm answers a write that crosses the placeholder's end with an opaque 0x00307202; saying
+       what happened here turns a resume bug into one readable line in the log (it was exactly this
+       on 2026-10-20: the fetch thread restarted a resumed content from byte zero). */
+    if (content.written > content.size || size > content.size - content.written) {
+        *error = std::string("a write would run past the content's end") + detail;
+        return false;
+    }
     const Result rc = ncmContentStorageWritePlaceHolder(&m_storage, &placeholder, content.written,
                                                         data, size);
     if (R_FAILED(rc)) {

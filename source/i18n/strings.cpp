@@ -287,7 +287,18 @@ constexpr Entry kStrings[] = {
     {"请重新选择文件", "Pick the file again"},  /* PageUploadDropped */
     {"Switch 主机没有接受这次返回,刷新页面再试", "The console did not accept this back step - reload the page and try again"},  /* PageBackRefused */
     {"正在读取安装包信息…", "Reading the package information…"},  /* PageUploadInfo */
+    {"调试日志", "Debug log"},  /* PageDebugTitle */
+    {"最小化", "Minimize"},  /* PageDebugMinimize */
+    {"最大化", "Maximize"},  /* PageDebugMaximize */
+    {"还原", "Restore"},  /* PageDebugRestore */
+    {"最新", "Latest"},  /* PageDebugLatest */
     {"传输中断了", "The transfer was interrupted"},  /* PageUploadFailed */
+    /* The progress card's speed and time-left notes (both devices print the same sentence). */
+    {"约 %s/s", "about %s/s"},  /* ProgressRate */
+    {"剩余约 %d 秒", "about %d s left"},  /* ProgressEtaSeconds */
+    {"剩余约 %d 分钟", "about %d min left"},  /* ProgressEtaMinutes */
+    {"剩余约 %d 小时 %d 分钟", "about %d h %d min left"},  /* ProgressEtaHours */
+    {"剩余约 %d 小时", "about %d h left"},  /* ProgressEtaHoursOnly */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

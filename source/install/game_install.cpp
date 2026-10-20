@@ -61,6 +61,12 @@ constexpr int kQueuePollMs = 8;
    enough for the reader to stay a range ahead of the writer. */
 constexpr std::size_t kQueueSlots = 3;
 
+/* The progress line's clock.  `dev::NowMs()` is compiled to a constant in release builds (the
+   development timings disappear with the rest of the aids), and the speed window needs real time
+   in every build -- otherwise a release build would sample the same timestamp forever and never
+   report a speed at all. */
+std::uint64_t ClockMs() { return armTicksToNs(armGetSystemTick()) / 1000000ull; }
+
 /* How much progress goes by between two writes of install-task.json.  Sixty-four megabytes is a
    few seconds of transfer on this link and costs one ~37 ms write (measured 2026-10-16): the file
    is never more than that far behind, and the card is touched a handful of times per gigabyte. */
@@ -849,12 +855,22 @@ bool GameInstall::Begin(std::string *error) {
        filling the queue while this thread starts writing.  It walks the contents itself and keeps
        its own cursors (`m_fetch`): the task counters belong to the writer. */
     m_fetch.assign(m_task.contents.size(), FetchCursor{});
+    for (std::size_t i = 0; i < m_task.contents.size(); ++i) {
+        /* The fetch cursor is where this content's *source* stream starts, which a resumed plain
+           content does not begin at zero: its placeholder already holds `written` bytes, so the
+           file has to be read from that same offset.  Reading from zero while the writer appends
+           at the resumed offset shifted every byte and made the last block cross the content's
+           end -- the 0x00307202 of the interrupted 2.0.0 update (measured 2026-10-20). */
+        m_fetch[i].stream_read = InitialStreamRead(m_task.contents[i]);
+    }
     m_queue = std::make_unique<TransferQueue>(kQueueSlots, kBlockSize);
     /* Development aid: this run's counters start here, so a second run in one session is not
        reported on top of the first one's numbers. */
     dev::Reset();
     dev::SetTransferMs(0);
     m_transfer_begin_ms = dev::NowMs();
+    /* Speed is measured from here on: whatever a resumed task already had is the baseline. */
+    m_rate.Reset(ClockMs(), DoneBytes(m_task));
     m_reader_thread = std::thread([this] { ReadLoop(); });
     RefreshStatus();
     return true;
@@ -1023,19 +1039,35 @@ bool GameInstall::WriteDecoded(std::size_t index, NczDecoder &decoder, std::stri
             return true;
         }
         const TaskContent &content = m_task.contents[index];
-        const std::uint64_t content_offset = content.written;
-        RangeRequest chunk;
-        chunk.index = index;
-        chunk.offset = content.offset + content_offset; /* bookkeeping: the placeholder write uses
-                                                           the content offset, not this one */
-        chunk.size = pending;
-        ReencryptNczRange(decoder.Info(), content_offset, decoded, pending);
-        if (!WriteRange(chunk, content_offset, decoded, pending, error)) {
-            return false;
+        /* A block may decode past the NCA the stream declares (the compressor pads its last
+           block).  Those bytes have no place in the placeholder -- asking ncm to write them is the
+           0x00307202 the first NSZ runs reported -- so the write stops at the content's own end
+           and the surplus is dropped. */
+        const std::uint64_t remaining =
+            content.size > content.written ? content.size - content.written : 0;
+        const std::size_t take =
+            pending < remaining ? pending : static_cast<std::size_t>(remaining);
+        if (take < pending && g_log != nullptr) {
+            Note("install: %s decoded %llu bytes past its declared size; the surplus is dropped",
+                 content.name.c_str(),
+                 static_cast<unsigned long long>(pending - take));
         }
-        /* No Advance here: WriteRange does it (and doing it twice would push the task's `written`
-           past what the decoder has handed out -- the next write then lands past the content's end,
-           which is exactly what the first hardware run of this change reported). */
+        if (take > 0) {
+            const std::uint64_t content_offset = content.written;
+            RangeRequest chunk;
+            chunk.index = index;
+            chunk.offset = content.offset + content_offset; /* bookkeeping: the placeholder write
+                                                               uses the content offset, not this one */
+            chunk.size = take;
+            ReencryptNczRange(decoder.Info(), content_offset, decoded, take);
+            if (!WriteRange(chunk, content_offset, decoded, take, error)) {
+                return false;
+            }
+            /* No Advance here: WriteRange does it (and doing it twice would push the task's
+               `written` past what the decoder has handed out). */
+        }
+        /* All of it leaves the decoder, including the dropped surplus: those bytes can never be
+           part of this content, and keeping them would only ask for the same decision again. */
         decoder.Consume(pending);
     }
 }
@@ -1316,6 +1348,10 @@ bool GameInstall::Step(std::string *error) {
             break;
         case TransferQueue::Take::Empty:
             dev::AddWriterWait(wait_begin);
+            /* Nothing arrived this poll.  Refresh anyway: the speed window has to see the time
+               passing, otherwise a stalled transfer keeps showing the number it had when bytes
+               last moved (and the page, which reads this status, would keep the same stale one). */
+            RefreshStatus();
             return true;
         case TransferQueue::Take::Finished:
             /* Everything is in: the caller moves to Finish(). */
@@ -1537,6 +1573,14 @@ void GameInstall::RefreshStatus() {
     m_status.done_bytes = DoneBytes(m_task);
     m_status.done_contents = DoneContents(m_task);
     m_status.total_contents = static_cast<int>(m_task.contents.size());
+    m_rate.Sample(ClockMs(), m_status.done_bytes);
+    m_status.bytes_per_second = m_rate.Rate();
+    m_status.eta_seconds = 0;
+    if (m_status.bytes_per_second > 0 && m_status.done_bytes < m_status.total_bytes) {
+        const std::uint64_t left = m_status.total_bytes - m_status.done_bytes;
+        /* Rounded up: "3 seconds left" that finishes in 2.1 is better than "2" that does not. */
+        m_status.eta_seconds = (left + m_status.bytes_per_second - 1) / m_status.bytes_per_second;
+    }
     m_status.current_name.clear();
     RangeRequest next;
     if (NextRange(m_task, kBlockSize, &next)) {
