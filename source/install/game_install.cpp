@@ -1389,21 +1389,6 @@ bool GameInstall::Step(std::string *error) {
     if (prepared.payload) {
         /* The compressed half of the transfer: this is where the payload the fetch thread read
            becomes NCA bytes. */
-#if defined(ACNH_DEV_AIDS) && ACNH_DEV_AIDS
-        /* Development aid: the checksum of what actually reaches the decoder.  Comparing it with
-           the upload source's per-part line says whether the queue/copy lost the bytes (the part
-           itself is already known good). */
-        {
-            std::uint32_t fingerprint = 2166136261u;
-            for (std::size_t i = 0; i < prepared.size; ++i) {
-                fingerprint ^= data[i];
-                fingerprint *= 16777619u;
-            }
-            Note("install: feed %llu+%zu checksum=%08x",
-                 static_cast<unsigned long long>(prepared.range.offset), prepared.size,
-                 static_cast<unsigned>(fingerprint));
-        }
-#endif
         NczDecoder *decoder = m_ncz[prepared.range.index].get();
         std::string decode_error;
         if (decoder == nullptr) {

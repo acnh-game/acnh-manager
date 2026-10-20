@@ -235,19 +235,6 @@ bool HttpUploadSource::ServiceAttachedPart() {
         status = 400;
         response_body = "short body\n";
     } else {
-#if defined(ACNH_DEV_AIDS) && ACNH_DEV_AIDS
-        /* Development aid: one 32-bit checksum per part, so "the page sent different bytes" can be
-           answered by comparing with the same range of the file on the card -- no need to guess
-           whether the decoder or the transport was at fault (2026-10-20). */
-        std::uint32_t fingerprint = 2166136261u;
-        for (const std::uint8_t byte : body) {
-            fingerprint ^= byte;
-            fingerprint *= 16777619u;
-        }
-        Trace("upload: part %llu+%zu checksum=%08x",
-              static_cast<unsigned long long>(offset), length,
-              static_cast<unsigned>(fingerprint));
-#endif
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_slot_offset = offset;

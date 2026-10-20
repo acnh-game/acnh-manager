@@ -1492,7 +1492,8 @@ not be decoded"**,偶尔随后在 `App::Render()` 的 `framebufferBegin` 处崩�
 取证(全部来自真机 `log.txt`):
 
 - 网页分段 `upload: part 384997+4194304 checksum=4c191cda` 与送入解码器的
-  `install: feed 384997+4194304 checksum=4c191cda` **完全一致**,也都等于卡上文件;
+  `install: feed 384997+4194304 checksum=4c191cda` **完全一致**,也都等于卡上文件
+  (这两条校验和是排查时临时加的开发期探针,结论落地后已移除,避免拖慢开发构建的传输测量);
 - 这段流以正确的 zstd 魔数 `28 b5 2f fd` 开始,帧头声明 **`windowSize = 134217728`(128 MiB)**;
 - 同一任务、相同偏移用终端客户端(`tools/upload-client.py`)在**同一进程**里可以完整解出
   472,891,392 字节并安装成功——字节与解码规则都没有问题。
