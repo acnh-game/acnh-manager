@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "env/detect.hpp"
+#include "env/startup_runtime.hpp"
 #include "i18n/strings.hpp"
 #include "install/engine.hpp"
 #include "install/gate.hpp"
@@ -56,6 +57,12 @@ public:
 /* On failure the failing step and its return code go into error (for the log/console). */
     bool Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error);
     void Exit();
+    /* The startup check runs in main before the UI initialises; a page is shown only when it has
+       something to repair (or a failure to report). */
+    void SetStartupPlan(env::StartupPlan plan);
+    /* True when the startup page repaired the layout and set the loader's next NRO; main then
+       returns to hbl instead of terminating the applet so that load can happen. */
+    bool StartupRestartRequested() const { return m_startup_restart; }
 /* Main loop: on the status page, B or + returns. */
     void Run();
 
@@ -65,7 +72,17 @@ private:
        Result reports what happened. */
     /* Progress is shown while the engine works: the install runs on this thread, so this page
        is drawn once before the first byte moves and again after every file. */
-    enum class Page { Home, Details, Install, Uninstall, Progress, Guide, Result, GameInstall };
+    enum class Page {
+        Home,
+        Details,
+        Install,
+        Uninstall,
+        Progress,
+        Guide,
+        Result,
+        GameInstall,
+        StartupCheck,
+    };
 
     void Collect();
     /* Writes the environment block into log.txt: what this console is, what game/version is
@@ -406,6 +423,8 @@ private:
     void RenderInstallConfirm(Surface surface);
     void RenderInstallProgress(Surface surface);
     void RenderInstallResult(Surface surface);
+    void RenderStartupCheck(Surface surface);
+    void RepairStartup();
     /* "Animal Crossing: New Horizons 3.0.3 (Update)" -- the run in hand named in one line; the
        confirm, progress and result cards all show it, so what is being installed never has to be
        guessed at. */
@@ -467,6 +486,12 @@ private:
     bool m_storage_ok[2]{false, false};
     double m_storage_used[2]{0.0, 0.0};
     ui::StorageBarsLayout m_storage_row{};
+    /* The startup self-check, when main found the running NRO outside the standard path. */
+    env::StartupPlan m_startup;
+    bool m_startup_page{false};
+    bool m_startup_repaired{false};
+    bool m_startup_restart{false};
+    std::string m_startup_error;
     /* The download source, kept alive for as long as the run in hand needs to read from it (the
        engine holds a reference, not a copy). */
     std::unique_ptr<install::HttpSource> m_http_source;

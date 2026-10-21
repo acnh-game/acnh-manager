@@ -299,6 +299,15 @@ enum class StringId {
     ProgressEtaHoursOnly,
     PageUploadActive,
     PageWaitOriginal,
+    StartupCheckTitle,
+    StartupCheckBody,
+    StartupRepair,
+    StartupRepairedManual,
+    StartupUnknownPath,
+    StartupFailed,
+    LabelProgramLocation,
+    ValueStandard,
+    ValueNonstandard,
 };
 
 const char *Text(StringId id, Language language);

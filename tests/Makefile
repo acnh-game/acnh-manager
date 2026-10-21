@@ -8,6 +8,7 @@ INCLUDES := -I../source -I../source/third_party/qrcodegen
 SOURCES := host_tests.cpp \
            ../source/env/cheat_file.cpp \
            ../source/env/config_ini.cpp \
+           ../source/env/startup_check.cpp \
            ../source/i18n/strings.cpp \
            ../source/util/json.cpp \
            ../source/manifest/manifest.cpp \

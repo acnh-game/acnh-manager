@@ -301,6 +301,15 @@ constexpr Entry kStrings[] = {
     {"剩余约 %d 小时", "about %d h left"},  /* ProgressEtaHoursOnly */
     {"Switch 主机还在等待上一次上传;结束后才能选择新文件", "The console is still waiting for the previous upload; picking is disabled until it ends"},  /* PageUploadActive */
     {"Switch 主机在等待原连接继续传输… %d 秒, 超时后方可重新上传", "The console is waiting for the original connection… %d s; you can upload again after the timeout"},  /* PageWaitOriginal */
+    {"程序位置需要修复", "The app's location needs fixing"},  /* StartupCheckTitle */
+    {"程序现在从 %s 运行。修复并重启后会回到标准位置。", "It is running from %s. Repairing and restarting moves it to the standard location."},  /* StartupCheckBody */
+    {"修复并重启", "Repair and restart"},  /* StartupRepair */
+    {"已修复,请自行重启", "Repaired - please restart the app"},  /* StartupRepairedManual */
+    {"无法确认程序是从哪里启动的,请从相册重新打开。", "Cannot tell where the app was started from; reopen it from the album."},  /* StartupUnknownPath */
+    {"修复失败: %s", "Repair failed: %s"},  /* StartupFailed */
+    {"程序位置", "App location"},  /* LabelProgramLocation */
+    {"标准", "standard"},  /* ValueStandard */
+    {"非标准", "non-standard"},  /* ValueNonstandard */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

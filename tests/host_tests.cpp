@@ -27,6 +27,7 @@
 
 #include "env/cheat_file.hpp"
 #include "env/config_ini.hpp"
+#include "env/startup_check.hpp"
 #include "i18n/strings.hpp"
 #include "install/gate.hpp"
 #include "install/container.hpp"
@@ -1619,8 +1620,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::PageWaitOriginal) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::PageWaitOriginal); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::ValueNonstandard) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ValueNonstandard); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -2277,6 +2278,115 @@ void TestRateMeter() {
         }
         CHECK(meter.SampleCount() == 1);
     }
+}
+
+/* A minimal NRO image: NroStart, the NRO header, the ASET header and one NACP with the first
+   language entry filled in.  The parser only needs those pieces; the code segments are zeroes. */
+std::vector<std::uint8_t> MakeNroImage(const char *name, const char *author, const char *version) {
+    constexpr std::size_t kCodeSize = 0x200;
+    constexpr std::size_t kNacpSize = 0x4000;
+    constexpr std::size_t kNacpOffset = 0x38;
+    std::vector<std::uint8_t> data(kCodeSize + kNacpOffset + kNacpSize, 0);
+    PutU32(data, 0x10, 0x304F524E); /* NRO0 at sizeof(NroStart) */
+    PutU32(data, 0x18, static_cast<std::uint32_t>(kCodeSize));
+    PutU32(data, kCodeSize, 0x54455341); /* ASET */
+    PutU32(data, kCodeSize + 0x18, static_cast<std::uint32_t>(kNacpOffset));
+    PutU32(data, kCodeSize + 0x20, static_cast<std::uint32_t>(kNacpSize));
+    const std::size_t nacp = kCodeSize + kNacpOffset;
+    std::memcpy(data.data() + nacp, name, std::strlen(name));
+    std::memcpy(data.data() + nacp + 0x200, author, std::strlen(author));
+    std::memcpy(data.data() + nacp + 0x3060, version, std::strlen(version));
+    return data;
+}
+
+/* The startup check's pure half: NRO/NACP parsing and the five rows of the design table. */
+void TestStartupCheck() {
+    using namespace acnh_manager::env;
+
+    const std::vector<std::uint8_t> ours = MakeNroImage("ACNH-Manager", "acnh-game", "1.2.0");
+    NroMeta meta;
+    std::string error;
+    CHECK(ParseNroMeta(ours.data(), ours.size(), &meta, &error));
+    CHECK(meta.ok);
+    CHECK(meta.name == "ACNH-Manager");
+    CHECK(meta.author == "acnh-game");
+    CHECK(meta.version == "1.2.0");
+    CHECK(NroLooksOurs(meta));
+    const std::vector<std::uint8_t> other = MakeNroImage("Other App", "someone", "0.9.0");
+    NroMeta other_meta;
+    CHECK(ParseNroMeta(other.data(), other.size(), &other_meta, &error));
+    CHECK(!NroLooksOurs(other_meta));
+
+    CHECK(CompareVersions("1.2.3", "1.2.4") < 0);
+    CHECK(CompareVersions("1.10.0", "1.9.9") > 0);
+    CHECK(CompareVersions("1.2", "1.2.0") == 0);
+    CHECK(CompareVersions("", "0.0.1") < 0);
+    CHECK(SameNroPath("/switch/ACNH-Manager/ACNH-Manager.nro", kStandardNroPath));
+
+    StartupInputs in;
+    in.current_path = "/switch/acnh-manager.nro";
+    in.current_readable = true;
+    in.current_version = "1.2.0";
+
+    /* Development builds are exempt. */
+    in.dev = true;
+    CHECK(!DecideStartup(in).show_page);
+    CHECK(DecideStartup(in).action == StartupAction::None);
+    in.dev = false;
+
+    /* Already at the standard path: no page, nothing to do. */
+    StartupInputs standard = in;
+    standard.current_path = kStandardNroPath;
+    CHECK(!DecideStartup(standard).show_page);
+    /* FAT32 is case-insensitive: hbmenu's cached spelling must not look like another file. */
+    standard.current_path = "/SWITCH/ACNH-MANAGER/ACNH-MANAGER.NRO";
+    CHECK(!DecideStartup(standard).show_page);
+
+    /* argv[0] missing or unlikely: report, never move. */
+    StartupInputs unknown = in;
+    unknown.current_path = "acnh-manager.nro";
+    CHECK(DecideStartup(unknown).show_page);
+    CHECK(DecideStartup(unknown).action == StartupAction::ReportOnly);
+    StartupInputs unreadable = in;
+    unreadable.current_readable = false;
+    CHECK(DecideStartup(unreadable).action == StartupAction::ReportOnly);
+
+    /* Standard missing: silent move, no page. */
+    StartupInputs missing = in;
+    CHECK(!DecideStartup(missing).show_page);
+    CHECK(DecideStartup(missing).silent);
+    CHECK(DecideStartup(missing).action == StartupAction::CopyCurrent);
+
+    /* Standard exists but is not ours: overwrite it with this copy. */
+    StartupInputs foreign = in;
+    foreign.standard_present = true;
+    foreign.standard_readable = true;
+    foreign.standard_ours = false;
+    CHECK(DecideStartup(foreign).show_page);
+    CHECK(DecideStartup(foreign).action == StartupAction::CopyCurrent);
+
+    StartupInputs newer_standard = in;
+    newer_standard.standard_present = true;
+    newer_standard.standard_readable = true;
+    newer_standard.standard_ours = true;
+    newer_standard.standard_version = "1.3.0";
+    CHECK(DecideStartup(newer_standard).action == StartupAction::DeleteCurrent);
+    StartupInputs newer_current = newer_standard;
+    newer_current.standard_version = "1.1.0";
+    CHECK(DecideStartup(newer_current).action == StartupAction::CopyCurrent);
+
+    /* Same version: identical builds keep the standard copy; otherwise mtime picks the newer. */
+    StartupInputs same = newer_standard;
+    same.standard_version = "1.2.0";
+    same.same_build = true;
+    CHECK(DecideStartup(same).action == StartupAction::DeleteCurrent);
+    StartupInputs same_but_newer = same;
+    same_but_newer.same_build = false;
+    same_but_newer.current_mtime_newer = true;
+    CHECK(DecideStartup(same_but_newer).action == StartupAction::CopyCurrent);
+    StartupInputs same_but_older = same_but_newer;
+    same_but_older.current_mtime_newer = false;
+    CHECK(DecideStartup(same_but_older).action == StartupAction::DeleteCurrent);
 }
 
 /* The install page's two storage blocks (design section 8.1): microSD left, the console's own
@@ -3229,6 +3339,7 @@ int main() {
     TestResumePlan();
     TestInitialStreamRead();
     TestRateMeter();
+    TestStartupCheck();
     TestHttpPage();
     TestUploadProtocol();
     TestPeerRing();

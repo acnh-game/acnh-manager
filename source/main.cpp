@@ -2,9 +2,11 @@
 
 #include <fcntl.h>
 #include <cstdio>
+#include <string>
 #include <unistd.h>
 
 #include "install/dev_stats.hpp"
+#include "env/startup_runtime.hpp"
 #include "log.hpp"
 #include "ui/app.hpp"
 #include "util/fs_path.hpp"
@@ -88,8 +90,8 @@ void PrepareEnvironment(acnh_manager::Log *log) {
 }  // namespace
 
 int main(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+    const std::string launch_path =
+        (argc > 0 && argv != nullptr && argv[0] != nullptr) ? argv[0] : std::string();
     /* Development aid: the start of the clock the "launch: +N ms" lines are measured against (a
        no-op in a release build). */
     acnh_manager::install::dev::MarkLaunch();
@@ -112,6 +114,45 @@ int main(int argc, char **argv) {
         rc_log = log.Open(sd, kLogPath, true, want_log);
         if (R_SUCCEEDED(rc_log)) {
             log.Open(sd, kLogHistoryPath, false, want_log);
+        }
+    }
+
+    /* The launch line goes in before anything else: it is the one place that says which copy of the
+       NRO is running and whether that is the standard path.  The check itself is pure decision +
+       fs; a missing standard copy is moved without a page, and everything else is shown by the UI
+       (source/ui/app.cpp's StartupCheck page). */
+    acnh_manager::env::StartupPlan startup_plan;
+    if (R_SUCCEEDED(rc_sd)) {
+        startup_plan = acnh_manager::env::RunStartupCheck(
+            sd, launch_path, ACNH_DEV_AIDS != 0, R_SUCCEEDED(rc_log) ? &log : nullptr);
+        if (startup_plan.decision.silent) {
+            std::string repair_error;
+            const bool moved = acnh_manager::env::ApplyStartupRepair(
+                sd, startup_plan, R_SUCCEEDED(rc_log) ? &log : nullptr, &repair_error);
+            if (moved && acnh_manager::env::SetNextLoadToStandard()) {
+                /* Unlike the normal exit (which terminates the applet so its layers are freed),
+                   a chained load only happens when the applet returns to hbl.  The repair page
+                   does the same through App::StartupRestartRequested(); this silent path runs
+                   before the UI exists, so it has to do it here (2026-10-21: without this the
+                   screen went black and the app exited instead of starting the standard copy). */
+                __nx_applet_exit_mode = 0;
+                if (R_SUCCEEDED(rc_log)) {
+                    log.Line("startup: moved this NRO to the standard path; returning to the loader "
+                             "for the chained load");
+                    log.Sync();
+                    log.Close();
+                }
+                return 0;
+            }
+            /* The move failed, or the host cannot chain-load: show the page (the App turns the
+               failure into a retry, and a successful move into "restart by hand"). */
+            startup_plan.decision.show_page = true;
+            startup_plan.decision.silent = false;
+            startup_plan.repaired = moved;
+            startup_plan.startup_error = moved ? std::string() : repair_error;
+            if (moved) {
+                startup_plan.decision.action = acnh_manager::env::StartupAction::None;
+            }
         }
     }
 
@@ -185,6 +226,7 @@ int main(int argc, char **argv) {
        evidence behind. */
     {
         acnh_manager::ui::App app;
+        app.SetStartupPlan(std::move(startup_plan));
         std::string ui_error;
         if (R_SUCCEEDED(rc_log)) {
             log.Line("ui: initialising");
@@ -208,9 +250,19 @@ int main(int argc, char **argv) {
             }
 #endif
             app.Run();
+            const bool startup_restart = app.StartupRestartRequested();
             app.Exit();
             if (R_SUCCEEDED(rc_log)) {
                 log.Line("ui: loop exited");
+            }
+            if (startup_restart) {
+                /* The loader can only chain-load when the applet returns to it; the app normally
+                   sets this to 1 so leaving ends the applet cleanly.  For this one repair path the
+                   opposite is what makes envSetNextLoad work (2026-10-21). */
+                __nx_applet_exit_mode = 0;
+                if (R_SUCCEEDED(rc_log)) {
+                    log.Line("startup: returning to the loader for the chained load");
+                }
             }
         } else {
             if (R_SUCCEEDED(rc_log)) {

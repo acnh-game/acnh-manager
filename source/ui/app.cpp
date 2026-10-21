@@ -162,6 +162,7 @@ constexpr int kActionInstallTargetNand = 25; /* the header's system block (R, or
 constexpr int kActionPendingResume = 26;   /* "continue" on the unfinished-install screen (A) */
 constexpr int kActionPendingAbandon = 27;  /* "give up and clean up" on that screen (X) */
 constexpr int kActionPendingPickNew = 28;  /* "pick something else" on that screen (Y) */
+constexpr int kActionStartupRepair = 29;   /* the startup page's only action (A) */
 
 /* Where each header entry's key badge sits (the layout needs the same answer for the drawn pill
    and for the touch target -- see RenderHeader).  Same order as the tabs there: + installer,
@@ -288,6 +289,9 @@ const char *PlanActionName(install::PlanAction action) {
 bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     m_log = log;
     m_sd = &sd;
+    if (m_startup_page) {
+        m_page = Page::StartupCheck;
+    }
     m_update_task.SetLog(log);
     /* The chat-code explainer reads its code once; empty when the build carries none. */
     m_guide_qr = ui::QrMatrix::FromEmbedded();
@@ -335,48 +339,53 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     if (m_log != nullptr) {
         install::dev::LogStartup(*m_log, "framebuffer ready");
     }
-    Trace("ui: collecting environment ...");
-    Collect();
-    /* The install an interruption left behind is part of the state of this console, so the details
-       page can answer "where did those gigabytes go?" from the first frame on. */
-    RefreshPendingTask();
-    if (m_log != nullptr) {
-        install::dev::LogStartup(*m_log, "environment + plan ready");
-    }
-    /* One silent look at the release host per launch: a newer agent shows up on the home screen
-       on its own, and a failure only lands in the log/details. */
-    StartUpdateCheck(/*silent=*/true);
-    Trace("ui: environment collected (exefs=%zu, manifest=%d)", m_report.exefs.size(),
-          m_have_manifest ? 1 : 0);
-    /* Crash leftovers: an interrupted two-phase install can leave `<target>.acnh-tmp` /
-       `<target>.acnh-old` siblings behind.  Clean them at startup so the directory never
-       accumulates junk, and say so in the log. */
-    if (m_sd != nullptr) {
-        /* The manifest is the only source for where our files live; without it there is
-           nothing we could have written, so there is nothing to clean either. */
-        std::string dir;
-        if (m_plan.game != nullptr && !m_plan.game->files.empty()) {
-            const std::string &target = m_plan.game->files.front().target;
-            const std::size_t slash = target.find_last_of('/');
-            if (slash != std::string::npos) {
-                dir = target.substr(0, slash);
-            }
+    /* The startup self-check page needs the framebuffer and the fonts, not the game environment:
+       collecting it and starting the update check would only delay the one repair the player has
+       to make.  The page exits (or restarts into the standard copy) without ever showing Home. */
+    if (!m_startup_page) {
+        Trace("ui: collecting environment ...");
+        Collect();
+        /* The install an interruption left behind is part of the state of this console, so the details
+           page can answer "where did those gigabytes go?" from the first frame on. */
+        RefreshPendingTask();
+        if (m_log != nullptr) {
+            install::dev::LogStartup(*m_log, "environment + plan ready");
         }
-        if (!dir.empty()) {
-            std::vector<std::string> leftovers;
-            const int cleaned = install::CleanLeftovers(*m_sd, dir, &leftovers);
-            /* Log whenever anything was *found*, including leftovers that refused to be removed:
-               a stuck temp file is the difference between a working and a failing install, and
-               this line is where it shows up. */
-            if (!leftovers.empty() && m_log != nullptr) {
-                std::string list;
-                for (const auto &name : leftovers) {
-                    if (!list.empty()) {
-                        list += ", ";
-                    }
-                    list += name;
+        /* One silent look at the release host per launch: a newer agent shows up on the home screen
+           on its own, and a failure only lands in the log/details. */
+        StartUpdateCheck(/*silent=*/true);
+        Trace("ui: environment collected (exefs=%zu, manifest=%d)", m_report.exefs.size(),
+              m_have_manifest ? 1 : 0);
+        /* Crash leftovers: an interrupted two-phase install can leave `<target>.acnh-tmp` /
+           `<target>.acnh-old` siblings behind.  Clean them at startup so the directory never
+           accumulates junk, and say so in the log. */
+        if (m_sd != nullptr) {
+            /* The manifest is the only source for where our files live; without it there is
+               nothing we could have written, so there is nothing to clean either. */
+            std::string dir;
+            if (m_plan.game != nullptr && !m_plan.game->files.empty()) {
+                const std::string &target = m_plan.game->files.front().target;
+                const std::size_t slash = target.find_last_of('/');
+                if (slash != std::string::npos) {
+                    dir = target.substr(0, slash);
                 }
-                m_log->Line("cleanup: removed %d leftover file(s): %s", cleaned, list.c_str());
+            }
+            if (!dir.empty()) {
+                std::vector<std::string> leftovers;
+                const int cleaned = install::CleanLeftovers(*m_sd, dir, &leftovers);
+                /* Log whenever anything was *found*, including leftovers that refused to be removed:
+                   a stuck temp file is the difference between a working and a failing install, and
+                   this line is where it shows up. */
+                if (!leftovers.empty() && m_log != nullptr) {
+                    std::string list;
+                    for (const auto &name : leftovers) {
+                        if (!list.empty()) {
+                            list += ", ";
+                        }
+                        list += name;
+                    }
+                    m_log->Line("cleanup: removed %d leftover file(s): %s", cleaned, list.c_str());
+                }
             }
         }
     }
@@ -415,6 +424,13 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     Render();
     Trace("ui: first frame done");
     return true;
+}
+
+void App::SetStartupPlan(env::StartupPlan plan) {
+    m_startup = std::move(plan);
+    m_startup_page = m_startup.decision.show_page;
+    m_startup_error = m_startup.startup_error;
+    m_startup_repaired = m_startup.repaired;
 }
 
 void App::Exit() {
@@ -1145,6 +1161,22 @@ void App::HandleKeys(u32 down) {
     if (m_page == Page::Progress) {
         return;
     }
+    if (m_page == Page::StartupCheck) {
+        /* One action, one way out.  No tabs, no L/R, no installer/guide shortcuts: this page is
+           the precondition for everything else. */
+        if ((down & HidNpadButton_B) != 0) {
+            m_should_exit = true;
+            return;
+        }
+        if ((down & HidNpadButton_A) != 0) {
+            if (!m_startup_repaired &&
+                m_startup.decision.action != env::StartupAction::ReportOnly) {
+                RepairStartup();
+            }
+            return;
+        }
+        return;
+    }
     /* L / R move through the pages the player reads, in the order the header draws them, wrapping
        at both ends (see SwitchPeerPage).  They are dead while the installer is up: that page is a
        mode whose header hides the tabs, and a key that silently left it moved the player out with
@@ -1364,7 +1396,17 @@ void App::HandleTouch() {
    they mean.  Tapping "install now" on the confirmation page used to re-run the *home* page's
    meaning of the primary action, which silently did nothing. */
 void App::ActivateAction(int id) {
+    if (m_page == Page::StartupCheck) {
+        if (id == kActionStartupRepair && !m_startup_repaired) {
+            RepairStartup();
+        } else if (id == kActionFooterBack) {
+            m_should_exit = true;
+        }
+        return;
+    }
     switch (m_page) {
+        case Page::StartupCheck:
+            return; /* handled above; here only to keep the switch exhaustive */
         case Page::Install:
             if (id == kActionPrimary) {
                 RunInstall();
@@ -1548,7 +1590,7 @@ void App::Run() {
            it earlier was most of the black screen -- and by waiting one more frame the player also
            gets a frame of input handling before the pause, instead of a picture that ignores them. */
         ++frames_drawn;
-        if (!m_report_traced && frames_drawn >= 2) {
+        if (!m_report_traced && frames_drawn >= 2 && !m_startup_page) {
             m_report_traced = true;
             TraceEnvironment();
             if (m_log != nullptr) {
@@ -1627,6 +1669,7 @@ void App::Render() {
     }
     switch (m_page) {
         case Page::Home: RenderHome(surface); break;
+        case Page::StartupCheck: RenderStartupCheck(surface); break;
         case Page::GameInstall: RenderGameInstall(surface); break;
         case Page::Details: RenderDetails(surface); break;
         case Page::Install: RenderInstall(surface); break;
@@ -1701,6 +1744,11 @@ void App::RenderHeader(Surface surface) {
     /* No tabs while the engine works: the progress page ignores input (see HandleKeys), and a
        drawn control that cannot be pressed is exactly what this project keeps fixing. */
     if (m_page == Page::Progress) {
+        DrawBrand(surface, surface.width);
+        return;
+    }
+    if (m_page == Page::StartupCheck) {
+        /* No tabs: the app's pages are not reachable until this precondition is resolved. */
         DrawBrand(surface, surface.width);
         return;
     }
@@ -1779,7 +1827,7 @@ void App::RenderHeader(Surface surface) {
 void App::AddChromeActions(int surface_width, int surface_height) {
     /* The progress page has no chrome on purpose: its keys are dead while the engine works, and
        drawing tabs or a "B back" hint would promise controls that do nothing. */
-    if (m_page == Page::Progress) {
+    if (m_page == Page::Progress || m_page == Page::StartupCheck) {
         return;
     }
     /* The installer page hides the tabs and shows the two storage blocks instead; those blocks are
@@ -1823,7 +1871,9 @@ void App::AddChromeActions(int surface_width, int surface_height) {
 
     if (!HasOwnBackButton()) {
         const i18n::StringId label_id =
-            m_page == Page::Home ? i18n::StringId::LabelExit : i18n::StringId::LabelBack;
+            (m_page == Page::Home || m_page == Page::StartupCheck)
+                ? i18n::StringId::LabelExit
+                : i18n::StringId::LabelBack;
         const int footer_label = m_font.Measure(Tr(label_id), kFontSmall);
         const FooterHintLayout footer = LayoutFooterHint(
             surface_height, m_font.LineHeight(kFontSmall), footer_label);
@@ -1937,7 +1987,9 @@ void App::RenderFooter(Surface surface) {
        there: one key, one place. */
     const bool has_back_button = HasOwnBackButton();
     const i18n::StringId label_id =
-        m_page == Page::Home ? i18n::StringId::LabelExit : i18n::StringId::LabelBack;
+        (m_page == Page::Home || m_page == Page::StartupCheck)
+            ? i18n::StringId::LabelExit
+            : i18n::StringId::LabelBack;
     const char *label = has_back_button ? "" : Tr(label_id);
     const FooterHintLayout hint = LayoutFooterHint(
         surface.height, m_font.LineHeight(kFontSmall),
@@ -1979,7 +2031,7 @@ void App::RenderFooter(Surface surface) {
             DrawInstallTargetHint(surface, hint.text_y,
                                   hint.label_x + m_font.Measure(label, kFontSmall) + 30);
         }
-    } else if (m_page != Page::Progress) {
+    } else if (m_page != Page::Progress && m_page != Page::StartupCheck) {
         const char *pages_hint = Tr(i18n::StringId::FooterPagesHint);
         const int hint_width = m_font.Measure(pages_hint, kFontSmall);
         int x = kMargin;
@@ -2523,6 +2575,17 @@ void App::RenderDetails(Surface surface) {
     std::vector<Row> version_rows;
     version_rows.push_back({Tr(i18n::StringId::LabelGameVersion), game, kText, 2});
     version_rows.push_back({Tr(i18n::StringId::LabelHos), m_report.hos_version, kText, 1});
+    /* Where this NRO was launched from.  The startup page fixes a non-standard layout before the
+       app is usable; this row is what shows the result afterwards. */
+    {
+        const bool known = !m_startup.current_path.empty();
+        const bool standard = m_startup.current_path == env::kStandardNroPath;
+        version_rows.push_back({Tr(i18n::StringId::LabelProgramLocation),
+                                known ? Tr(standard ? i18n::StringId::ValueStandard
+                                                    : i18n::StringId::ValueNonstandard)
+                                      : Tr(i18n::StringId::ValueNotAvailable),
+                                known ? (standard ? kGood : kWarn) : kWarn, 1});
+    }
     /* Diagnostics: the applet mode and whether the game is open both matter when something
        behaves differently than expected, so they stay available here. */
     /* Plain words instead of the raw enum name: people know "album (applet) mode" (started
@@ -5475,6 +5538,78 @@ void App::RefreshNetworkState() {
 }
 
 /* The confirm screen: what this file is, before anything is written. */
+void App::RenderStartupCheck(Surface surface) {
+    m_actions.clear();
+    const int card_x = 240;
+    const int card_top = kHeaderHeight + 70;
+    const int card_w = surface.width - card_x * 2;
+    const int card_h = 330;
+    FillRoundedRect(surface, card_x, card_top, card_w, card_h, 18, kBorder);
+    FillRoundedRect(surface, card_x + 3, card_top + 3, card_w - 6, card_h - 6, 15, kCard);
+    const int x = card_x + 36;
+    const int width = card_w - 72;
+    m_font.DrawBold(surface, x, card_top + 28, kFontTitle, kText,
+                    m_font.Fit(Tr(i18n::StringId::StartupCheckTitle), kFontTitle, width, 1).c_str(),
+                    width);
+    std::string body;
+    if (m_startup.decision.action == env::StartupAction::ReportOnly) {
+        body = Tr(i18n::StringId::StartupUnknownPath);
+    } else {
+        body = i18n::Format(i18n::StringId::StartupCheckBody,
+                            m_startup.current_path.c_str());
+    }
+    /* `Fit` decides whether the line count fits; the width argument on `Draw` is what actually
+       wraps the text.  Without it the finished sentence ran past the card's right edge. */
+    m_font.Draw(surface, x, card_top + 94, kFontBody, kSubtle,
+                m_font.Fit(body, kFontBody, width, 2).c_str(), width);
+    if (!m_startup_error.empty()) {
+        const std::string error =
+            m_startup_repaired
+                ? m_startup_error
+                : i18n::Format(i18n::StringId::StartupFailed, m_startup_error.c_str());
+        m_font.Draw(surface, x, card_top + 168, kFontSmall, kWarn,
+                    m_font.Fit(error, kFontSmall, width, 2).c_str(), width);
+    }
+    if (!m_startup_repaired && m_startup.decision.action != env::StartupAction::ReportOnly) {
+        const Rect button{x, card_top + card_h - 92, width, 64};
+        FillRoundedRect(surface, button.x, button.y, button.w, button.h, 14, kHeader);
+        DrawCenteredLabel(surface, m_font, button, kFontBody, kOnHeader,
+                          Tr(i18n::StringId::StartupRepair));
+        m_actions.push_back({kActionStartupRepair, button, true});
+    } else if (m_startup_repaired) {
+        m_font.DrawBold(surface, x, card_top + card_h - 96, kFontBody, kWarn,
+                        Tr(i18n::StringId::StartupRepairedManual));
+    }
+    /* The footer's Ⓑ is drawn by RenderFooter; give it the same touch target (and the same
+       layout function) every other page's back hint has. */
+    const int footer_label = m_font.Measure(Tr(i18n::StringId::LabelExit), kFontSmall);
+    const FooterHintLayout footer =
+        LayoutFooterHint(surface.height, m_font.LineHeight(kFontSmall), footer_label);
+    m_actions.push_back({kActionFooterBack, footer.hit, true});
+}
+
+void App::RepairStartup() {
+    if (m_sd == nullptr) {
+        return;
+    }
+    std::string error;
+    if (!env::ApplyStartupRepair(*m_sd, m_startup, m_log, &error)) {
+        m_startup_error = error;
+        Trace("startup: repair failed: %s", error.c_str());
+        return;
+    }
+    m_startup_repaired = true;
+    Trace("startup: repaired (%s)", m_startup.decision.reason.c_str());
+    if (env::SetNextLoadToStandard()) {
+        Trace("startup: next load set to the standard path; exiting");
+        m_startup_restart = true;
+        m_should_exit = true;
+    } else {
+        m_startup_error.clear();
+        Trace("startup: repaired, but the host cannot chain-load; asking for a manual restart");
+    }
+}
+
 void App::RenderInstallConfirm(Surface surface) {
     m_actions.clear();
     const int card_x = 180;
