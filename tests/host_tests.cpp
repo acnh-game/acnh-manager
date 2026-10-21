@@ -27,6 +27,7 @@
 
 #include "env/cheat_file.hpp"
 #include "env/config_ini.hpp"
+#include "env/forwarder.hpp"
 #include "env/startup_check.hpp"
 #include "i18n/strings.hpp"
 #include "install/gate.hpp"
@@ -2389,6 +2390,24 @@ void TestStartupCheck() {
     CHECK(DecideStartup(same_but_older).action == StartupAction::DeleteCurrent);
 }
 
+/* The home-menu tile identity has to match the reference implementation exactly.  An empty
+   argument list seeds itself with the NRO path, so a standard-path tile is stable across both
+   installers, while a different argument string deliberately produces a different tile. */
+void TestForwarderIdentity() {
+    using namespace acnh_manager::env;
+
+    CHECK(StandardForwarderTitleId() == 0x05BEB04B8780B000ULL);
+    CHECK(ForwarderTitleId(kForwarderNroPath, "") == StandardForwarderTitleId());
+    CHECK(ForwarderTitleId(kForwarderNroPath, "foo") == 0x053A2D2552720000ULL);
+    CHECK(ForwarderTitleId(kForwarderNroPath, "foo") !=
+          ForwarderTitleId(kForwarderNroPath, "foo bar"));
+    CHECK(IsForwarderTitleId(StandardForwarderTitleId()));
+    CHECK(IsForwarderTitleId(0x0500000000001000ULL));
+    CHECK(IsForwarderTitleId(0x05FF000000001000ULL));
+    CHECK(!IsForwarderTitleId(0x0100000000001000ULL));
+    CHECK(!IsForwarderTitleId(0x0600000000001000ULL));
+}
+
 /* The install page's two storage blocks (design section 8.1): microSD left, the console's own
    memory right.  The blocks show free/total, and they are also the control that picks where the
    run writes -- so what matters here is that the drawn block and its touch target are one thing,
@@ -3340,6 +3359,7 @@ int main() {
     TestInitialStreamRead();
     TestRateMeter();
     TestStartupCheck();
+    TestForwarderIdentity();
     TestHttpPage();
     TestUploadProtocol();
     TestPeerRing();
