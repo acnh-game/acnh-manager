@@ -297,7 +297,7 @@ constexpr Entry kStrings[] = {
     {"约 %s/s", "about %s/s"},  /* ProgressRate */
     {"剩余约 %d 秒", "about %d s left"},  /* ProgressEtaSeconds */
     {"剩余约 %d 分钟", "about %d min left"},  /* ProgressEtaMinutes */
-    {"剩余约 %d 小时 %d 分钟", "about %d h %d min left"},  /* ProgressEtaHours */
+    {"剩余约 %s 小时", "about %s h left"},  /* ProgressEtaHours */
     {"剩余约 %d 小时", "about %d h left"},  /* ProgressEtaHoursOnly */
     {"Switch 主机还在等待上一次上传;结束后才能选择新文件", "The console is still waiting for the previous upload; picking is disabled until it ends"},  /* PageUploadActive */
     {"Switch 主机在等待原连接继续传输… %d 秒, 超时后方可重新上传", "The console is waiting for the original connection… %d s; you can upload again after the timeout"},  /* PageWaitOriginal */

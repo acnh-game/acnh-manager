@@ -176,7 +176,7 @@
      fits it at 15 px only down to the last character -- the ETA then dangled on a line of its
      own.  Scaling the line with the viewport keeps the whole sentence together; at a tablet or a
      desktop it stays at the 15 px of every other detail line. */
-  #progressBytes { font-size:clamp(11.5px, 3.6vw, 15px); }
+  #progressBytes { font-size:clamp(11px, 3.5vw, 15px); }
   /* The progress card's "waiting for the original connection" notice: the same amber every other
      warning uses, on a pale tint, so it reads as a state change rather than another byte line. */
   #progressBytes.waitNotice { color:var(--warn); background:#fdf3d6; border-radius:10px;
@@ -706,6 +706,20 @@ function renderFooterState(status, busy, finished, confirming) {
   }
 }
 
+/* Keep the byte / speed / time-left sentence on one line.  It resets to the stylesheet's size and
+   steps down (to a 10 px floor) only as far as the card needs; a wrapped line left the last word
+   dangling on its own row on a phone.  Only the normal bytes line is forced -- the wait
+   notice is a sentence and may wrap. */
+function fitProgressLine(el) {
+  el.style.whiteSpace = "nowrap";
+  el.style.fontSize = "";
+  let size = parseFloat(getComputedStyle(el).fontSize) || 15;
+  while (el.scrollWidth > el.clientWidth && size > 10) {
+    size -= 0.5;
+    el.style.fontSize = size + "px";
+  }
+}
+
 /* The header's blocks are the same control the console's are: tapping one asks the console to write
    there.  With a package already read that re-opens it on the new storage, which the card says. */
 function pickTarget(target) {
@@ -912,12 +926,15 @@ function render(status) {
          normally sit, in the warning style the card's notes use. */
       bytesLine.textContent = t("pageWaitOriginal", waitLeft);
       bytesLine.classList.add("waitNotice");
+      bytesLine.style.whiteSpace = "";
+      bytesLine.style.fontSize = "";
     } else {
       bytesLine.textContent =
         status.received_text + " / " + status.total_text +
         (status.rate_text ? " · " + status.rate_text : "") +
         (status.eta_text ? " · " + status.eta_text : "");
       bytesLine.classList.remove("waitNotice");
+      fitProgressLine(bytesLine);
     }
     document.getElementById("progressContents").textContent =
       t("pageContents", status.content_index, status.content_total);

@@ -4213,8 +4213,12 @@ std::string App::InstallEtaText() const {
         return i18n::Format(i18n::StringId::ProgressEtaHoursOnly,
                             static_cast<int>(minutes / 60));
     }
-    return i18n::Format(i18n::StringId::ProgressEtaHours,
-                        static_cast<int>(minutes / 60), static_cast<int>(minutes % 60));
+    /* "12 h 23 min" is the longest form the progress line ever has to hold; at a phone's width it
+       wrapped the byte line.  One decimal is just as useful for an estimate and keeps the sentence
+       on one line ("12.4 h"). */
+    char hours[16];
+    std::snprintf(hours, sizeof(hours), "%.1f", static_cast<double>(seconds) / 3600.0);
+    return i18n::Format(i18n::StringId::ProgressEtaHours, hours);
 }
 
 void App::PollInstallerServer() {
