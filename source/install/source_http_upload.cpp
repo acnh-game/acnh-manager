@@ -118,6 +118,12 @@ void HttpUploadSource::SetPump(std::function<void()> pump) {
     m_pump = std::move(pump);
 }
 
+void HttpUploadSource::SetWaitPump(std::function<void()> pump) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_wait_pump = std::move(pump);
+    m_last_wait_pump_ms = 0;
+}
+
 void HttpUploadSource::SetRequestsProbe(std::function<int()> probe) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_requests_probe = std::move(probe);
@@ -330,9 +336,21 @@ bool HttpUploadSource::Read(std::uint64_t offset, std::size_t size, std::uint8_t
         }
         m_has_want = true;
         const auto pump = m_pump;
+        /* Four times a second is enough for a seconds-granularity countdown and keeps the caller's
+           frame work off every 50 ms poll. */
+        const auto wait_pump = m_wait_pump;
+        const std::uint64_t now_ms = NowMs();
+        const bool tick_wait_pump =
+            static_cast<bool>(wait_pump) && now_ms - m_last_wait_pump_ms >= 250;
+        if (tick_wait_pump) {
+            m_last_wait_pump_ms = now_ms;
+        }
         lock.unlock();
         if (pump) {
             pump();
+        }
+        if (tick_wait_pump) {
+            wait_pump();
         }
         if (ServiceAttachedPart()) {
             lock.lock();

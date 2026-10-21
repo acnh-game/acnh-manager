@@ -185,7 +185,7 @@ constexpr Entry kStrings[] = {
     {"正在接收", "Receiving"},  /* ProgressReceive */
     {"正在写入", "Writing"},  /* ProgressWrite */
     {"正在收尾", "Finishing up"},  /* ProgressFinalize */
-    {"等待手机继续传输… %d 秒", "Waiting for the phone… %d s"},  /* ProgressWaitPhone */
+    {"等待浏览器继续传输… %d 秒, 超时后方可重新上传", "Waiting for the browser… %d s; you can upload again after the timeout"},  /* ProgressWaitBrowser */
     {"第 %d / %d 个内容", "Content %d of %d"},  /* ProgressContents */
     {"安装完成", "Installed"},  /* ResultInstalled */
     {"已安装,跳过", "Already installed - skipped"},  /* ResultSkippedInstalled */
@@ -299,6 +299,8 @@ constexpr Entry kStrings[] = {
     {"剩余约 %d 分钟", "about %d min left"},  /* ProgressEtaMinutes */
     {"剩余约 %d 小时 %d 分钟", "about %d h %d min left"},  /* ProgressEtaHours */
     {"剩余约 %d 小时", "about %d h left"},  /* ProgressEtaHoursOnly */
+    {"Switch 主机还在等待上一次上传;结束后才能选择新文件", "The console is still waiting for the previous upload; picking is disabled until it ends"},  /* PageUploadActive */
+    {"Switch 主机在等待原连接继续传输… %d 秒, 超时后方可重新上传", "The console is waiting for the original connection… %d s; you can upload again after the timeout"},  /* PageWaitOriginal */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

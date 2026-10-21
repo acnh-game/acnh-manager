@@ -80,6 +80,11 @@ public:
        reading the package *before* the transfer (Prepare) would deadlock -- the page waits for
        `/upload/next`, and the thread that would answer it is the one waiting for the part. */
     void SetPump(std::function<void()> pump);
+    /* Called at a slower cadence (four times a second) from the same wait: the UI draws the
+       countdown with it while the console is still *reading* the package (Prepare).  It must only
+       be installed around a read that runs on the UI thread -- during the transfer the reader
+       thread owns Read(), and drawing from there is what killed the app on 2026-10-19. */
+    void SetWaitPump(std::function<void()> pump);
     /* How many page requests the server has answered, for the "still waiting" heartbeat: while a
        read is stuck, that number says whether the console is the silent party (it is not, when the
        count keeps climbing) or the browser is.  The heartbeat is the only way to know from the
@@ -128,6 +133,8 @@ private:
     std::size_t m_part_length{0};
     std::string m_part_prefix;
     std::function<void()> m_pump;
+    std::function<void()> m_wait_pump;
+    std::uint64_t m_last_wait_pump_ms{0};
     std::function<int()> m_requests_probe;
     acnh_manager::Log *m_log{nullptr};
     /* The `pump` pointer is set once, before any read; the reads may come from two threads in

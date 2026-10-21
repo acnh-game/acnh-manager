@@ -203,7 +203,7 @@ enum class StringId {
     ProgressReceive,
     ProgressWrite,
     ProgressFinalize,
-    ProgressWaitPhone,
+    ProgressWaitBrowser,
     ProgressContents,
     ResultInstalled,
     ResultSkippedInstalled,
@@ -297,6 +297,8 @@ enum class StringId {
     ProgressEtaMinutes,
     ProgressEtaHours,
     ProgressEtaHoursOnly,
+    PageUploadActive,
+    PageWaitOriginal,
 };
 
 const char *Text(StringId id, Language language);

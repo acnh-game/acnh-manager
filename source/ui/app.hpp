@@ -472,6 +472,10 @@ private:
     std::unique_ptr<install::HttpSource> m_http_source;
     /* The upload run's source: the browser is the file, and this is how the engine reads it. */
     std::unique_ptr<install::HttpUploadSource> m_upload_source;
+    /* True while this thread is inside Prepare() for an upload: the console is reading the package
+       over the page, and the page's own wait pump redraws the countdown.  Only ever set on the UI
+       thread -- the transfer's reads happen on the reader thread and must not draw. */
+    bool m_upload_reading{false};
     /* What `POST /upload/begin` asked for: the UI loop opens it like any other package (the file is
        remote, everything after Prepare is the same code). */
     bool m_http_pending_upload{false};

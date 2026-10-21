@@ -1870,7 +1870,7 @@ void App::RenderFooter(Surface surface) {
             /* The browser has gone quiet: say how long the console will wait before the run is
                declared failed, so the player is not staring at a frozen screen (2026-10-19). */
             char text[96];
-            std::snprintf(text, sizeof(text), Tr(i18n::StringId::ProgressWaitPhone),
+            std::snprintf(text, sizeof(text), Tr(i18n::StringId::ProgressWaitBrowser),
                           wait_seconds);
             const int width = m_font.Measure(text, kFontSmall);
             m_font.Draw(surface, (surface.width - width) / 2, y + 12, kFontSmall, kWarn, text);
@@ -1891,6 +1891,26 @@ void App::RenderFooter(Surface surface) {
         const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
                     kBuildStamp);
+        return;
+    }
+    if (m_page == Page::GameInstall &&
+        m_install_screen == InstallScreen::Upload && m_upload_reading) {
+        /* Reading the package blocks this thread, so no key would work; say what the console is
+           waiting for instead of promising a Ⓑ that cannot be handled right now. */
+        int wait_seconds = 0;
+        char text[96];
+        const char *line = nullptr;
+        bool warn = false;
+        if (m_upload_source != nullptr && m_upload_source->PageWaitSeconds(&wait_seconds)) {
+            std::snprintf(text, sizeof(text), Tr(i18n::StringId::ProgressWaitBrowser), wait_seconds);
+            line = text;
+            warn = true;
+        } else {
+            line = Tr(i18n::StringId::PageUploadInfo);
+        }
+        const int width = m_font.Measure(line, kFontSmall);
+        m_font.Draw(surface, (surface.width - width) / 2, y + 12, kFontSmall,
+                    warn ? kWarn : kText, line);
         return;
     }
     if (m_page == Page::GameInstall &&
@@ -4273,7 +4293,21 @@ void App::PollInstallerServer() {
             m_upload_source->SetLog(m_log);
             Trace("install: the page offers %s (%llu bytes, task %s)", name.c_str(),
                   static_cast<unsigned long long>(size), m_upload_source->TaskId().c_str());
+            /* Prepare() reads the package on this thread, and while the browser is fetching those
+               pieces the loop would otherwise freeze on the source screen for up to fifty seconds.
+               The wait pump redraws the source screen (with the countdown) from inside the read; it
+               is cleared before the transfer starts, whose reads run on the reader thread. */
+            m_upload_reading = true;
+            m_upload_source->SetWaitPump([this] {
+                if (m_upload_reading) {
+                    Render();
+                }
+            });
             OpenPackage(*m_upload_source, name, size, install::TaskSource::HttpUpload, std::string());
+            m_upload_reading = false;
+            if (m_upload_source != nullptr) {
+                m_upload_source->SetWaitPump(nullptr);
+            }
         }
     }
     /* An address the *browser* submitted becomes an ordinary download run: the same code path the
@@ -4449,6 +4483,23 @@ std::string App::InstallerStatusJson() const {
                        : (m_game_install != nullptr ? "file" : "none"));
     json += "\",\"busy\":";
     json += transferring ? "true" : "false";
+    /* An upload source exists from the moment `/upload/begin` opens the package, which is before
+       the console reaches its Progress screen.  The page needs that window too: without it a
+       reopened tab saw "idle", offered the picker, and every choice bounced off a 409 until the
+       old source timed out (2026-10-21). */
+    json += ",\"upload_active\":";
+    json += (m_upload_source != nullptr || m_http_pending_upload) ? "true" : "false";
+    /* How long the console will still wait for the *original* page's next part.  A page that
+       replaced it (or a phone that lost the tab) cannot feed those bytes, so it shows the same
+       countdown the console's footer does instead of a generic "busy". */
+    {
+        int wait_seconds = 0;
+        const bool waiting_for_page =
+            m_upload_source != nullptr && m_upload_source->PageWaitSeconds(&wait_seconds);
+        json += ",\"wait_seconds\":";
+        std::snprintf(buffer, sizeof(buffer), "%d", waiting_for_page ? wait_seconds : 0);
+        json += buffer;
+    }
     json += ",\"name\":\"";
     /* The console's own name for the run in hand -- the same line its cards print (design section
        14, item 29: the page invents nothing).  The installer's `detail` is a diagnostic ("meta=…,
@@ -5302,12 +5353,29 @@ int App::RenderInstallerAddressBlock(Surface surface, int y, bool for_upload) {
                                     : i18n::StringId::InstallPagePasteHint;
     m_font.Draw(surface, text_x, y + 122, kFontSmall, kSubtle, Tr(hint), text_w);
     /* The waiting line: a filled dot, the way the app's other "this is a state, not a sentence"
-       lines are drawn, and the one thing the player needs to know while nothing happens. */
+       lines are drawn, and the one thing the player needs to know while nothing happens.  While an
+       upload is being read, the line says so and turns into the countdown once the browser has been
+       silent for two seconds -- the same rule as the progress screen's footer. */
+    std::string waiting_text = Tr(i18n::StringId::InstallWaiting);
+    bool waiting_warn = false;
+    if (for_upload && m_upload_reading) {
+        int wait_seconds = 0;
+        if (m_upload_source != nullptr && m_upload_source->PageWaitSeconds(&wait_seconds)) {
+            char text[96];
+            std::snprintf(text, sizeof(text), Tr(i18n::StringId::ProgressWaitBrowser),
+                          wait_seconds);
+            waiting_text = text;
+            waiting_warn = true;
+        } else {
+            waiting_text = Tr(i18n::StringId::PageUploadInfo);
+        }
+    }
     const int dot_centre_y = y + 172;
     FillRoundedRect(surface, text_x, dot_centre_y - 6, 12, 12, 6, kHeader);
     m_font.DrawBold(surface, text_x + 24,
-                    dot_centre_y - m_font.LineHeight(kFontBody) / 2, kFontBody, kText,
-                    Tr(i18n::StringId::InstallWaiting));
+                    dot_centre_y - m_font.LineHeight(kFontBody) / 2, kFontBody,
+                    waiting_warn ? kWarn : kText,
+                    m_font.Fit(waiting_text, kFontBody, text_w - 24, 1).c_str());
 
     /* The code sits on its own white plate: a scanner wants a quiet zone, and the plate is what
        gives it one without shrinking the code to a size nobody can scan across a room. */

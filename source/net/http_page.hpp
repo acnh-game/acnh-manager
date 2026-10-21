@@ -113,6 +113,8 @@ inline std::string BuildPageLabelsJson() {
         {"pageCopied", i18n::StringId::PageCopied},
         {"pageCopyFailed", i18n::StringId::PageCopyFailed},
         {"pagePeerActive", i18n::StringId::PagePeerActive},
+        {"pageUploadActive", i18n::StringId::PageUploadActive},
+        {"pageWaitOriginal", i18n::StringId::PageWaitOriginal},
         /* The mirrored confirm screen and the header's storage blocks reuse the console's own
            wording, so the two devices cannot drift apart (design section 8). */
         {"pageInstallTo", i18n::StringId::InstallToLabel},

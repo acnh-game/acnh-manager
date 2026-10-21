@@ -177,6 +177,10 @@
      own.  Scaling the line with the viewport keeps the whole sentence together; at a tablet or a
      desktop it stays at the 15 px of every other detail line. */
   #progressBytes { font-size:clamp(11.5px, 3.6vw, 15px); }
+  /* The progress card's "waiting for the original connection" notice: the same amber every other
+     warning uses, on a pale tint, so it reads as a state change rather than another byte line. */
+  #progressBytes.waitNotice { color:var(--warn); background:#fdf3d6; border-radius:10px;
+                              padding:6px 10px; font-weight:600; }
   #confirmSize, #confirmTarget, #confirmResume, #confirmAgent { font-size:15px; line-height:1.55; }
   #resultNow.good { color:var(--good); }
   #resultKept { margin-top:6px; }
@@ -832,7 +836,13 @@ function render(status) {
   /* The first seconds of an upload are "idle" on the console while it reads the package header;
      the pick/url cards were still live there and invited a second selection.  While this page owns
      an upload task, the source controls stay disabled until the run is over or the user returns. */
-  const starting = uploading && !confirming && !finished;
+  const ownRun = uploading && !confirming && !finished;
+  /* Another page (or this page before a reload) still holds the console's upload source -- the
+     console is reading the package, before its Progress screen exists.  Selecting a file or
+     submitting an address now can only bounce off a 409, so both controls are disabled until the
+     console reports the source gone (2026-10-21). */
+  const locked = !uploading && !!status.upload_active;
+  const starting = ownRun || locked;
   /* The progress card belongs to a transfer: once the run is over the result card says everything,
      and a bar frozen at "100% of 0" was the first thing hardware showed us. */
   show("progressCard", busy);
@@ -844,8 +854,13 @@ function render(status) {
   document.getElementById("urlBtn").disabled = starting;
   document.getElementById("urlInput").disabled = starting;
   document.getElementById("drop").classList.toggle("disabled", starting);
-  if (starting) {
+  if (ownRun) {
     setNote(t("pageUploadInfo"), true);
+  } else if (locked) {
+    /* The console is waiting for the page that used to feed it; this page cannot supply those
+       bytes, but it can say how long the console will wait before the task becomes selectable. */
+    const waitLeft = Number(status.wait_seconds) || 0;
+    setNote(waitLeft > 0 ? t("pageWaitOriginal", waitLeft) : t("pageUploadActive"), false);
   }
   show("resultCard", finished);
   show("queueCard", !busy && !finished && !!status.pending);
@@ -888,10 +903,22 @@ function render(status) {
     const percent = status.total > 0 ? Math.floor(status.received * 100 / status.total) : 0;
     document.getElementById("progressBar").style.width = percent + "%";
     document.getElementById("progressPercent").textContent = percent + "%";
-    document.getElementById("progressBytes").textContent =
-      status.received_text + " / " + status.total_text +
-      (status.rate_text ? " · " + status.rate_text : "") +
-      (status.eta_text ? " · " + status.eta_text : "");
+    const waitLeft = Number(status.wait_seconds) || 0;
+    const waitingOriginal = waitLeft > 0 && !uploading;
+    const bytesLine = document.getElementById("progressBytes");
+    if (waitingOriginal) {
+      /* A page that replaced the feeding one cannot send those bytes; the console is holding the
+         transfer for the original connection.  Put that (and its countdown) where the byte figures
+         normally sit, in the warning style the card's notes use. */
+      bytesLine.textContent = t("pageWaitOriginal", waitLeft);
+      bytesLine.classList.add("waitNotice");
+    } else {
+      bytesLine.textContent =
+        status.received_text + " / " + status.total_text +
+        (status.rate_text ? " · " + status.rate_text : "") +
+        (status.eta_text ? " · " + status.eta_text : "");
+      bytesLine.classList.remove("waitNotice");
+    }
     document.getElementById("progressContents").textContent =
       t("pageContents", status.content_index, status.content_total);
     document.getElementById("progressFile").textContent = status.content_name || "";
@@ -1010,18 +1037,31 @@ function runOver(status, taskId) {
 }
 
 let uploading = false;
+/* A reload or a close throws away the page's only handle on the picked local file -- after that it
+   has no bytes to send, and the console can only wait out its silence timeout.  Ask before the
+   navigation happens.  The wording is the browser's own (modern browsers ignore custom text); the
+   user picked a file and pressed start, so the gesture browsers require is there.  The listener is
+   attached only while a run is in flight, so an idle page keeps its back/forward cache. */
+function warnBeforeLeaving(event) {
+  if (!uploading) return;
+  dbg("beforeunload while uploading");
+  event.preventDefault();
+  event.returnValue = "";
+}
 async function startUpload(file) {
   if (!file || uploading) return;
   /* The console is the authority on "one upload at a time": if it is already taking bytes from
      another page, say so instead of starting a second loop.  A page that is merely open (a second
      tab watching, a phone left on the page) is not a reason to refuse -- it may be the very page
      that should supply the file, and the console's `/upload/begin` still serializes the two. */
-  if (lastState && lastState.busy && lastState.source === "upload") {
+  if (lastState && (lastState.busy || lastState.upload_active) &&
+      lastState.source === "upload") {
     setNote(t("pagePeerActive"));
     dbg("refused: the console is already taking an upload (" + (lastState.taskId || "") + ")");
     return;
   }
   uploading = true;
+  window.addEventListener("beforeunload", warnBeforeLeaving);
   setNote(t("pageUploadStarting"));
   dbg("upload start " + file.name + " (" + file.size + " B)");
   /* The whole run sits inside one try, and this is the reason: an exception anywhere in the loop
@@ -1036,6 +1076,7 @@ async function startUpload(file) {
     setNote(t("pageUploadFailed"));
   }
   uploading = false;
+  window.removeEventListener("beforeunload", warnBeforeLeaving);
   refresh();
 }
 

@@ -1619,8 +1619,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::ProgressEtaHoursOnly) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ProgressEtaHoursOnly); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::PageWaitOriginal) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::PageWaitOriginal); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -2095,8 +2095,13 @@ void TestHttpPage() {
     CHECK(page.find("id=\"confirmBack\"") != std::string::npos);
     CHECK(page.find("fetchWithTimeout(\"back\"") != std::string::npos);
     /* A page that owns an upload task must not offer a second package while the console is still
-       reading the first one's header. */
-    CHECK(page.find("const starting = uploading && !confirming && !finished") != std::string::npos);
+       reading the first one's header -- and a page that opened while *another* page's upload is
+       being read must not offer one either (the console reports `upload_active` before its
+       Progress screen exists). */
+    CHECK(page.find("const ownRun = uploading && !confirming && !finished") != std::string::npos);
+    CHECK(page.find("const locked = !uploading && !!status.upload_active") != std::string::npos);
+    CHECK(page.find("const starting = ownRun || locked") != std::string::npos);
+    CHECK(page.find("t(\"pageWaitOriginal\", waitLeft)") != std::string::npos);
     CHECK(page.find("chooseBtn\").disabled = starting") != std::string::npos);
     CHECK(page.find("fileInput\").disabled = starting") != std::string::npos);
     CHECK(page.find("id=\"pickSpinner\"") != std::string::npos);
