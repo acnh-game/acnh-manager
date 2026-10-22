@@ -102,9 +102,9 @@ def app_page(path):
     details page -- which would let the cases press Y on the wrong page, and Y toggles a setting
     there.
 
-    Deliberately conservative: "home" is only reported when the home page's two secondary
-    buttons are visible, so a page the classifier does not recognise falls through to "details"
-    (whose prelude is "press B"), never to "home".
+    Deliberately conservative: "home" is reported only when one of the three wide Home button
+    rows is visibly selected (filled teal).  The focused row moves with the user's input, so a
+    fixed badge position is not a valid page signal anymore.
     """
     state = classify(path)
     if state != "manager":
@@ -116,24 +116,21 @@ def app_page(path):
     if teal[0] < 120 and teal[1] > 150 and teal[2] > 120:
         return "action"
 
-    def teal_badge(cx, cy):
-        """A key badge: a teal disc (the app's accent colour) with a white letter in it.  Counted
-        over a small box rather than sampled at one pixel -- the letter sits in the middle, so a
-        single centre sample reads white."""
+    def teal_row(cy):
+        """True when a wide Home action row is filled with the accent colour."""
         teal = 0
         total = 0
-        for y in range(cy - 22, cy + 23, 3):
-            for x in range(cx - 22, cx + 23, 3):
+        for y in range(cy - 18, cy + 19, 6):
+            for x in range(180, 1110, 12):
                 pixel = im.getpixel((x, y))
                 total += 1
                 if abs(pixel[0] - 47) < 70 and abs(pixel[1] - 191) < 55 and abs(pixel[2] - 168) < 55:
                     teal += 1
-        return total and teal / total > 0.3
+        return total and teal / total > 0.35
 
-    # Home: the two half-width secondary buttons (the update check and the agent uninstall) sit
-    # side by side, each with its teal badge about 46 px in from the page margin and centred at
-    # y=515.
-    if teal_badge(86, 515) and teal_badge(698, 515):
+    # Home has a wide primary row followed by one or two secondary rows.  Any one of them can be
+    # the filled focus target; scanning the body avoids depending on which row currently owns it.
+    if any(teal_row(y) for y in range(290, 651, 32)):
         return "home"
 
     # Guide: the mini-app code occupies the lower-left quadrant and is a dense black block.

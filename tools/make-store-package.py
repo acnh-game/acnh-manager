@@ -27,10 +27,9 @@ DEFAULT_NRO = REPO_ROOT / "acnh-manager.nro"
 DEFAULT_OUT = REPO_ROOT / "build" / "scratch" / "store"
 MANIFEST_INSTALL = "manifest.install"
 # Screenshots live in assets/screenshots/ and are listed in this order; the store page shows
-# them in the order the pkgbuild names them (status -> what a tap does -> how it ends, with the
-# uninstall confirmation last).
+# them in the order the pkgbuild names them (home -> installer -> browser upload -> result).
 SCREENSHOT_DIR = REPO_ROOT / "assets" / "screenshots"
-SCREENSHOT_ORDER = ("status.png", "install.png", "done.png", "uninstall.png")
+SCREENSHOT_ORDER = ("status.png", "install.png", "upload.png", "done.png")
 
 
 def md5_of(path: pathlib.Path) -> str:

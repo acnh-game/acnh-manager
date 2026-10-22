@@ -188,7 +188,7 @@ fsop:   window=0x329C697E80..0x329C698181 region_end=0x329C698000 last_page type
 `2 × FS_MAX_PATH` 的局部缓冲);缓冲本身就是数组时(局部变量或结构体成员),数组也**必须 ≥
 `FS_MAX_PATH`**,并用 `static_assert` 钉住尺寸。引擎、环境探测、主程序、日志与开发开关检查现在都
 照此办理;新增对 SD 的访问时同样如此 —— 不要把调用者的指针直接递下去。
-1.1.0 里就漏了两次:本机文件来源的 `fsFsOpenFile`(路径是选择器拼出来的 `std::string`)与
+2.0.0 的开发期就漏了两次:本机文件来源的 `fsFsOpenFile`(路径是选择器拼出来的 `std::string`)与
 "读挂载内容里的一个文件"那条(`"/" + 目录项名字`),真机实测同一循环 47 次打开 5 次 `0xD401`
 (约 10%,表现为"偶尔一次,退回去重进又好了"),补上 `util::FsPath` 后同样循环 60 次为 0。
 
@@ -285,7 +285,7 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 
 **已知且接受的措辞缺口(`NoManifest`)**:首页的状态分类只看"支持 / 不支持"这一个布尔量,没有
 "应用自己没有可安装内容"这一态,所以游戏在的时候 `NoManifest` 会借用"不支持当前安装的游戏版本"
-这个标题 —— 真原因是 `no manifest available`,写在详情页的检测结果行。正式发布件碰不到它:清单随
+这个标题 —— 详情页本地化显示“没有可用的安装信息”,英文 reason `no manifest available` 只写日志。正式发布件碰不到它:清单随
 NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失或不一致的产物;只有自己从源码
 构建、且没有导入发布记录的开发件才会看到。要真正修好得新增第九种首页状态(改 `ui/home_state.hpp`
 的分类与优先级、主机用例、以及本文件与 `AGENTS.md` 里"首页八态"的契约),另写一条不含"清单"这类
@@ -307,11 +307,12 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
 ### 6.4 state.json
 
 ```json
-{"schema":1,"agentVersion":"0.11.0","agentCommit":"4ac89fd403b7",
- "contentId":"E10617820DB06889E1638499478DA0DE",
- "buildId":"FF1D1C05670DB6021C85B624A710B963",
- "installedAt":"2026-09-17T00:00:00Z",
- "files":[{"target":"atmosphere/contents/01006F8002326000/exefs/subsdk9","size":105837,"sha256":"…"}]}
+{"schema":1,"agentVersion":"<current agent version>","agentCommit":"<current agent commit>",
+ "contentId":"<supported game content id>",
+ "buildId":"<supported game build id>",
+ "installedAt":"<UTC timestamp>",
+ "files":[{"target":"atmosphere/contents/01006F8002326000/exefs/subsdk9",
+           "size":<payload size>,"sha256":"<payload sha256>"}, …]}
 ```
 
 写入必须遵守第 4 节的 `SetSize` 约定;这份记录也是"卡上应该有什么"的清单,每次 `Collect()` 会
@@ -365,8 +366,8 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
 |---|---|
 | `source/ui/gfx.*` | framebuffer 上的最小绘制层:填充、矩形、描边、带 alpha 的像素混合 |
 | `source/ui/font.*` | FreeType + 主机共享字体(`plGetSharedFontByType`,Standard/简中/扩展简中/繁中/韩文),带按字号分组的字形缓存;缺字自动换下一款字体 |
-| `source/ui/app.*` | 页面状态机(首页 / 详情 / 安装确认 / 卸载确认 / **进度** / **聊天码说明** / 结果)、输入处理、卡片式布局与渲染;首页状态由 `ui/home_state.hpp` 的八态分类决定 |
-| `source/ui/settings.*` | 用户设置(`settings.json`,目前只有界面语言)的解析与序列化(纯逻辑,主机可测) |
+| `source/ui/app.*` | 页面状态机(首页 / 详情 / 安装确认 / 卸载确认 / **进度** / **聊天码说明** / 结果 / **游戏安装器** / **启动自检**)、输入处理、卡片式布局与渲染;首页状态由 `ui/home_state.hpp` 的八态分类决定 |
+| `source/ui/settings.*` | 用户设置(`settings.json`:界面语言与 `installTarget`)的解析与序列化(纯逻辑,主机可测) |
 | `source/i18n/strings.*` | 简中 / English 双语文案表(`StringId` 枚举 + 两列),由主机测试保证两边都补齐 |
 | `source/util/text_wrap.hpp` | 折行规则(纯函数,主机可测):拉丁文本按空格断词、超长单词才中段断、CJK 按字断、`\n` 强制换行 |
 
@@ -392,13 +393,13 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
   不经过环)。**安装页要把 `L`/`R`/`＋`/`－` 全部吞掉**:它隐藏了页眉标签页,而这些键都挂着页眉
   入口,不吞就会在玩家手里还拿着包(占位、已打开的卡上文件)时把他带走,并绕过
   `LeaveGameInstall()` 的清理。顺序本身也是契约 —— 真机测试靠“哪个入口带下划线”判断当前
-  在哪一页,而判定用的是**页面自身特征**(首页两个按钮的徽章、说明页左下那块二维码),不依赖
+  在哪一页,而判定用的是**页面自身特征**(首页内容与当前焦点、说明页左下那块二维码),不依赖
   入口的位置,所以改名或换语言都不会让它误判。
   安装/确认/进度/聊天码说明/结果/卸载各自一页,共用同一套渲染;说明页里的二维码由 `tools/make-qr.py` 从
   《森友物码册》小程序码采样成模块矩阵(`data/qr_miniapp.bin`),界面用矩形填充逐格画出,主机侧没有图片解码器。
 - **输入统一走动作表**(`source/ui/action.hpp`,纯逻辑 + 主机测试):一个控件 = `{id, 矩形,
-  是否可用}`。触摸用 `HitTest` 命中它,方向键/摇杆用 `MoveFocus` 在同一行/列内移动焦点,
-  `A` 执行当前焦点 —— 触屏与按键是同一套动作的两条通路。触摸本身在 `source/ui/touch.*`:
+  是否可用}`。触摸用 `HitTest` 命中它;普通页面用 `MoveFocus` 做空间移动,首页使用独立的
+  `MoveHomeFocus` 线性循环,`A` 执行当前焦点。触摸本身在 `source/ui/touch.*`:
   只初始化一次,之后每帧读 `hidGetTouchScreenStates`,坐标即屏幕坐标(实测见
   `docs/device-acceptance.md`);没有触摸(座机模式/服务不可用)时按钮依旧可用。
 - **点击判定在 `TapTracker`**(同文件):触摸面板**只在手指接触时给出坐标**,松手那一帧

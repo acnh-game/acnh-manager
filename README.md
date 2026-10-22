@@ -83,7 +83,7 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Ho
 ## 已知边界(明确不做)
 
 - 不卸载游戏或更新包,不修改存档;不管理 cheat 文件,只检测冲突并提示路径。
-- 一次只装一个文件;传输与收尾不可中断,主机与页面都不提供取消。
+- 一次只装一个文件;主机与页面都不提供主动取消。异常中断可续传,但收尾阶段不可取消。
 - **不读取 `prod.keys` / `title.keys`**:需要密钥的转换(转公共票、转标准 crypto、降低 master key)
   不做;包内票据原样导入,交给系统判断。
 - 校验默认跟随参考实现:跳过 NCA 全文件哈希与 NCA 头 RSA 固定密钥校验;XCI 的 distribution 位会
@@ -108,7 +108,9 @@ python3 tools/deploy-nro.py
 - `docs/architecture.md` —— 进程/权限边界、识别判据、落盘与回滚细节
 - `docs/game_installer_design.md` —— 安装器与网页的完整设计、测试矩阵、分阶段落地
 - `docs/device-acceptance.md` —— 真机验收记录与实测数据
+- `docs/home_menu_and_startup_check_design.md` —— 启动自检与桌面快捷方式设计、验收状态
 - `docs/release-process.md`、`docs/store-listing.md` —— 发布与商店
+- `docs/tools-guide.md` —— 构建、部署、真机测试与发布工具索引
 
 ## 许可
 

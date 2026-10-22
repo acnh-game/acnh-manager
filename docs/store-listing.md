@@ -19,7 +19,7 @@
 |---|---|---|
 | 图标 | `assets/icon.png`(256×256,与 NRO 内图标同源) | 必需;商店网格里要能一眼认出。**已知取舍**:列表与详情页共用这一个文件 —— 列表按磁贴宽度等比画(方形最饱满),详情页却把图标按原始像素画进 256×150 的槽并裁掉溢出(`ui/menus/appstore.cpp`:`icon_vec(968, …, 256, 150)`,DrawIcon 不缩放),所以方形图标在详情页上下各少约 53 px(2026-09-21 真机实测)。两个视图无法同时完美,已试过改成 256×150:详情页完整了,但列表里的主体明显变小(+两条补边),故维持 256×256 |
 | 横幅 `screen.png` | `assets/screen.png`(848×208,由设计主图居中裁带得到;主图不入库) | 商店客户端把详情页顶部那块画成 **848×208**(Sphaira `ui/menus/appstore.cpp`:`banner_vec(70, …, 848.f, 208.f)`),缺图时回退成图标。**按比例裁切、不要缩放填满**;图里不写字(标题与说明由商店自己画)。换图:把新设计放成 `assets/screen-org.png`(仅本地需要,不入库)后跑 `tools/make-icons.py`,它会按 848:208 裁带生成 `screen.png`;没有主图时该步自动跳过 |
-| 截图 | `assets/screenshots/{status,install,done,uninstall}.png`(真机、英文界面、1280×720 真 PNG,2026-09-23 重抓) | 商店按 `packages/<name>/screen<N>.png` 取图,所以 `tools/make-store-package.py` 会按 `SCREENSHOT_ORDER` 把它们声明成 `screenshot` 资产,并**额外**在包目录里生成 `screen1..4.png`(本地测试仓库与 CDN 布局用)。上游 README 明确说这类构建期文件可以不入 PR。**界面用英文**:商店目录每个字段只有一份文本,客户端不做翻译,英文图对中英用户都可用;顺序是 首页(已安装)/ 安装确认页 / 安装成功页 / 卸载确认页,真机抓取过程见 `device-acceptance.md` 末节 |
+| 截图 | `assets/screenshots/{status,install,upload,done}.png`(真机、英文界面、1280×720 真 PNG,2026-10-22 重抓) | 商店按 `packages/<name>/screen<N>.png` 取图,所以 `tools/make-store-package.py` 会按 `SCREENSHOT_ORDER` 把它们声明成 `screenshot` 资产,并**额外**在包目录里生成 `screen1..4.png`(本地测试仓库与 CDN 布局用)。**界面用英文**:商店目录每个字段只有一份文本,客户端不做翻译,英文图对中英用户都可用;顺序是首页 / 安装方式 / 浏览器上传 / 安装结果。 |
 
 ## 文案要点
 
@@ -37,7 +37,7 @@
 
 - [ ] `packaging/listing.json` 的中英文案与当前功能一致(尤其"当前支持范围");
 - [x] `assets/icon.png` 与 `assets/screen.png`(横幅)都是最新设计稿;
-- [x] 截图已就位(`assets/screenshots/`,真机四张);
+- [x] 截图已更新为 2.0.0 英文界面(`assets/screenshots/`,真机四张);
 - [ ] 仓库里的 `packaging/nro/acnh-manager-<版本>.nro` 与本次构建的产物哈希一致,且位在
       `https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-<版本>.nro`
       —— `pkgbuild.json` 的 update 资产就指向这个 permalink(见 `tools/make-store-package.py`)。
@@ -52,7 +52,7 @@ PR 里该带的文件(其余都是构建期产物,按上游 README 排除):
 packages/acnh-manager/pkgbuild.json
 packages/acnh-manager/icon.png
 packages/acnh-manager/screen.png            # 横幅
-packages/acnh-manager/{status,install,done,uninstall}.png   # 截图源图
+packages/acnh-manager/{status,install,upload,done}.png      # 截图源图
 # 不带:screen1.png … screen4.png(构建期由 spinarak 生成)、info.json、manifest.install
 ```
 
@@ -104,11 +104,11 @@ cd build/scratch/spinarak-check/packages && python3 ../spinarak.py
 3. 键盘输入名称(随意,例如 `ACNH-Test`),再输入 URL:**`http://<Mac 的局域网 IP>:8080`**
    —— Sphaira 会自己补上 `/repo.json`(`ui/menus/appstore.cpp` 里 `suffix{"/repo.json"}`),
    所以你写不写 `/repo.json` 都行;
-4. 它会切到这个商店并加载:应能看到 `ACNH-Manager`(Tools,1.0.2),详情页顶部是横幅、
+4. 它会切到这个商店并加载:应能看到 `ACNH-Manager`(Tools,2.0.0),详情页顶部是横幅、
    下方是四张截图 —— 这一眼就把 `screen.png` 的尺寸/比例与截图顺序一起验了;
 5. **安装**:按 `A` → 完成后卡上应出现 `/switch/ACNH-Manager/acnh-manager.nro`
    (商店包只包含这一个文件;agent 的三件套是 App 自己装的,不受影响);
-6. **更新**:把本地包换成更高版本(`python3 tools/make-store-package.py --version 1.0.3`),
+6. **更新**:把本地包换成更高版本(`python3 tools/make-store-package.py --version 2.0.1`),
    回商店刷新 → 应显示可更新 → 更新后版本号变化、卡上文件被替换;
 7. **卸载**:在商店里卸载 → `acnh-manager.nro` 从卡上消失(其余目录与 `state.json` 不动);
 8. 测完清掉:切到该商店 → `X` → **删除当前商店**。

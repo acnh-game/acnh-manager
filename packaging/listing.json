@@ -6,15 +6,15 @@
   "license": "GPLv3",
   "url": "https://gitee.com/acnh-game/acnh-manager",
   "summary": {
-    "en": "Installer and manager for the Animal Crossing: New Horizons in-game agent.",
-    "zh": "《集合啦!动物森友会》游戏内增强 Mod(agent)的安装与管理工具。"
+    "en": "Switch game installer and manager for the Animal Crossing: New Horizons in-game agent.",
+    "zh": "带通用游戏安装器的《集合啦!动物森友会》游戏内增强 Mod(agent)管理工具。"
   },
   "details": {
-    "en": "Installs the in-game agent for Animal Crossing: New Horizons 3.0.3 -- every file is SHA-256 checked before it is written -- so a chat line starting with  /9C9  puts that item in your bag, and one tap removes it again.",
-    "zh": "把 agent(游戏内增强 Mod)装进《集合啦!动物森友会》游戏目录(仅支持 3.0.3,写入前逐文件校验),装好后在聊天栏行首输入  /9C9  就能把物品放进背包,也可一键删除还原。"
+    "en": "Installs NSP, NSZ, XCI and XCZ packages from the SD card, an HTTP address or a phone/computer browser; no game content is hosted by this app. Installs the Animal Crossing: New Horizons 3.0.3 agent automatically after a supported game or update, with SHA-256 verification for every agent file.",
+    "zh": "可从 SD 卡、HTTP 地址或手机/电脑浏览器安装 NSP、NSZ、XCI、XCZ；本应用不托管任何游戏内容。安装受支持的《集合啦!动物森友会》本体或更新后会自动安装 3.0.3 agent，agent 文件逐项 SHA-256 校验。"
   },
-    "changelog": {
-        "en": "1.0.2 - a console with only the base copy of the game installed (no 3.0.3 update) is no longer reported as missing: the status screen says the installed game version is not supported and names both versions (the one on the console and the one this build supports), and Details no longer lists the absent update package as a detection problem.\n1.0.1 - the conflict warning about an old cheat code now actually appears, on the status screen and with the file's full path; the log reports the manifest the build carries instead of claiming there is none.\n1.0.0 - first public build: environment detection, verified install/uninstall with one-tap rollback, offline install from the bundled agent, signed update check with one-tap update, Chinese/English interface.",
-        "zh": "1.0.2 - 只装了基础版(没有 3.0.3 更新包)的机器不再被误报为找不到游戏:状态页改为如实说明当前安装的游戏版本不受支持,并同时给出机器上的版本与本应用支持的版本;详情页也不再把缺少更新包列成检测异常。\n1.0.1 - 与旧金手指代码冲突的警告现在真的会出现,位置在状态页并写出完整路径;日志改为如实报告本构建携带的清单,不再声称没有。\n1.0.0 - 首个公开版本:环境识别、逐文件校验的安装/卸载与一键回滚、内置 agent 离线安装、带签名的更新检查与一键更新、中英双语界面。"
+  "changelog": {
+    "en": "2.0.0 - general game installer for NSP/NSZ/XCI/XCZ; local card, HTTP download and browser upload sources; resumable transfers, storage selection, game metadata and cover display, a mirrored browser UI, HOME Menu shortcut management, focus-only Home navigation and clearer diagnostics.\n1.0.2 - corrected unsupported-version detection for base-only installs and improved Details diagnostics.\n1.0.0 - first public agent installer with verified install/uninstall and signed update checks.",
+    "zh": "2.0.0 - 通用游戏安装器支持 NSP/NSZ/XCI/XCZ，可从 SD 卡、HTTP 下载或浏览器上传安装；加入断点续传、安装空间选择、游戏信息与封面、浏览器镜像界面、桌面快捷方式管理、首页纯焦点操作和更清晰的诊断文案。\n1.0.2 - 修正只装基础版时的版本不支持判定，并改进详情页诊断。\n1.0.0 - 首个公开的 agent 安装器，支持逐文件校验、安装/卸载与签名更新检查。"
     }
 }

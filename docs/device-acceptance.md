@@ -916,7 +916,7 @@ Patch / Application`;
 里的小 NCA(控制内容)显然可读(方块能画出名字和封面),所以问题集中在 **program 内容**上。最可能的
 原因是**卡带镜像的 program NCA 是 gamecard 加密**(密钥派生与卡带硬件相关),console 从 SD 读不出来,
 必须像参考实现那样做 `convert_to_standard_crypto`(用卡上的 `prod.keys` 转成标准 crypto)才能启动;
-1.1.0 还没有实现这一步 —— 它在设计第 5 节的选项表里,标注是"只在内容确实需要时触发"。判别实验留给用户:
+2.0.0 还没有实现这一步 —— 它在设计第 5 节的选项表里,标注是"只在内容确实需要时触发"。判别实验留给用户:
 用 DBI/sphaira 装同一个 XCI,若那边也起不来,则这条假设不成立,得再查(例如补丁/签名层面)。
 
 ### 追查到根因:记录里那份 meta 不是"这次安装的那一份"(2026-10-15)
@@ -1523,8 +1523,8 @@ not be decoded"**,偶尔随后在 `App::Render()` 的 `framebufferBegin` 处崩�
 - forwarder title id 为 `05e67f3a16603000`,由 Sphaira/hbmenu 实际使用的
   `sdmc:/switch/ACNH-Manager/ACNH-Manager.nro` 按参考算法计算;NPDM 的 ACI0/ACID program id、
   NACP 的 presence/save/device/local-communication id 与 CNMT title id 都已对齐。
-- `data/forwarder_nsp.bin` 为 264,408 B,sha256
-  `fb93909e0ad36e809a78597c667ed82fb6f82904c79104d84cca245df11e8512`。它由现场编译的
+- `data/forwarder_nsp.bin` 为 264,408 B,当前 2.0.0 版本的 sha256
+  `639b609d86f78d994d14221fdd20e318a5f88d6caa8551295ff51f0a10a17da6`。它由现场编译的
   hbmenu loader 和本项目自己的 NCA/CNMT 构造器生成:
   Program `faa5f2beb5e668f0e365bc1afa5512f86028d4b4c0a67ebf23e740332ed7e1f7`、Control
   `cb249059f1f223ec97c99fe16b758bdc`、Meta `0ad19d60e709b0f2ee42a55f2490dbe6bf5dd2ab95097bfac08fefb29289a6cf`。
@@ -1668,3 +1668,18 @@ host tests 覆盖了当前模式与快捷方式进程的四种组合,当前为 `
 现在为这类从首页直接执行的安装单独记录返回目标:完成页或失败结果页第一次按 `B` 就关闭整个安装
 模态页并回首页。真机复验:从首页安装快捷方式,看到「安装完成」后按一次 `B`,直接回到首页状态页。
 发布构建 `88665a130ae5cee2…` 的 `verify-release` 59 项检查全过。
+
+## 2.0.0 英文商店截图(2026-10-22)
+
+版本升到 `2.0.0` 后,从 Switch 真机的英文界面重新抓取四张商店截图:
+
+| 文件 | 界面 |
+|---|---|
+| `assets/screenshots/status.png` | 首页状态与当前焦点按钮 |
+| `assets/screenshots/install.png` | 游戏安装器的三种来源与存储选择 |
+| `assets/screenshots/upload.png` | 浏览器上传地址、二维码与等待状态 |
+| `assets/screenshots/done.png` | 快捷方式安装完成结果与包封面 |
+
+四张均为 1280×720 PNG。旧的 `uninstall.png` 已从素材目录移出,当前商店截图顺序由
+`tools/make-store-package.py` 的 `SCREENSHOT_ORDER` 固定为
+`status → install → upload → done`。

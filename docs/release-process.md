@@ -35,12 +35,18 @@
 `--allow-dirty` 是开发期开关(例如只想验证链本身能否跑通):它只把"本仓库干净"这一条降级成警告,
 打出的 NRO 构建戳会带 `-dirty` —— 看到那个标志就说明这份产物不是发布件。
 
-链条跑完还有三件**人工**动作(工具不替你推任何东西,也不会自动改远端):
+链条跑完还有四件**人工**动作(工具不替你推任何东西,也不会自动改远端):
 
 1. 提交这一轮的产物:内嵌清单/payload、forwarder 的 `data/forwarder_nsp.bin` 与
    `data/forwarder_nsp_meta.bin`、`packaging/agent/<版本>/`、`packaging/agent-lock.json`、
    `packaging/nro/acnh-manager-<版本>.nro`、`agent-manifest.json` 与 `agent-manifest.json.sig`;
-2. `git tag v<版本> && git push && git push origin v<版本>`;
+2. 分支与 tag 都要同时推到两个远端:
+
+   ```bash
+   git push origin main && git push github main
+   git tag v<版本>
+   git push origin v<版本> && git push github v<版本>
+   ```
 3. 可选:`gitee release create --tag v<版本> -n "ACNH-Manager <版本>" -b "<说明 + raw 下载地址>"`
    建一个给人看的发行版页面。
 4. **同步指南页兜底**(另一个仓库,单独提交、单独部署):
@@ -96,7 +102,7 @@ agent-manifest.json.sig            上面那份清单的签名(第 7 步生成,�
 所以正式通道不需要 romfs / devoptab / 任何服务。**DATA 目录里的文件必须带 `.bin` 后缀**
 (构建规则是 `%.bin.o: %.bin`),文件名里的点会变成下划线。
 
-当前已导入的发布:`acnh-agent 0.11.0`(commit `8541a0956c30`,`buildFlags=2`)。
+当前已导入的发布:`acnh-agent 0.11.0`(commit `8fe1c2669d88`,`buildFlags=2`)。
 acnh-agent 的 `dist/` 默认是开发构建(`buildFlags=7`,带 RPC server),会被门控拒绝——这是设计如此,
 不要用手工数据绕过它;要出正式产物必须先 `make switch SEMANTIC_HOOK=1` 重新构建。
 
@@ -151,8 +157,8 @@ python3 tools/make-store-package.py       # 产出 build/scratch/store/
 
 ## 5. 上架官方商店
 
-1. 项目托管在 Gitee `acnh-game/acnh-manager`(公开):打 tag `v<版本>` 推上去
-   (`git tag v<版本> && git push origin v<版本>`),可选地用
+1. 项目托管在 Gitee `acnh-game/acnh-manager`(公开),GitHub 为同步镜像:打 tag `v<版本>` 后
+   同时推到 `origin` 与 `github`,可选地用
    `gitee release create --tag v<版本> -n "ACNH-Manager <版本>" -b "<说明>"` 建一个给人看的发行版页面;
    **下载不走发行版资产**(Gitee CLI 传不了附件),`pkgbuild.json` 的 update 资产指向仓库里的
    `packaging/nro/acnh-manager-<版本>.nro` 的 raw 地址(见第 6 节,地址形状 2026-09-20 核对过);
@@ -210,7 +216,7 @@ raw 请求会 302 到 `raw.giteeusercontent.com` 的带签名地址(2026-09-20 �
   `packaging/nro/acnh-manager-<appVersion>.nro`,由发布链第 6 步拷进去并随发布一起提交
   (`docs/store-listing.md` 上架清单有步骤);
 - 人类看的发布页用 `gitee release create --tag v<appVersion> -n "ACNH-Manager <appVersion>"
-  -b "<说明 + 上面的 raw 下载地址>"` 建(tag 先 `git push origin v<appVersion>`);**Gitee CLI
+  -b "<说明 + 上面的 raw 下载地址>"` 建(tag 先同时推到 `origin` 与 `github`);**Gitee CLI
   不能给发行版传附件**,所以下载永远走 raw 地址,发行版页面只是给人和搜索引擎看的入口。
 
 ## 7. 版本与记录

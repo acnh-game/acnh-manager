@@ -109,7 +109,7 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   缓冲位置。做法:路径先复制进 `util::FsPath`(`source/util/fs_path.hpp`);缓冲是数组时(局部变量
   或结构体成员,如 `Log::Sink::path`),数组本身也必须 ≥ `FS_MAX_PATH`,并用 `static_assert` 钉住
   尺寸。引擎、环境探测、主程序、日志与开发开关检查都照此办理(真机根因与追踪数据见
-  `docs/architecture.md` 第 4.2 节)——**新加的调用点同样必须**(1.1.0 的本机文件来源与"读挂载
+  `docs/architecture.md` 第 4.2 节)——**新加的调用点同样必须**(2.0.0 的本机文件来源与"读挂载
   内容里的一个文件"两条都漏了这条,真机上 47 次打开里 5 次 `0xD401`,按同一循环重跑 60 次为 0);
   唯一例外是演示用的 `probe.cpp`,它故意把裸指针交给 `fs*`。
 - **发布清单必须签名**:`tools/sign-manifest.py --key ~/.acnh/acnh-manager-signing-key.pem`
@@ -186,7 +186,7 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   **不要在别处再写死版本字符串** —— 漏改一处就会用错版本去校验清单。
 - `source/manifest/`:清单解析与校验(纯逻辑,可主机测试);`source/install/`:门控判定、安装决策、
   写盘引擎与 `state.json`(判定部分同上),外加从发布端取 payload 的 `network_source.*`;
-  1.1.0 的通用安装器在同一目录下另起一组,判据是"能不能脱离真机测":
+  2.0.0 的通用安装器在同一目录下另起一组,判据是"能不能脱离真机测":
   **纯逻辑(由 `tests/host_tests.cpp` 钉住)**:`container.*`(PFS0/HFS0 解析、`.msp` 拒绝)、
   `install_task.*`(按字节的进度、取数区间、`install-task.json`)、`nca.*`(CNMT 与 NCA 头解析、
   distribution 位改写)、`package.*`(容器+CNMT+票据 → "这是什么",以及跳过判定)、`options.hpp`(默认值)、
@@ -207,7 +207,7 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   改规则时先改头文件与 `tests/host_tests.cpp`。
 - `source/third_party/`:vendored 第三方源码(**只放上游原文件,不本地修改**),每个目录一个库,
   来源 URL / commit / sha256 / 许可证记在同目录 `README.md`,并由 `tools/verify-release.py` 核对:
-  `picohttpparser/`(HTTP 报文解析,MIT)、`qrcodegen/`(QR 编码,Nayuki C 版,MIT)。1.1.0 的
+  `picohttpparser/`(HTTP 报文解析,MIT)、`qrcodegen/`(QR 编码,Nayuki C 版,MIT)。2.0.0 的
   通用安装器用它们做上传页面与二维码;页面防熄屏的两段短视频 data URI 取自 NoSleep.js v0.12.0,
   只保留媒体与精简包装(MIT,许可证见 `nosleep-media-LICENSE`)。细节见
   `docs/game_installer_design.md` 第 3、8 节。
@@ -232,8 +232,8 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 |---|---|
 | `README.md` | 项目概览与当前支持范围 |
 | `docs/architecture.md` | 架构、版本识别与门控、SD 布局、环境检查(改行为前必读) |
-| `docs/game_installer_design.md` | 通用游戏安装器(1.1.0)设计:支持 NSP/NSZ/XCI/XCZ(不做 MSP)、三种来源(SD 文件 / HTTP 下载 / HTTP 上传)、安装选项与校验策略、HTTP 服务端实现(picohttpparser + 自写薄层,含端口策略)、界面文案、真机测试矩阵(动这项功能前必读) |
-| `docs/home_menu_and_startup_check_design.md` | 启动自检页(程序位置自愈)与「安装桌面快捷方式」(1.2.0 计划;全动态产物安装/启动已验收,应用模式删除禁用待复验) |
+| `docs/game_installer_design.md` | 通用游戏安装器(2.0.0)设计:支持 NSP/NSZ/XCI/XCZ(不做 MSP)、三种来源(SD 文件 / HTTP 下载 / HTTP 上传)、安装选项与校验策略、HTTP 服务端实现(picohttpparser + 自写薄层,含端口策略)、界面文案、真机测试矩阵(动这项功能前必读) |
+| `docs/home_menu_and_startup_check_design.md` | 启动自检页(程序位置自愈)与「安装桌面快捷方式」(2.0.0;安装/启动/删除已验收,进程冲突保护已实现并有真机记录) |
 | `docs/tools-guide.md` | 本仓库工具的用法与登记 |
 | `docs/release-process.md` | 发布流程:导入门控、商店打包、上架与 Gitee 托管地址(发布前必读) |
 | `docs/store-listing.md` | 商店条目元数据与素材要求(改对外文案前) |

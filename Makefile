@@ -24,7 +24,7 @@ INCLUDES	:=	source source/third_party/picohttpparser source/third_party/qrcodege
 
 APP_TITLE	:=	ACNH-Manager
 APP_AUTHOR	:=	acnh-game
-APP_VERSION	:=	1.0.2
+APP_VERSION	:=	2.0.0
 
 # The build stamp comes from tools/build.sh (UTC time + commit); a manual make gets a stub.
 BUILD_STAMP	?=	manual
