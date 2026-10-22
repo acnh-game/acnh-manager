@@ -21,6 +21,7 @@ SOURCES := host_tests.cpp \
            ../source/install/ncz.cpp \
            ../source/install/ncz_decode.cpp \
            ../source/install/range_probe.cpp \
+           ../source/install/source_memory.cpp \
            ../source/install/transfer_queue.cpp \
            ../source/install/icon_file.cpp \
            ../source/install/title_name.cpp \

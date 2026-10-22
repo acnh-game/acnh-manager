@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "env/detect.hpp"
+#include "env/forwarder.hpp"
 #include "env/startup_runtime.hpp"
 #include "i18n/strings.hpp"
 #include "install/engine.hpp"
@@ -37,6 +38,7 @@
 #include "install/source_http_client.hpp"
 #include "install/source_local_file.hpp"
 #include "install/source_http_upload.hpp"
+#include "install/source_memory.hpp"
 #include "ui/touch.hpp"
 
 namespace acnh_manager {
@@ -382,6 +384,9 @@ private:
        re-open after the target storage changed).  False leaves the address screen showing why. */
     bool OpenDownloadPackage(const std::string &address);
     void RunGameInstall();
+    void RefreshForwarderTile();
+    void InstallForwarderTile();
+    void RemoveForwarderTile();
     void DisableAutoSleep();
     /* The agent's own install, on this thread: the payload that matches the manifest's origin,
        the engine, and the per-file progress.  It owns no screen and decides no result -- the home
@@ -497,6 +502,7 @@ private:
     std::unique_ptr<install::HttpSource> m_http_source;
     /* The upload run's source: the browser is the file, and this is how the engine reads it. */
     std::unique_ptr<install::HttpUploadSource> m_upload_source;
+    std::unique_ptr<install::MemorySource> m_memory_source;
     /* True while this thread is inside Prepare() for an upload: the console is reading the package
        over the page, and the page's own wait pump redraws the countdown.  Only ever set on the UI
        thread -- the transfer's reads happen on the reader thread and must not draw. */
@@ -531,6 +537,7 @@ private:
     /* The file says an install had started, but nothing of it is left: continuing will start over. */
     bool m_pending_restarts{false};
     std::unique_ptr<install::GameInstall> m_game_install;
+    bool m_forwarder_installed{false};
     install::InstallStatus m_install_status;
     std::string m_install_error;
     ui::Bitmap m_cover{};
@@ -577,6 +584,7 @@ private:
     int m_result_files{0};
     /* Whether the last action was an uninstall (the result page picks its wording). */
     bool m_result_uninstall{false};
+    bool m_result_forwarder{false};
     net::UpdateCheckTask m_update_task{};
     bool m_update_running{false};
     /* A startup check keeps a failure to itself (the button keeps its normal wording); a

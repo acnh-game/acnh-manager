@@ -85,7 +85,9 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
-BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
+# The forwarder metadata is a build-time provenance record checked by verify-release.py; it is
+# intentionally not linked into the NRO.  The forwarder NSP itself remains a runtime asset.
+BINFILES	:=	$(filter-out forwarder_nsp_meta.bin,$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*))))
 
 ifeq ($(strip $(CPPFILES)),)
 	export LD	:=	$(CC)

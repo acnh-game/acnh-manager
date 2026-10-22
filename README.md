@@ -59,6 +59,14 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Ho
    每个文件都按清单里的 size + sha256 校验后才落盘。检查失败静默退回内置版本。
 5. 内置**聊天码说明页**(`－` 或页面切换直达),讲清聊天码怎么写,并带上《森友物码册》小程序码。
 
+### 从桌面直接启动
+
+首页最下方的「安装桌面快捷方式」(`ZR`)会在 HOME 菜单创建一个启动入口,固定指向
+`sdmc:/switch/ACNH-Manager/ACNH-Manager.nro`(FAT32 大小写不敏感,卡上发布文件名仍为
+`acnh-manager.nro`);安装目标固定为 microSD。已安装时同一按钮改为
+「删除桌面快捷方式」。它使用应用内预生成的 forwarder NSP,安装过程不需要密钥、网络或额外工具。
+生成该 NSP 时,`tools/build-forwarder.py` 会在固定 devkitPro 容器中从 hbl 源码现场编译 loader。
+
 判据链、实测证据与 SD 布局见 `docs/architecture.md`(改行为前必读)。
 
 ## 安装与使用
@@ -105,3 +113,6 @@ python3 tools/deploy-nro.py
 ## 许可
 
 GPL-3.0(见 `LICENSE`)。
+
+桌面 forwarder 的 hbmenu loader 由 Sphaira `hbl` 3.0.0 源码在构建阶段现场编译
+(nx-hbloader 派生,MIT 许可);仓库不保存编译后的 loader 二进制。

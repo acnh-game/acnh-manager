@@ -212,9 +212,12 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   只保留媒体与精简包装(MIT,许可证见 `nosleep-media-LICENSE`)。细节见
   `docs/game_installer_design.md` 第 3、8 节。
 - `data/`:内嵌发布清单与 payload 的 bin2s 构建输入(由导入工具生成,入库),外加
-  `data/agent_pubkey.bin`(验签公钥,由 `tools/make-signing-key.py` 生成)与 `data/qr_miniapp.bin`
+  `data/agent_pubkey.bin`(验签公钥,由 `tools/make-signing-key.py` 生成)、`data/qr_miniapp.bin`
   (《森友物码册》小程序码的模块矩阵,由 `tools/make-qr.py` 从 miniapp 仓库的 `resources/小程序码.jpg`
-  采样而来)—— 三个都由 bin2s 编进 NRO。
+  采样而来),以及一个额外子项:桌面入口 `data/forwarder_nsp.bin` 由
+  `tools/build-forwarder.py` 从 `packaging/forwarder/hbl-3.0.0/` 的固定源码在 devkitPro 容器中
+  现场编译 loader,再交给 `tools/make-forwarder-nsp.py` 构造三个 NCA 并打包;它由 bin2s 编进 NRO。
+  旁边的 `data/forwarder_nsp_meta.bin` 是构建自检读取的来源/内容 id/哈希记录,不供运行时使用。
 - `packaging/agent/<版本>/`:发布记录(subsdk9 / main.npdm / acnh-agent.version / manifest.json),
   与 `data/` 同源,也是对外托管的四个文件(玩家侧靠 Gitee raw 直取;仓库根目录还有一份
   `agent-manifest.json` 是它的副本,给 App 的更新检查读);`packaging/agent-lock.json` 是发布锁。
@@ -230,7 +233,7 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 | `README.md` | 项目概览与当前支持范围 |
 | `docs/architecture.md` | 架构、版本识别与门控、SD 布局、环境检查(改行为前必读) |
 | `docs/game_installer_design.md` | 通用游戏安装器(1.1.0)设计:支持 NSP/NSZ/XCI/XCZ(不做 MSP)、三种来源(SD 文件 / HTTP 下载 / HTTP 上传)、安装选项与校验策略、HTTP 服务端实现(picohttpparser + 自写薄层,含端口策略)、界面文案、真机测试矩阵(动这项功能前必读) |
-| `docs/home_menu_and_startup_check_design.md` | 启动自检页(程序位置自愈)与「安装到桌面主菜单」(1.2.0 计划,尚未实施) |
+| `docs/home_menu_and_startup_check_design.md` | 启动自检页(程序位置自愈)与「安装桌面快捷方式」(1.2.0 计划;全动态产物安装/启动已验收,应用模式删除禁用待复验) |
 | `docs/tools-guide.md` | 本仓库工具的用法与登记 |
 | `docs/release-process.md` | 发布流程:导入门控、商店打包、上架与 Gitee 托管地址(发布前必读) |
 | `docs/store-listing.md` | 商店条目元数据与素材要求(改对外文案前) |

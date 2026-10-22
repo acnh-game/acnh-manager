@@ -183,6 +183,10 @@ public:
            old version -- ncm knows the patch, the home screen still says "Ver. 1.0.0".  Zero
            means "the package's own id" (a base game is filed under itself). */
         std::uint64_t record_title_id{0};
+        /* Embedded forwarders replace an application entity created by an earlier attempt or by
+           another forwarder tool.  The reference removes that entity immediately before pushing
+           the new application record. */
+        bool reset_application_entity{false};
         /* What the console is told it may launch.  Normally the package's version, but a base game
            or add-on installed on top of a newer update must not undo it; zero means
            `version`. */

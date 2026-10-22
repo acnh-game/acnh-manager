@@ -852,7 +852,7 @@ bool GameInstall::Begin(std::string *error) {
        resumable.  A store that cannot be written is worth a line, not a failed install -- the run
        still works, it just cannot be picked up later. */
     m_task.stage = TaskStage::Fetching;
-    {
+    if (m_task.source != TaskSource::Internal) {
         std::string task_error;
         if (SaveTask(&task_error)) {
             m_task_kept = true;
@@ -1233,6 +1233,9 @@ std::uint8_t *GameInstall::AcquireSlotOrFinish() {
 /* The task file, as the app's store sees it: the engine formats, the app writes.  Reading it back
    is the app's job too (it owns the card and the screen that offers "continue"). */
 bool GameInstall::SaveTask(std::string *error) {
+    if (m_task.source == TaskSource::Internal) {
+        return true; /* an embedded package has no resumable external source */
+    }
     if (!g_task_save) {
         return false; /* no store: this run keeps no task file (the host tests run like this) */
     }
@@ -1240,6 +1243,9 @@ bool GameInstall::SaveTask(std::string *error) {
 }
 
 void GameInstall::RemoveTask() {
+    if (m_task.source == TaskSource::Internal) {
+        return;
+    }
     if (!g_task_remove) {
         return;
     }
@@ -1250,6 +1256,9 @@ void GameInstall::RemoveTask() {
 }
 
 void GameInstall::FlushTaskIfDue() {
+    if (m_task.source == TaskSource::Internal) {
+        return;
+    }
     if (!g_task_save) {
         return;
     }
@@ -1464,12 +1473,15 @@ bool GameInstall::Finish(std::string *error) {
     inputs.title_id = m_primary->cnmt.title_id;
     inputs.version = m_primary->cnmt.version;
     inputs.meta_type = static_cast<std::uint8_t>(m_primary->cnmt.type);
+    const MetaRecordShape record_shape = m_task.source == TaskSource::Internal
+                                             ? MetaRecordShape::Forwarder
+                                             : MetaRecordShape::Console;
     /* The record's payload is built in the console's own layout, not copied from the CNMT file --
        see BuildMetaRecordBlob.  Without this the console stores a record whose content list it
        cannot read, which is how a title ends up with no control data. */
     if (!BuildMetaRecordBlob(m_primary->blob, m_primary->entry->name, m_package.container,
-                             m_options.lower_system_version,
-                             &inputs.meta_blob, error)) {
+                             m_options.lower_system_version, record_shape, &inputs.meta_blob,
+                             error)) {
         m_status.stage = InstallStage::Failed;
         m_status.error = *error;
         return false;
@@ -1482,6 +1494,7 @@ bool GameInstall::Finish(std::string *error) {
        that is its own id), with this package's key inside -- see ContentInstaller::Finish. */
     const std::uint64_t title_id = std::strtoull(m_primary->cnmt.title_id.c_str(), nullptr, 16);
     inputs.record_title_id = ApplicationIdOf(title_id, m_primary->cnmt.type);
+    inputs.reset_application_entity = m_task.source == TaskSource::Internal;
     /* The console is allowed to launch the *newest* version this run puts in place: a container
        that carries a game and its update has to raise the launch version to the update's, or the
        console keeps starting the base game (the reference implementation asks for the newest
@@ -1525,7 +1538,8 @@ bool GameInstall::Finish(std::string *error) {
         const std::uint64_t extra_title_id = std::strtoull(meta.cnmt.title_id.c_str(), nullptr, 16);
         extra.record_title_id = ApplicationIdOf(extra_title_id, meta.cnmt.type);
         if (!BuildMetaRecordBlob(meta.blob, meta.entry->name, m_package.container,
-                                 m_options.lower_system_version, &extra.meta_blob, error)) {
+                                 m_options.lower_system_version, record_shape, &extra.meta_blob,
+                                 error)) {
             m_status.stage = InstallStage::Failed;
             m_status.error = *error;
             return false;

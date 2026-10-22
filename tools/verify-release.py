@@ -13,10 +13,11 @@ Checks:
   4. with --nro: the NRO really contains the embedded manifest and the three payloads, and
      its build stamp matches the *current* source tree -- that last part is what catches
      "source changed but the NRO was not rebuilt", which a payload-only check cannot see.
-  5. the vendored third-party sources (picohttpparser, qrcodegen) are still the exact upstream
+  5. the generated desktop-forwarder NSP matches its source/hash record and is inside the NRO;
+  6. the vendored third-party sources (picohttpparser, qrcodegen) are still the exact upstream
      bytes `source/third_party/README.md` pins -- they run on input from the local network, so
      a quiet local edit is exactly the thing that must not reach a release;
-  6. the manifest the update check serves is signed by the key this app trusts: a manifest
+  7. the manifest the update check serves is signed by the key this app trusts: a manifest
      committed without (re-)signing would be rejected by every shipped App, which is exactly
      the kind of silent release breakage this tool exists to catch.  Uses openssl when it is
      on PATH; without it the check is reported as skipped, never as passed.
@@ -77,11 +78,14 @@ def show(path: pathlib.Path) -> str:
 
 
 def source_tree_hash(repo: pathlib.Path) -> str:
-    """Reproduce tools/build.sh's src:<8 hex> component: sort the "sha256  path" lines of
-    every file under source/ by path, then hash the concatenation."""
-    root = repo / "source"
-    rels = sorted(p.relative_to(repo).as_posix()
-                  for p in root.rglob("*") if p.is_file() and not p.is_symlink())
+    """Reproduce tools/build.sh's src:<8 hex>: it covers source/, data/ and assets/, not just C++
+    source, because those are all linked into the NRO."""
+    rels = []
+    for name in ("source", "data", "assets"):
+        root = repo / name
+        rels += [p.relative_to(repo).as_posix()
+                 for p in root.rglob("*") if p.is_file() and not p.is_symlink()]
+    rels.sort()
     lines = "".join(f"{sha256_of(repo / rel)}  {rel}\n" for rel in rels)
     return hashlib.sha256(lines.encode()).hexdigest()[:8]
 
@@ -105,7 +109,7 @@ def check_manifest_signature(report: Report) -> None:
     """The manifest served to the app must carry a signature this app's key accepts: a manifest
     committed without (re-)signing is rejected by every shipped App, so "the release is live but
     nobody can see it" would otherwise only show up on a console."""
-    print("\n[6] served manifest signature")
+    print("\n[7] served manifest signature")
     manifest = REPO_ROOT / "agent-manifest.json"
     signature = manifest.with_name(manifest.name + ".sig")  # the name the app asks for
     pubkey = REPO_ROOT / "data" / "agent_pubkey.bin"
@@ -212,8 +216,37 @@ def main(argv: list[str] | None = None) -> int:
         report.check(path.read_bytes() == (record_dir / name).read_bytes(),
                      f"{data_name} is byte-identical to the record's {name}")
 
+    print(f"\n[4] embedded desktop forwarder {show(args.data)}/")
+    forwarder = args.data / "forwarder_nsp.bin"
+    forwarder_meta = args.data / "forwarder_nsp_meta.bin"
+    if report.check(forwarder.is_file(), "forwarder_nsp.bin exists"):
+        if report.check(forwarder_meta.is_file(), "forwarder_nsp_meta.bin exists"):
+            metadata = json.loads(forwarder_meta.read_text())
+            report.check(forwarder.stat().st_size == metadata.get("size"),
+                         "the forwarder NSP size matches its source record")
+            report.check(sha256_of(forwarder) == metadata.get("nspSha256"),
+                         "the forwarder NSP hash matches its source record")
+            source_dir = REPO_ROOT / "packaging" / "forwarder" / "hbl-3.0.0"
+            source_record = source_dir / "SOURCE.json"
+            if report.check(source_record.is_file(), "the hbl source record exists"):
+                source = json.loads(source_record.read_text())
+                report.check(metadata.get("loaderSource") == source,
+                             "the forwarder provenance matches the checked-in hbl source")
+                report.check(not (source_dir / "main").exists() and
+                             not (source_dir / "main.npdm").exists(),
+                             "no compiled hbl loader binary is checked in")
+                source_files = {
+                    "sourceMainSha256": source_dir / "source" / "main.c",
+                    "sourceTrampolineSha256": source_dir / "source" / "trampoline.s",
+                    "npdmConfigSha256": source_dir / "hbl.json",
+                    "cmakeListsSha256": source_dir / "CMakeLists.txt",
+                }
+                for field, path in source_files.items():
+                    report.check(path.is_file() and sha256_of(path) == source.get(field),
+                                 f"{path.relative_to(REPO_ROOT)} matches the hbl source record")
+
     if args.nro is not None:
-        print(f"\n[4] NRO embedded content {args.nro}")
+        print(f"\n[5] NRO embedded content {args.nro}")
         if not report.check(args.nro.is_file(), "the NRO exists"):
             return 1
         blob = args.nro.read_bytes()
@@ -228,6 +261,9 @@ def main(argv: list[str] | None = None) -> int:
         pubkey_bytes = (args.data / "agent_pubkey.bin").read_bytes()
         report.check(pubkey_bytes in blob,
                      f"the NRO embeds the current public key ({len(pubkey_bytes)} B)")
+        if forwarder.is_file():
+            report.check(forwarder.read_bytes() in blob,
+                         f"the NRO embeds the forwarder NSP ({forwarder.stat().st_size} B)")
 
         expected = source_tree_hash(REPO_ROOT)
         stamps = sorted({m.group(0).decode() for m in STAMP_RE.finditer(blob)})
@@ -242,6 +278,13 @@ def main(argv: list[str] | None = None) -> int:
 
     check_third_party(report)
     check_manifest_signature(report)
+    print()
+    if report.failures:
+        print(f"{report.checks} checks, {len(report.failures)} failed:"
+              + ", ".join(report.failures))
+        return 1
+    print(f"all {report.checks} checks passed.")
+    return 0
 
 
 THIRD_PARTY_PINS = (
@@ -261,7 +304,7 @@ THIRD_PARTY_PINS = (
 def check_third_party(report: Report) -> None:
     """The vendored libraries may only be replaced by a deliberate re-pin (source/third_party/
     README.md explains the update procedure); this check is what makes that stick."""
-    print("\n[5] vendored third-party sources")
+    print("\n[6] vendored third-party sources")
     root = REPO_ROOT / "source" / "third_party"
     for relative, expected in THIRD_PARTY_PINS:
         path = root / relative
@@ -269,13 +312,7 @@ def check_third_party(report: Report) -> None:
             continue
         report.check(sha256_of(path) == expected, f"{relative} is the pinned upstream revision")
 
-    print()
-    if report.failures:
-        print(f"{report.checks} checks, {len(report.failures)} failed:"
-              + ", ".join(report.failures))
-        return 1
-    print(f"all {report.checks} checks passed.")
-    return 0
+    return None
 
 
 if __name__ == "__main__":

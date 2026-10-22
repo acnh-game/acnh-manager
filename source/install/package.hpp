@@ -74,9 +74,17 @@ bool FillTaskContents(const std::vector<CnmtInfo> &metas, const ContainerInfo &c
    then refuses to launch the title with "a system update is required".  Nothing the console
    verifies covers this field -- it is read from the record, not from anything signed -- so zeroing
    it leaves the record consistent, and it is the reference's long-standing default. */
+/* A packaged HOME-menu forwarder uses the reference frontend installer's record shape: the Meta
+   content-info size is the CNMT payload size and the record header storage is zero.  Keep that
+   distinction explicit instead of passing magic override values from the installer. */
+enum class MetaRecordShape {
+    Console,
+    Forwarder,
+};
+
 bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
                          const std::string &meta_content_name, const ContainerInfo &container,
-                         bool lower_required_system_version,
+                         bool lower_required_system_version, MetaRecordShape shape,
                          std::vector<std::uint8_t> *out, std::string *error);
 
 /* The two skips the design promises, decided from numbers alone (design section 9, step 4).

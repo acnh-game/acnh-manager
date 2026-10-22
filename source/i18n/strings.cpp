@@ -111,6 +111,9 @@ constexpr Entry kStrings[] = {
     {"安装游戏", "Install the game"},  /* BtnInstallGame */
     {"检查更新", "Check for updates"},  /* BtnCheckUpdate */
     {"卸载 agent", "Remove the agent"},  /* BtnUninstall */
+    {"安装桌面快捷方式", "Add HOME Menu shortcut"},  /* BtnForwarderInstall */
+    {"删除桌面快捷方式", "Remove HOME Menu shortcut"},  /* BtnForwarderRemove */
+    {"内置的桌面快捷方式不可用", "The built-in HOME Menu shortcut is unavailable"},  /* InstallForwarderUnavailable */
     {"点一下即完成，之后重启游戏", "One tap, then restart the game"},  /* SubInstall */
     {"当前 %s · 最新 %s", "current %s - latest %s"},  /* SubRepair */
     {"再试一次，失败原因在详情里", "Tries once more; the reason is in Details"},  /* SubRetry */
@@ -118,6 +121,9 @@ constexpr Entry kStrings[] = {
     {"查看有没有更高版本的 agent", "Checks whether a newer agent exists"},  /* SubCheckUpdate */
     {"装一份游戏本体", "Install a base game"},  /* SubInstallGame */
     {"删除已安装的文件", "Deletes the installed files"},  /* SubUninstall */
+    {"装好后可从桌面直接启动", "Launch directly from the HOME Menu"},  /* SubForwarderInstall */
+    {"删除桌面上的快捷方式", "Remove the HOME Menu shortcut"},  /* SubForwarderRemove */
+    {"请先退出，从相册重新打开后再删除", "Exit, then reopen from the album to remove it"},  /* SubForwarderRemoveBlocked */
     {"动森增强 Mod(agent) 管理器", "Manager for the Animal Crossing agent"},  /* HeadSubtitle */
     {"暂不可用", "Not available"},  /* BtnUnavailable */
     {"高级", "Advanced"},  /* SectionAdvanced */
@@ -139,6 +145,9 @@ constexpr Entry kStrings[] = {
     {"应用(全内存)模式", "Application (full memory) mode"},  /* AppletModeApplication */
     {"卸载成功", "Removal succeeded"},  /* ResultUninstallOk */
     {"卸载失败", "Removal failed"},  /* ResultUninstallFailed */
+    {"已删除桌面快捷方式", "HOME Menu shortcut removed"},  /* ResultForwarderRemoved */
+    {"无法删除桌面快捷方式", "Could not remove the HOME Menu shortcut"},  /* ResultForwarderRemoveFailed */
+    {"桌面可能需要一点时间刷新", "The HOME Menu may take a moment to refresh"},  /* ResultForwarderRemovedNote */
     {"将要删除的文件", "Files to remove"},  /* LabelPlanRemove */
     {"还有 %d 个文件 · 完整清单见详情页", "%d more files - see Details for the full list"},  /* LabelPlanMore */
     {"以下文件无法删除: %s", "could not delete: %s"},  /* UninstallFailed */
@@ -308,8 +317,10 @@ constexpr Entry kStrings[] = {
     {"无法确认程序是从哪里启动的,请从相册重新打开。", "Cannot tell where the app was started from; reopen it from the album."},  /* StartupUnknownPath */
     {"修复失败: %s", "Repair failed: %s"},  /* StartupFailed */
     {"程序位置", "App location"},  /* LabelProgramLocation */
+    {"桌面快捷方式", "HOME Menu shortcut"},  /* LabelHomeMenu */
     {"标准", "standard"},  /* ValueStandard */
     {"非标准", "non-standard"},  /* ValueNonstandard */
+    {"已安装", "Installed"},  /* ValueInstalled */
 };
 
 constexpr std::size_t kCount = sizeof(kStrings) / sizeof(kStrings[0]);

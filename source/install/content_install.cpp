@@ -1241,6 +1241,12 @@ bool ContentInstaller::Finish(const FinishInputs &inputs, std::string *error) {
                                          " failed: " + cleanup_error);
             }
         }
+        if (inputs.reset_application_entity) {
+            const Result reset_rc = nsDeleteApplicationEntity(meta_record_id);
+            m_finish_trace.push_back("reset application entity " +
+                                     ToHex(&meta_record_id, sizeof(meta_record_id)) +
+                                     " rc=0x" + ToHex(&reset_rc, sizeof(reset_rc)));
+        }
         /* One record per meta, under the application id: this meta's own key and the storage it
            lives on.  The service adds it to that application's list -- the reference implementation
            pushes exactly one record per meta for exactly this reason.  Re-pushing the list's other

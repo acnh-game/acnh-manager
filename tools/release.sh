@@ -7,11 +7,12 @@
 #   1) build the acnh-agent release form in the pinned image (make switch SEMANTIC_HOOK=1)
 #   2) derive main.npdm with acnh-agent's make-minimal-npdm.py from the original NPDM
 #   3) release gate + import -> packaging/agent-lock.json, packaging/agent/<ver>/, data/
-#   4) build the NRO (data/ is embedded into .rodata)
-#   5) publish the NRO into packaging/nro/ (that raw URL is what players and the store fetch)
-#   6) sign the served manifest (agent-manifest.json.sig) with the release key
-#   7) verify: lock <-> release record <-> data/ <-> NRO <-> signature
-#   8) build the store package
+#   4) compile hbl from source and generate the forwarder NSP
+#   5) build the NRO (data/ is embedded into .rodata)
+#   6) publish the NRO into packaging/nro/ (that raw URL is what players and the store fetch)
+#   7) sign the served manifest (agent-manifest.json.sig) with the release key
+#   8) verify: lock <-> release record <-> data/ <-> NRO <-> signature
+#   9) build the store package
 #
 # Usage:
 #   ./tools/release.sh                     # whole chain
@@ -55,7 +56,7 @@ done
 
 step() { echo; echo "=== $* ==="; }
 
-step "0/8 preflight"
+step "0/9 preflight"
 [ -d "${agent_dir}" ] || { echo "error: acnh-agent not found at ${agent_dir} (override with ACNH_AGENT_DIR)" >&2; exit 2; }
 # This repo has to be clean as well: the build stamp carries its commit and source hash,
 # and a dirty tree would stamp the NRO with -dirty.
@@ -91,7 +92,7 @@ echo "app version: ${app_version}"
 echo "signing key: ${signing_key}"
 
 if [ "${skip_agent_build}" -eq 0 ]; then
-    step "1/8 build the acnh-agent release form in the container (SEMANTIC_HOOK=1)"
+    step "1/9 build the acnh-agent release form in the container (SEMANTIC_HOOK=1)"
     command -v docker >/dev/null || { echo "error: docker is required" >&2; exit 2; }
     rm -rf "${stage}"
     mkdir -p "${stage}"
@@ -112,11 +113,11 @@ if [ "${skip_agent_build}" -eq 0 ]; then
             cp dist/version.json /stage/version.json
             git rev-parse --short=12 HEAD > /stage/commit.txt'
 else
-    step "1/8 skipping the agent build (reusing ${stage})"
+    step "1/9 skipping the agent build (reusing ${stage})"
     [ -f "${stage}/acnh-agent.nso" ] || { echo "error: ${stage} has no artifact from a previous build" >&2; exit 2; }
 fi
 
-step "1b/8 the staged artifact must come from the current agent HEAD"
+step "1b/9 the staged artifact must come from the current agent HEAD"
 staged_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "${stage}/version.json")"
 if [ "${staged_commit}" != "${head_commit}" ]; then
     echo "error: the artifact in ${stage} was built from ${staged_commit}, agent HEAD is ${head_commit}" >&2
@@ -129,11 +130,11 @@ if [ -f "${stage}/commit.txt" ] && [ "$(tr -d '\n' < "${stage}/commit.txt")" != 
 fi
 echo "  staged commit ${staged_commit} == agent HEAD"
 
-step "2/8 derive main.npdm (pure Python, original NPDM opened read-only)"
+step "2/9 derive main.npdm (pure Python, original NPDM opened read-only)"
 python3 "${agent_dir}/tools/make-minimal-npdm.py" \
     --input "${original_npdm}" --outdir "${stage}/npdm" | tail -5
 
-step "3/8 release gate + import of this repo's assets"
+step "3/9 release gate + import of this repo's assets"
 python3 "${repo_dir}/tools/import-agent-release.py" \
     --nso "${stage}/acnh-agent.nso" \
     --npdm "${stage}/npdm/main.npdm" \
@@ -141,7 +142,9 @@ python3 "${repo_dir}/tools/import-agent-release.py" \
     --original-npdm "${original_npdm}"
 
 if [ "${skip_nro}" -eq 0 ]; then
-    step "4/8 build the NRO (embeds data/)"
+    step "4/9 compile hbl from source and generate the forwarder NSP"
+    python3 "${repo_dir}/tools/build-forwarder.py"
+    step "5/9 build the NRO (embeds data/)"
     # --release: development aids (probes, text UI) are left out of this build.
     "${repo_dir}/tools/build.sh" --release
     # And prove it: the shipped binary must not contain the probes' own strings.
@@ -151,10 +154,10 @@ if [ "${skip_nro}" -eq 0 ]; then
     fi
     echo "release check: no development probes in acnh-manager.nro"
 else
-    step "4/8 skipping the NRO build"
+    step "4/9-5/9 skipping the forwarder and NRO build"
 fi
 
-step "5/8 publish the NRO into packaging/nro/ (served by Gitee raw; the store links here)"
+step "6/9 publish the NRO into packaging/nro/ (served by Gitee raw; the store links here)"
 if [ "${skip_nro}" -eq 0 ]; then
     mkdir -p "${repo_dir}/packaging/nro"
     cp "${repo_dir}/acnh-manager.nro" "${repo_dir}/packaging/nro/acnh-manager-${app_version}.nro"
@@ -164,10 +167,10 @@ else
     echo "  skipped with --skip-nro"
 fi
 
-step "6/8 sign the served manifest (the app verifies this before it trusts anything)"
+step "7/9 sign the served manifest (the app verifies this before it trusts anything)"
 python3 "${repo_dir}/tools/sign-manifest.py" --key "${signing_key}"
 
-step "7/8 verify: lock <-> release record <-> data/ <-> NRO <-> signature"
+step "8/9 verify: lock <-> release record <-> data/ <-> NRO <-> signature"
 if [ "${skip_nro}" -eq 0 ]; then
     python3 "${repo_dir}/tools/verify-release.py" --nro "${repo_dir}/acnh-manager.nro"
 else
@@ -175,10 +178,10 @@ else
 fi
 
 if [ "${skip_store}" -eq 0 ]; then
-    step "8/8 build the store package"
+    step "9/9 build the store package"
     python3 "${repo_dir}/tools/make-store-package.py"
 else
-    step "8/8 skipping the store package"
+    step "9/9 skipping the store package"
 fi
 
 echo

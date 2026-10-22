@@ -10,6 +10,7 @@ const char *SourceName(TaskSource source) {
         case TaskSource::LocalFile: return "file";
         case TaskSource::HttpDownload: return "http-client";
         case TaskSource::HttpUpload: return "http-server";
+        case TaskSource::Internal: return "internal";
         case TaskSource::None: break;
     }
     return "none";
@@ -24,6 +25,9 @@ TaskSource SourceFromName(const std::string &name) {
     }
     if (name == "http-server") {
         return TaskSource::HttpUpload;
+    }
+    if (name == "internal") {
+        return TaskSource::Internal;
     }
     return TaskSource::None;
 }

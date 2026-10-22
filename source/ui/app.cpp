@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <initializer_list>
 #include <string>
 #include <unistd.h> /* close(): a handed-over connection nobody will read */
 
@@ -112,6 +113,37 @@ constexpr Color kCardDisabled{0xF0, 0xEC, 0xE0, 0xFF};
    the action button and from the green/orange/red of the other states. */
 constexpr Color kUninstalled{0x8A, 0x62, 0xD4, 0xFF};
 
+bool DeleteApplicationTitles(std::initializer_list<std::uint64_t> title_ids,
+                             std::string *error) {
+    Result rc = nsInitialize();
+    if (R_FAILED(rc)) {
+        if (error != nullptr) {
+            char text[80];
+            std::snprintf(text, sizeof(text), "opening ns failed (0x%08x)",
+                          static_cast<unsigned>(rc));
+            *error = text;
+        }
+        return false;
+    }
+    bool ok = true;
+    for (const std::uint64_t title_id : title_ids) {
+        rc = nsDeleteApplicationCompletely(title_id);
+        if (R_FAILED(rc) && rc != 0x410) { /* 0x410: already absent */
+            ok = false;
+            if (error != nullptr) {
+                char text[96];
+                std::snprintf(text, sizeof(text),
+                              "deleting %016llx failed (0x%08x)",
+                              static_cast<unsigned long long>(title_id),
+                              static_cast<unsigned>(rc));
+                *error = text;
+            }
+        }
+    }
+    nsExit();
+    return ok;
+}
+
 /* Taller than a plain title bar because the header carries a subtitle: what this program is,
    for the people who just installed it. */
 constexpr int kHeaderHeight = 96;
@@ -138,7 +170,7 @@ constexpr int kListTopGap = 14;
 constexpr int kLabelColumn = 280;
 constexpr int kRowGap = 8;
 
-/* Home-screen action ids: the three controls of the new one-screen UI. */
+/* Home-screen action ids: the primary control and the three fixed secondary controls. */
 constexpr int kActionPrimary = 0;     /* install / update / repair / retry / check again (A) */
 constexpr int kActionCheckUpdate = 1; /* X */
 constexpr int kActionUninstall = 2;   /* Y */
@@ -163,6 +195,7 @@ constexpr int kActionPendingResume = 26;   /* "continue" on the unfinished-insta
 constexpr int kActionPendingAbandon = 27;  /* "give up and clean up" on that screen (X) */
 constexpr int kActionPendingPickNew = 28;  /* "pick something else" on that screen (Y) */
 constexpr int kActionStartupRepair = 29;   /* the startup page's only action (A) */
+constexpr int kActionForwarder = 30;       /* install/remove the desktop tile (ZR) */
 
 /* Where each header entry's key badge sits (the layout needs the same answer for the drawn pill
    and for the touch target -- see RenderHeader).  Same order as the tabs there: + installer,
@@ -504,6 +537,7 @@ void App::Collect() {
         Trace("collect: %s", note.c_str());
     }
     RefreshPlan();
+    RefreshForwarderTile();
     UpdateHomeState();
     Trace("collect: gate=%s plan=%s", m_gate.reason.c_str(), PlanActionName(m_plan.action));
 }
@@ -934,6 +968,7 @@ std::string App::UpdateDetailText() const {
 }
 
 void App::RunInstall() {
+    m_result_forwarder = false;
     if ((!m_have_manifest && !m_have_update_manifest) ||
         m_plan.action == install::PlanAction::Blocked || m_plan.game == nullptr) {
         m_result_ok = false;
@@ -963,6 +998,7 @@ void App::RunInstall() {
     m_result_error = error;
     m_result_files = files_written;
     m_result_uninstall = false;
+    m_result_forwarder = false;
     /* The reason only used to exist on screen: a failure reported by the user could not be
        looked up in log.txt afterwards, which is exactly what happened while running the
        installer fault-injection tests. */
@@ -1078,6 +1114,7 @@ void App::RunAgentFollowUp() {
     m_result_ok = ok;
     m_result_files = files_written;
     m_result_uninstall = false;
+    m_result_forwarder = false;
     m_agent_follow_up = ok ? AgentFollowUp::Installed : AgentFollowUp::Failed;
     m_agent_follow_reason = ok ? std::string() : error;
     m_result_error = error;
@@ -1106,6 +1143,7 @@ void App::RunUninstall() {
     /* The result page words itself from these two flags; without this the page claimed
        "install succeeded" right after removing the files. */
     m_result_uninstall = true;
+    m_result_forwarder = false;
     m_result_ok = result.ok;
     m_last_failed = !result.ok;
     m_result_error = result.error;
@@ -1151,9 +1189,9 @@ void App::HandleStick(const PadState &pad) {
     m_stick_next_tick = now + (m_stick_next_tick == 0 ? kFirstDelayMs : kRepeatMs);
 }
 
-/* Keyboard half of the input model.  Home has three actions with dedicated keys (A for the
-   primary one, X and Y for the two secondary ones) plus focus movement for the d-pad, the
-   details page uses focus and A, and B always means "back" (or exit on Home). */
+/* Keyboard half of the input model.  Home has four actions with dedicated keys (A for the
+   primary one, X/Y for the two secondary ones, ZR for the shortcut tile) plus focus movement for
+   the d-pad; the details page uses focus and A, and B always means "back" (or exit on Home). */
 void App::HandleKeys(u32 down) {
     /* While the engine is working, the progress page owns the screen and the thread: no key can
        leave it (the install is synchronous, so in practice nothing arrives here at all -- this
@@ -1248,6 +1286,9 @@ void App::HandleKeys(u32 down) {
             return;
         } else if ((down & HidNpadButton_Y) != 0) {
             ActivateAction(kActionUninstall);
+            return;
+        } else if ((down & HidNpadButton_ZR) != 0) {
+            ActivateAction(kActionForwarder);
             return;
         }
         /* Focus may have landed on a disabled action (e.g. "already up to date"); A then does
@@ -1478,6 +1519,18 @@ void App::ActivateAction(int id) {
             }
             break;
         case kActionCheckUpdate: StartUpdateCheck(); break;
+        case kActionForwarder:
+            if (ForwarderRemovalBlocked(
+                    m_forwarder_installed,
+                    m_report.applet_type == AppletType_Application)) {
+                return;
+            }
+            if (m_forwarder_installed) {
+                RemoveForwarderTile();
+            } else {
+                InstallForwarderTile();
+            }
+            break;
         case kActionGuide: ToggleGuide(); break;
         case kActionGameInstall: OpenGameInstall(); break;
         /* The three source screens land here next milestone; the entries are drawn and pressable
@@ -2165,9 +2218,11 @@ namespace {
 constexpr int kHomeMargin = kMargin;
 constexpr int kHomeStatusY = 136;
 constexpr int kHomePrimaryY = 270;
-constexpr int kHomeButtonHeight = 144;
-constexpr int kHomeSecondaryY = 450;
-constexpr int kHomeSecondaryHeight = 110;
+constexpr int kHomeButtonHeight = 128;
+constexpr int kHomeSecondaryHeight = 100;
+constexpr int kHomeSecondaryGap = 20;
+constexpr int kHomeForwarderHeight = kHomeSecondaryHeight;
+constexpr int kHomeForwarderGap = 14;
 constexpr int kHomeGap = 24;
 
 /* The legacy-cheat strip.  Home carries one message that is not a state: a cheat file left in
@@ -2188,8 +2243,13 @@ constexpr int kHomeWarnHeight =
 constexpr int kHomeWarnY = kHomeStatusBlockBottom + 12;
 /* What the two button rows move down while the strip is shown: exactly the room it takes plus the
    gap that keeps it off the primary button. */
-constexpr int kHomeWarnShift = (kHomeWarnY + kHomeWarnHeight + 20) - kHomePrimaryY;
+constexpr int kHomeWarnShift = (kHomeWarnY + kHomeWarnHeight + 10) - kHomePrimaryY;
 static_assert(kHomeWarnShift > 0, "the warning strip has to push the buttons down");
+constexpr int kHomeButtonsBottom =
+    kHomePrimaryY + kHomeWarnShift + kHomeButtonHeight + kHomeSecondaryGap +
+    kHomeSecondaryHeight + kHomeForwarderGap + kHomeForwarderHeight;
+static_assert(kHomeButtonsBottom <= 720 - kFooterHeight - 8,
+              "the home buttons have to clear the footer even with the warning strip");
 
 /* Key badge: the physical button that also triggers this control, drawn inside it. */
 void DrawKeyBadge(Surface surface, Font &font, int cx, int cy, int radius, const char *key,
@@ -2275,23 +2335,31 @@ void App::BuildHomeActions(int width, int height) {
        same rectangles: moving the buttons in the renderer alone would leave the finger hitting
        the old place. */
     const int shift = m_report.legacy_cheat_present ? kHomeWarnShift : 0;
+    const int primary_y = kHomePrimaryY + shift;
+    const int secondary_y = primary_y + kHomeButtonHeight + kHomeSecondaryGap;
+    const int forwarder_y = secondary_y + kHomeSecondaryHeight + kHomeForwarderGap;
+    const bool forwarder_remove_blocked = ForwarderRemovalBlocked(
+        m_forwarder_installed, m_report.applet_type == AppletType_Application);
     m_actions.clear();
     m_actions.push_back(
-        {kActionPrimary, Rect{kHomeMargin, kHomePrimaryY + shift, inner, kHomeButtonHeight},
+        {kActionPrimary, Rect{kHomeMargin, primary_y, inner, kHomeButtonHeight},
          primary_enabled});
     /* Without the uninstall button there is nothing to pair with, and a half-width button next
        to empty space reads as a missing control, so the check button takes the full row. */
     const int check_width = installed ? half : inner;
     m_actions.push_back({kActionCheckUpdate,
-                         Rect{kHomeMargin, kHomeSecondaryY + shift, check_width,
+                         Rect{kHomeMargin, secondary_y, check_width,
                               kHomeSecondaryHeight},
                          true});
     if (installed) {
         m_actions.push_back({kActionUninstall,
-                             Rect{kHomeMargin + half + kHomeGap, kHomeSecondaryY + shift, half,
+                             Rect{kHomeMargin + half + kHomeGap, secondary_y, half,
                                   kHomeSecondaryHeight},
                              true});
     }
+    m_actions.push_back({kActionForwarder,
+                         Rect{kHomeMargin, forwarder_y, inner, kHomeForwarderHeight},
+                         !forwarder_remove_blocked});
 }
 
 void App::RenderHome(Surface surface) {
@@ -2429,10 +2497,12 @@ void App::RenderHome(Surface surface) {
     const Action *primary = nullptr;
     const Action *check = nullptr;
     const Action *uninstall = nullptr;
+    const Action *forwarder = nullptr;
     for (const Action &action : m_actions) {
         if (action.id == kActionPrimary) primary = &action;
         if (action.id == kActionCheckUpdate) check = &action;
         if (action.id == kActionUninstall) uninstall = &action;
+        if (action.id == kActionForwarder) forwarder = &action;
     }
 
     auto block = [&](const Action *action, const char *label, const std::string &sub,
@@ -2521,6 +2591,16 @@ void App::RenderHome(Surface surface) {
         block(uninstall, Tr(i18n::StringId::BtnUninstall), Tr(i18n::StringId::SubUninstall), "Y",
               false);
     }
+    const bool forwarder_remove_blocked = ForwarderRemovalBlocked(
+        m_forwarder_installed, m_report.applet_type == AppletType_Application);
+    block(forwarder,
+          Tr(m_forwarder_installed ? i18n::StringId::BtnForwarderRemove
+                                   : i18n::StringId::BtnForwarderInstall),
+          Tr(forwarder_remove_blocked ? i18n::StringId::SubForwarderRemoveBlocked
+                                      : (m_forwarder_installed
+                                             ? i18n::StringId::SubForwarderRemove
+                                             : i18n::StringId::SubForwarderInstall)),
+          "ZR", false);
     if (m_trace_frames > 0) {
         Trace("home: rendered kind=%d actions=%zu focus=%d", static_cast<int>(m_home_kind),
               m_actions.size(), m_focus);
@@ -2586,6 +2666,11 @@ void App::RenderDetails(Surface surface) {
                                       : Tr(i18n::StringId::ValueNotAvailable),
                                 known ? (standard ? kGood : kWarn) : kWarn, 1});
     }
+    version_rows.push_back(
+        {Tr(i18n::StringId::LabelHomeMenu),
+         Tr(m_forwarder_installed ? i18n::StringId::ValueInstalled
+                                  : i18n::StringId::ValueNotInstalled),
+         m_forwarder_installed ? kGood : kSubtle, 1});
     /* Diagnostics: the applet mode and whether the game is open both matter when something
        behaves differently than expected, so they stay available here. */
     /* Plain words instead of the raw enum name: people know "album (applet) mode" (started
@@ -3119,6 +3204,107 @@ void App::OpenGameInstall() {
     m_file_dir = "/";
     m_focus = FirstEnabled(m_actions);
     Trace("install: opened from page %d", static_cast<int>(m_game_install_return));
+}
+
+void App::RefreshForwarderTile() {
+    m_forwarder_installed = false;
+    char title_id[17];
+    std::snprintf(title_id, sizeof(title_id), "%016llx",
+                  static_cast<unsigned long long>(env::StandardForwarderTitleId()));
+    install::ContentInstaller probe(install::TargetStorage::SdCard, install::InstallOptions{});
+    std::string error;
+    if (!probe.Open(&error)) {
+        Trace("forwarder: installed-state query unavailable: %s", error.c_str());
+        return;
+    }
+    bool exact = false;
+    std::uint32_t highest = 0;
+    if (!probe.InstalledState(title_id, 0, 0x80, &exact, &highest, &error)) {
+        Trace("forwarder: installed-state query failed: %s", error.c_str());
+        return;
+    }
+    m_forwarder_installed = exact || highest != 0;
+    Trace("forwarder: title=%s installed=%d version=0x%x", title_id,
+          m_forwarder_installed ? 1 : 0, static_cast<unsigned>(highest));
+}
+
+void App::InstallForwarderTile() {
+    m_result_forwarder = false;
+    const std::string_view nsp = payload::EmbeddedForwarderNsp();
+    if (nsp.empty()) {
+        m_install_error = Tr(i18n::StringId::InstallForwarderUnavailable);
+        m_page = Page::GameInstall;
+        m_install_screen = InstallScreen::Result;
+        Trace("forwarder: the embedded package is missing");
+        return;
+    }
+
+    m_game_install_return = m_page;
+    m_page = Page::GameInstall;
+    m_install_screen = InstallScreen::Choose;
+    m_install_origin = InstallScreen::Choose;
+    m_install_page_drives = false;
+    DisableAutoSleep();
+
+    std::string cleanup_error;
+    if (!DeleteApplicationTitles({env::LegacyForwarderTitleId()}, &cleanup_error)) {
+        Trace("forwarder: legacy cleanup failed: %s", cleanup_error.c_str());
+    }
+
+    m_memory_source = std::make_unique<install::MemorySource>();
+    std::string error;
+    if (!m_memory_source->Open(reinterpret_cast<const std::uint8_t *>(nsp.data()), nsp.size(),
+                               &error)) {
+        m_install_error = error;
+        m_install_screen = InstallScreen::Result;
+        Trace("forwarder: embedded package open failed: %s", error.c_str());
+        return;
+    }
+
+    const install::TargetStorage saved_target = m_install_target;
+    m_install_target = install::TargetStorage::SdCard;
+    OpenPackage(*m_memory_source, "ACNH-Manager-forwarder.nsp", nsp.size(),
+                install::TaskSource::Internal, std::string());
+    m_install_target = saved_target;
+
+    if (m_game_install != nullptr && m_install_screen == InstallScreen::Confirm) {
+        Trace("forwarder: starting install title=%016llx",
+              static_cast<unsigned long long>(env::StandardForwarderTitleId()));
+        RunGameInstall();
+    } else if (m_game_install == nullptr && m_install_screen == InstallScreen::Choose) {
+        /* Prepare refused before it had a package.  A running game gets the existing actionable
+           result card; anything else returns home instead of leaving the installer's source
+           screen up, which would look like ZR opened the game installer. */
+        if (m_install_error == install::kErrorGameRunning) {
+            m_install_screen = InstallScreen::Result;
+        } else {
+            m_page = m_game_install_return;
+            m_focus = FirstEnabled(m_actions);
+        }
+    }
+}
+
+void App::RemoveForwarderTile() {
+    const std::uint64_t title_id = env::StandardForwarderTitleId();
+    std::string error;
+    const bool ok = DeleteApplicationTitles(
+        {title_id, env::LegacyForwarderTitleId()}, &error);
+    m_result_forwarder = true;
+    m_result_uninstall = false;
+    m_result_ok = ok;
+    m_result_files = 0;
+    if (ok) {
+        m_result_error.clear();
+        Trace("forwarder: removed title=%016llx",
+              static_cast<unsigned long long>(title_id));
+    } else {
+        m_result_error = error;
+        Trace("forwarder: remove failed title=%016llx error=%s",
+              static_cast<unsigned long long>(title_id), error.c_str());
+    }
+    Collect();
+    m_page = Page::Result;
+    m_focus = FirstEnabled(m_actions);
 }
 
 /* The SD card as a flat list of what the player can pick: ".." to go up, then directories, then
@@ -3711,6 +3897,7 @@ void App::LeaveInstallScreen() {
     m_game_install.reset();
     m_file_source.reset();
     m_http_source.reset();
+    m_memory_source.reset();
     /* The upload source too: it is holding a browser's connection and the page's task id, and
        leaving the screen is exactly when that should end (the page says "the console is offline"
        and a new run starts from a fresh `POST /upload/begin`). */
@@ -5942,18 +6129,25 @@ void App::RenderResult(Surface surface) {
 
     std::vector<Row> rows;
     rows.push_back({nullptr,
-                    Tr(m_result_uninstall
-                           ? (m_result_ok ? i18n::StringId::ResultUninstallOk
-                                          : i18n::StringId::ResultUninstallFailed)
-                           : (m_result_ok ? i18n::StringId::ResultSuccess
-                                          : i18n::StringId::ResultFailure)),
+                    Tr(m_result_forwarder
+                           ? (m_result_ok ? i18n::StringId::ResultForwarderRemoved
+                                          : i18n::StringId::ResultForwarderRemoveFailed)
+                           : (m_result_uninstall
+                                  ? (m_result_ok ? i18n::StringId::ResultUninstallOk
+                                                 : i18n::StringId::ResultUninstallFailed)
+                                  : (m_result_ok ? i18n::StringId::ResultSuccess
+                                                 : i18n::StringId::ResultFailure))),
                     m_result_ok ? kGood : kBad, 1, kFontTitle});
     rows.push_back({nullptr,
                     /* On the result page the files are already in place, so the note speaks
                        about the present ("restart the game") instead of "once installed". */
-                    Tr(m_result_ok ? (m_result_uninstall ? i18n::StringId::ConfirmUninstallNote
-                                                         : i18n::StringId::ResultReadyNote)
-                                   : i18n::StringId::SubRetry),
+                    Tr(m_result_forwarder
+                           ? (m_result_ok ? i18n::StringId::ResultForwarderRemovedNote
+                                          : i18n::StringId::SubRetry)
+                           : (m_result_ok
+                                  ? (m_result_uninstall ? i18n::StringId::ConfirmUninstallNote
+                                                        : i18n::StringId::ResultReadyNote)
+                                  : i18n::StringId::SubRetry)),
                     kSubtle, 2});
     if (!m_result_ok && !m_result_error.empty()) {
         rows.push_back({nullptr, m_result_error, kWarn, 2});

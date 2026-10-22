@@ -20,11 +20,12 @@
 | 1b | 校验暂存产物来自当前 agent HEAD | 挡住"`--skip-agent-build` 时拿旧产物配新 HEAD 发布":产物自带 `version.json.commit` 与 `commit.txt` 都必须等于 HEAD |
 | 2 | 用 acnh-agent 的 `make-minimal-npdm.py` 从原始 NPDM 派生 `main.npdm` | 原始 NPDM 来自 agent 的 `research/`(只读),产物写进本仓库 `build/scratch/` |
 | 3 | 发布门控 + 导入 | 见第 2 节 |
-| 4 | 构建 NRO(`data/` 经 bin2s 进 `.rodata`) | 与普通构建同一条命令 |
-| 5 | 把 NRO 拷进 `packaging/nro/acnh-manager-<APP_VERSION>.nro` | 这个 raw 地址就是对外的下载直链(商店 update 资产与指南页都指它);文件名的版本号取自 Makefile 的 `APP_VERSION`,不另设一处 |
-| 6 | **给根目录的 `agent-manifest.json` 签名**(`tools/sign-manifest.py`) | 漏签 = 线上每个 App 都把清单当垃圾丢掉(见第 6 节);私钥路径用 `--key` 或 `ACNH_MANAGER_SIGNING_KEY` 指,缺了前置检查直接拒绝 |
-| 7 | 自检 `tools/verify-release.py` | 见第 3 节;自检同时验签,抓"清单改了没重签" |
-| 8 | 打商店包 | `tools/make-store-package.py` |
+| 4 | 用固定容器从 hbl 源码编译 loader 并生成 forwarder NSP | 仓库不保存编译后的 loader 二进制;源码与产物哈希进入 provenance |
+| 5 | 构建 NRO(`data/` 经 bin2s 进 `.rodata`) | 与普通构建同一条命令 |
+| 6 | 把 NRO 拷进 `packaging/nro/acnh-manager-<APP_VERSION>.nro` | 这个 raw 地址就是对外的下载直链(商店 update 资产与指南页都指它);文件名的版本号取自 Makefile 的 `APP_VERSION`,不另设一处 |
+| 7 | **给根目录的 `agent-manifest.json` 签名**(`tools/sign-manifest.py`) | 漏签 = 线上每个 App 都把清单当垃圾丢掉(见第 6 节);私钥路径用 `--key` 或 `ACNH_MANAGER_SIGNING_KEY` 指,缺了前置检查直接拒绝 |
+| 8 | 自检 `tools/verify-release.py` | 见第 3 节;自检同时验签,抓"清单改了没重签" |
+| 9 | 打商店包 | `tools/make-store-package.py` |
 
 前置:acnh-agent 工作树干净、`research/` 里有原始 `main.npdm`、docker 可用、**发布签名私钥在**
 (`--key` 或 `ACNH_MANAGER_SIGNING_KEY`,默认 `~/.acnh/acnh-manager-signing-key.pem`,与其它本地
@@ -36,7 +37,8 @@
 
 链条跑完还有三件**人工**动作(工具不替你推任何东西,也不会自动改远端):
 
-1. 提交这一轮的产物:内嵌清单/payload、`packaging/agent/<版本>/`、`packaging/agent-lock.json`、
+1. 提交这一轮的产物:内嵌清单/payload、forwarder 的 `data/forwarder_nsp.bin` 与
+   `data/forwarder_nsp_meta.bin`、`packaging/agent/<版本>/`、`packaging/agent-lock.json`、
    `packaging/nro/acnh-manager-<版本>.nro`、`agent-manifest.json` 与 `agent-manifest.json.sig`;
 2. `git tag v<版本> && git push && git push origin v<版本>`;
 3. 可选:`gitee release create --tag v<版本> -n "ACNH-Manager <版本>" -b "<说明 + raw 下载地址>"`
@@ -84,7 +86,7 @@ data/main_npdm.bin                 内嵌 payload 文件(source=main.npdm)
 data/acnh_agent_version.bin        内嵌 payload 文件(source=acnh-agent.version)
 agent-manifest.json                仓库根目录的"当前版本"清单(发布记录的副本;
                                    App 的更新检查按 raw 地址读它)
-agent-manifest.json.sig            上面那份清单的签名(第 5 步生成,两个文件一起提交;
+agent-manifest.json.sig            上面那份清单的签名(第 7 步生成,两个文件一起提交;
                                     App 先验它再决定要不要信清单的内容)
 ```
 
@@ -98,7 +100,7 @@ agent-manifest.json.sig            上面那份清单的签名(第 5 步生成,�
 acnh-agent 的 `dist/` 默认是开发构建(`buildFlags=7`,带 RPC server),会被门控拒绝——这是设计如此,
 不要用手工数据绕过它;要出正式产物必须先 `make switch SEMANTIC_HOOK=1` 重新构建。
 
-## 3. 自检(第 6 步)
+## 3. 自检(第 8 步)
 
 ```bash
 python3 tools/verify-release.py --nro acnh-manager.nro
@@ -106,8 +108,9 @@ python3 tools/verify-release.py --nro acnh-manager.nro
 
 核对四处一致:发布锁必须仍是发布形态;`packaging/agent/<版本>/` 里三个文件的哈希与锁一致、
 `acnh-agent.version`/`manifest.json` 的内容与锁一致;`data/` 里的内嵌 trio 与发布记录逐字节相同;
-给了 `--nro` 时还要求 **NRO 里确实找得到内嵌清单与三个 payload 的原始字节**,并且 **NRO 的构建戳
-对得上当前源码树**(戳里的 `src:<8 hex>` 与现场重算的 `source/` 哈希一致)。
+forwarder 的 NSP 与 `SOURCE.json`/源码哈希一致,且仓库没有编译后的 loader 二进制;给了 `--nro`
+时还要求 **NRO 里确实找得到内嵌清单、三个 payload 与 forwarder NSP 的原始字节**,并且 **NRO 的
+构建戳对得上当前 `source/` + `data/` + `assets/`**(戳里的 `src:<8 hex>` 与现场重算值一致)。
 这是唯一能抓住"手上这个 NRO 嵌的不是锁里那一份"的检查,可以单独挂到 CI。
 
 第二条尤其重要:只查 payload 是抓不到"**源码改了但 NRO 没重建**"的(内嵌字节没变,自检照样全过)。
@@ -130,7 +133,7 @@ python3 tools/verify-release.py --nro acnh-manager.nro
 因此:**发布记录里的哈希可以在任何机器上重建比对**;只是要记得,任何一次源码改动(哪怕是注释)
 都会换掉哈希,所以对账用的是"当前提交 + 发布锁",不是跨提交的绝对数值。
 
-## 4. 打包商店材料(第 7 步)
+## 4. 打包商店材料(第 9 步)
 
 ```bash
 ./tools/build.sh                          # 产出 acnh-manager.nro
@@ -204,7 +207,7 @@ raw 请求会 302 到 `raw.giteeusercontent.com` 的带签名地址(2026-09-20 �
 - raw 端点只认**公开仓库 + 已推送的提交**:改完这两个文件必须提交并 push,线上地址才会更新
   (这是"忘了推"最常见的坑,验收时先核对 raw 地址能取到东西);
 - 发布记录、商店 update 资产与指南页入口给的都是同一个 NRO:仓库里的
-  `packaging/nro/acnh-manager-<appVersion>.nro`,由发布链第 5 步拷进去并随发布一起提交
+  `packaging/nro/acnh-manager-<appVersion>.nro`,由发布链第 6 步拷进去并随发布一起提交
   (`docs/store-listing.md` 上架清单有步骤);
 - 人类看的发布页用 `gitee release create --tag v<appVersion> -n "ACNH-Manager <appVersion>"
   -b "<说明 + 上面的 raw 下载地址>"` 建(tag 先 `git push origin v<appVersion>`);**Gitee CLI

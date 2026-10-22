@@ -91,7 +91,7 @@ void AppendContentInfo(std::vector<std::uint8_t> *out, const std::uint8_t *id,
 
 bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
                          const std::string &meta_content_name, const ContainerInfo &container,
-                         bool lower_required_system_version,
+                         bool lower_required_system_version, MetaRecordShape shape,
                          std::vector<std::uint8_t> *out, std::string *error) {
     out->clear();
     const std::vector<std::uint8_t> &payload = cnmt_payload;
@@ -139,7 +139,7 @@ bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
     WriteU16(&blob, 0);
     WriteU16(&blob, content_meta_count);
     blob.push_back(attributes);
-    blob.push_back(storage_id);
+    blob.push_back(shape == MetaRecordShape::Forwarder ? 0 : storage_id);
     blob.insert(blob.end(), payload.begin() + kCnmtHeaderSize, payload.begin() + extended);
     /* The firmware version the title asks for sits 8 bytes into the extended header of an
        application or a patch ({u64 id, u32 required_system_version, ...}), and the reference
@@ -166,7 +166,9 @@ bool BuildMetaRecordBlob(const std::vector<std::uint8_t> &cnmt_payload,
         *error = "the meta content's name is not a content id";
         return false;
     }
-    AppendContentInfo(&blob, meta_id, meta->size, 0); /* 0 = NcmContentType_Meta */
+    AppendContentInfo(&blob, meta_id,
+                      shape == MetaRecordShape::Forwarder ? payload.size() : meta->size,
+                      0); /* 0 = NcmContentType_Meta */
     std::uint16_t written_contents = 0;
     for (std::uint16_t i = 0; i < content_count; ++i) {
         const std::size_t entry =

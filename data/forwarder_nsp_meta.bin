@@ -1,0 +1,28 @@
+{
+  "titleId": "05e67f3a16603000",
+  "displayVersion": "1.0.2",
+  "nroPath": "sdmc:/switch/ACNH-Manager/ACNH-Manager.nro",
+  "loaderProject": "sphaira/hbl",
+  "loaderVersion": "3.0.0",
+  "loaderCommit": "338348e74b6d278bc570a9be5373d25197bf6c8d",
+  "loaderMainSha256": "c35d94fd6e82aeb0c7a0ef89354537741a56365d126ceaa26bbc743d3d9d434d",
+  "loaderNpdmSha256": "b88b2caa5c4950f04c3ca05148daafe4a4f76a77a2a3d0369e0345b6b71dd7b6",
+  "nacpSha256": "0c65c6b5ac7ea2862dde5cb663d04c9ed34c30fca7731e16c6225d4e4aac2719",
+  "iconSha256": "e70320d35a74d6774891540af77c52eb73e927af420ee661e502bf8e9ebc0ff7",
+  "programContentId": "faa5f2beb5e668f0e365bc1afa5512f86028d4b4c0a67ebf23e740332ed7e1f7",
+  "controlContentId": "cb249059f1f223ec97c99fe16b758bdc29bed3427f09cc5e942b37faad89429a",
+  "metaContentId": "0ad19d60e709b0f2ee42a55f2490dbe6bf5dd2ab95097bfac08fefb29289a6cf",
+  "nspSha256": "fb93909e0ad36e809a78597c667ed82fb6f82904c79104d84cca245df11e8512",
+  "size": 264408,
+  "loaderSource": {
+    "project": "sphaira/hbl",
+    "version": "3.0.0",
+    "commit": "338348e74b6d278bc570a9be5373d25197bf6c8d",
+    "sourceMainSha256": "ee3ad5918d6883a2d289da83b945928b3cca88f390d698e0e056f67256d5cc13",
+    "sourceTrampolineSha256": "2f11a79cc9a4a162dcef557274076b66480bb256f353d47cea1ef56ab8e11f4e",
+    "npdmConfigSha256": "9c0f754ae3363aa4890ed9ca0212aec3015686ae0ceca707b79277198667da53",
+    "cmakeListsSha256": "ec720b1fce57f8a1b665418ca9f4b2f46209d3ddde8efdb8a25235e6692e64cf",
+    "license": "MIT",
+    "buildImage": "devkitpro/devkita64:20260219"
+  }
+}

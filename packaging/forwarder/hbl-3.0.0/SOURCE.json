@@ -1,0 +1,11 @@
+{
+  "project": "sphaira/hbl",
+  "version": "3.0.0",
+  "commit": "338348e74b6d278bc570a9be5373d25197bf6c8d",
+  "sourceMainSha256": "ee3ad5918d6883a2d289da83b945928b3cca88f390d698e0e056f67256d5cc13",
+  "sourceTrampolineSha256": "2f11a79cc9a4a162dcef557274076b66480bb256f353d47cea1ef56ab8e11f4e",
+  "npdmConfigSha256": "9c0f754ae3363aa4890ed9ca0212aec3015686ae0ceca707b79277198667da53",
+  "cmakeListsSha256": "ec720b1fce57f8a1b665418ca9f4b2f46209d3ddde8efdb8a25235e6692e64cf",
+  "license": "MIT",
+  "buildImage": "devkitpro/devkita64:20260219"
+}

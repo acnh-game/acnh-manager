@@ -35,6 +35,10 @@ bool EmbeddedAvailable();
    language and the console's address into it before handing it out. */
 std::string_view EmbeddedInstallerPage();
 
+/* The prebuilt desktop-forwarder NSP.  Its source/hash record stays in `data/` for the release
+   checker; the running app does not need to read that record. */
+std::string_view EmbeddedForwarderNsp();
+
 /* Read a payload straight from .rodata; names match files[].source in the manifest. */
 class EmbeddedPayloadSource final : public install::PayloadSource {
 public:

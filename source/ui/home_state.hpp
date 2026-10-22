@@ -59,4 +59,11 @@ inline HomeKind Classify(const HomeInputs &in) {
     return in.newer_agent ? HomeKind::UpdateAvailable : HomeKind::UpToDate;
 }
 
+/* A HOME-menu shortcut launches this NRO as a full-memory Application.  ncm/ns cannot remove
+   the title while that process is the title being removed, so the UI must offer the action only
+   from album/applet mode. */
+inline bool ForwarderRemovalBlocked(bool installed, bool application_mode) {
+    return installed && application_mode;
+}
+
 }  // namespace acnh_manager::ui

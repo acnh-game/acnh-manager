@@ -41,6 +41,7 @@
 #include "install/ncz_decode.hpp"
 #include "install/range_probe.hpp"
 #include "install/rate_meter.hpp"
+#include "install/source_memory.hpp"
 #include "install/title_name.hpp"
 #include "install/transfer_queue.hpp"
 #include "net/update_policy.hpp"
@@ -1428,6 +1429,14 @@ void TestInstallTask() {
     CHECK(reloaded.source == TaskSource::HttpDownload);
     CHECK(reloaded.url == "https://example.com/update.nsp");
 
+    /* The internal source is never written as a resumable task, but it still has a stable
+       spelling if one is inspected or logged. */
+    InstallTask internal = task;
+    internal.source = TaskSource::Internal;
+    InstallTask internal_reloaded;
+    CHECK(ParseTask(DumpTask(internal), &internal_reloaded, &error));
+    CHECK(internal_reloaded.source == TaskSource::Internal);
+
     /* Broken files are refused, never half-read. */
     InstallTask junk;
     CHECK(!ParseTask("not json", &junk, &error));
@@ -1621,8 +1630,8 @@ void TestStrings() {
     /* The table size has to match the enum one-to-one, or a new string is easy to half-add. */
     /* The last enumerator doubles as the sentinel: adding a string without touching this
        line fails to build, which is exactly the reminder we want. */
-    CHECK(StringCount() == static_cast<unsigned>(StringId::ValueNonstandard) + 1u);
-    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ValueNonstandard); ++i) {
+    CHECK(StringCount() == static_cast<unsigned>(StringId::ValueInstalled) + 1u);
+    for (unsigned i = 0; i <= static_cast<unsigned>(StringId::ValueInstalled); ++i) {
         const auto id = static_cast<StringId>(i);
         CHECK(Text(id, Language::ZhHans) != nullptr);
         CHECK(Text(id, Language::English) != nullptr);
@@ -2396,9 +2405,9 @@ void TestStartupCheck() {
 void TestForwarderIdentity() {
     using namespace acnh_manager::env;
 
-    CHECK(StandardForwarderTitleId() == 0x05BEB04B8780B000ULL);
+    CHECK(StandardForwarderTitleId() == 0x05E67F3A16603000ULL);
     CHECK(ForwarderTitleId(kForwarderNroPath, "") == StandardForwarderTitleId());
-    CHECK(ForwarderTitleId(kForwarderNroPath, "foo") == 0x053A2D2552720000ULL);
+    CHECK(ForwarderTitleId(kForwarderNroPath, "foo") == 0x05C5216763C8C000ULL);
     CHECK(ForwarderTitleId(kForwarderNroPath, "foo") !=
           ForwarderTitleId(kForwarderNroPath, "foo bar"));
     CHECK(IsForwarderTitleId(StandardForwarderTitleId()));
@@ -2406,6 +2415,38 @@ void TestForwarderIdentity() {
     CHECK(IsForwarderTitleId(0x05FF000000001000ULL));
     CHECK(!IsForwarderTitleId(0x0100000000001000ULL));
     CHECK(!IsForwarderTitleId(0x0600000000001000ULL));
+    CHECK(LegacyForwarderTitleId() == 0x05BEB04B8780B000ULL);
+    CHECK(LegacyForwarderTitleId() != StandardForwarderTitleId());
+}
+
+void TestForwarderPackage() {
+    namespace install = acnh_manager::install;
+
+    std::ifstream file("../data/forwarder_nsp.bin", std::ios::binary);
+    CHECK(file.good());
+    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                                          std::istreambuf_iterator<char>());
+    CHECK(!bytes.empty());
+    CHECK(acnh_manager::util::Sha256Hex(bytes.data(), bytes.size()) ==
+          "fb93909e0ad36e809a78597c667ed82fb6f82904c79104d84cca245df11e8512");
+
+    install::MemorySource source;
+    std::string error;
+    CHECK(source.Open(bytes.data(), bytes.size(), &error));
+    std::uint8_t probe[4]{};
+    CHECK(source.Read(0, sizeof(probe), probe));
+    CHECK(std::memcmp(probe, "PFS0", sizeof(probe)) == 0);
+    CHECK(!source.Read(1, static_cast<std::size_t>(bytes.size()), probe));
+
+    install::PackageInfo package;
+    CHECK(install::ReadPackage(source, "ACNH-Manager-forwarder.nsp", bytes.size(), &package,
+                               &error));
+    CHECK(package.container.kind == install::ContainerKind::Nsp);
+    CHECK(package.container.contents.size() == 3);
+    CHECK(package.container.extra.empty());
+    CHECK(package.meta_content_name.size() > 10);
+    CHECK(package.meta_content_name.find(".cnmt.nca") ==
+          package.meta_content_name.size() - 9);
 }
 
 /* The install page's two storage blocks (design section 8.1): microSD left, the console's own
@@ -2573,6 +2614,7 @@ void TestMetaTypeCarriesGameVersion() {
    show "install" to someone whose game is not even installed, so it is pinned here. */
 void TestHomeState() {
     using acnh_manager::ui::Classify;
+    using acnh_manager::ui::ForwarderRemovalBlocked;
     using acnh_manager::ui::HomeInputs;
     using acnh_manager::ui::HomeKind;
 
@@ -2630,6 +2672,13 @@ void TestHomeState() {
     HomeInputs missing_game = incomplete;
     missing_game.game_found = false;
     CHECK(Classify(missing_game) == HomeKind::GameMissing);
+
+    /* A shortcut launches the app as an Application; removing that title from inside its own
+       process is invalid.  The action remains available from album/applet mode. */
+    CHECK(!ForwarderRemovalBlocked(false, false));
+    CHECK(!ForwarderRemovalBlocked(false, true));
+    CHECK(!ForwarderRemovalBlocked(true, false));
+    CHECK(ForwarderRemovalBlocked(true, true));
 }
 
 /* The tables inside one compressed content of an NSZ / XCZ (install/ncz.hpp).  The shape and the
@@ -3283,7 +3332,7 @@ void TestBuildMetaRecordBlob() {
     package.meta_blob[0x20 + 10] = 0x10;
     package.meta_blob[0x20 + 11] = 0x00;
     CHECK(BuildMetaRecordBlob(package.meta_blob, package.meta_content_name, package.container, true,
-                              &blob, &error));
+                              acnh_manager::install::MetaRecordShape::Console, &blob, &error));
     /* 8 header + 24 extended + 3 content infos + no meta infos: the meta content and the two
        contents the package carries.  The delta fragment is *listed by the CNMT and not shipped*,
        so the record must not list it either -- a record that does is a title whose contents are
@@ -3318,11 +3367,24 @@ void TestBuildMetaRecordBlob() {
     }
     CHECK(!delta_listed);
 
+    /* Embedded forwarders follow the reference install's dedicated record shape: the Meta
+       content-info size is the CNMT payload size, not the NCA file size. */
+    std::vector<std::uint8_t> embedded_blob;
+    CHECK(BuildMetaRecordBlob(package.meta_blob, package.meta_content_name, package.container,
+                              true, acnh_manager::install::MetaRecordShape::Forwarder,
+                              &embedded_blob, &error));
+    CHECK(embedded_blob.size() >= 8 + 24 + 0x18 + 20);
+    CHECK(embedded_blob[8 + 24 + 16] ==
+          static_cast<std::uint8_t>(package.meta_blob.size() & 0xFF));
+    CHECK(embedded_blob[8 + 24 + 17] ==
+          static_cast<std::uint8_t>((package.meta_blob.size() >> 8) & 0xFF));
+    CHECK(embedded_blob[7] == 0);
+
     /* A truncated CNMT is refused rather than half-copied. */
     PackageInfo broken = package;
     broken.meta_blob.resize(0x20 + 24 + 0x38);
     CHECK(!BuildMetaRecordBlob(broken.meta_blob, broken.meta_content_name, broken.container, true,
-                               &blob, &error));
+                               acnh_manager::install::MetaRecordShape::Console, &blob, &error));
     CHECK(!error.empty());
 }
 
@@ -3360,6 +3422,7 @@ int main() {
     TestRateMeter();
     TestStartupCheck();
     TestForwarderIdentity();
+    TestForwarderPackage();
     TestHttpPage();
     TestUploadProtocol();
     TestPeerRing();

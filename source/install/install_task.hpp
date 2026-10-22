@@ -35,6 +35,7 @@ enum class TaskSource {
     LocalFile,
     HttpDownload,
     HttpUpload,
+    Internal,
 };
 
 /* Lifecycle.  `Finalizing` is the point of no return: from there on the console is writing the

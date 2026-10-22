@@ -34,6 +34,10 @@ std::uint64_t StandardForwarderTitleId() {
     return ForwarderTitleId(kForwarderNroPath, std::string_view());
 }
 
+std::uint64_t LegacyForwarderTitleId() {
+    return ForwarderTitleId(kStandardNroPath, std::string_view());
+}
+
 bool IsForwarderTitleId(std::uint64_t title_id) {
     return (title_id & kForwarderTypeMask) == kForwarderPrefix;
 }

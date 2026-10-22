@@ -17,12 +17,18 @@
 
 namespace acnh_manager::env {
 
-inline constexpr const char *kForwarderNroPath = kStandardNroPath;
+/* The path form hbmenu/Sphaira pass to a desktile: the card prefix and the on-card spelling.
+   FAT32 opens it case-insensitively, while the title id hashes these bytes exactly. */
+inline constexpr const char *kForwarderNroPath =
+    "sdmc:/switch/ACNH-Manager/ACNH-Manager.nro";
 inline constexpr const char *kForwarderAuthor = "acnh-game";
 inline constexpr const char *kForwarderName = "ACNH-Manager";
 
 std::uint64_t ForwarderTitleId(std::string_view nro_path, std::string_view args);
 std::uint64_t StandardForwarderTitleId();
+/* The identity emitted by the first implementation, which used the lower-case standard path
+   without the card prefix. */
+std::uint64_t LegacyForwarderTitleId();
 
 /* The high byte is 0x05; the following nibbles are part of the hash-derived tile identity. */
 bool IsForwarderTitleId(std::uint64_t title_id);

@@ -1510,3 +1510,61 @@ not be decoded"**,偶尔随后在 `App::Render()` 的 `framebufferBegin` 处崩�
 复验:本机用同一份 NSZ 连续两轮完整解码,各解出 472,891,392 字节;真机上"上传 15% → 刷新 →
 超时 → 返回 → 重选同一文件"第二次续传**安装成功**。压缩内容仍按 `PlanResume` 规则整段重来,
 这是 zstd 单流无法从中间进入的既定行为,不是本次修复的目标。
+
+## 桌面 forwarder:格式、发布自检与首轮真机验收(2026-10-22)
+
+这一轮验证内嵌包与安装链路的结构。2026-10-22 已用全动态 loader 产物通过用例 9:
+按 ZR 安装桌面快捷方式后,方块能从 HOME 菜单启动。随后发现应用(全内存)模式下不应删除正在运行的
+自身快捷方式;删除按钮现已在应用模式下置灰并提示退出后从相册重开,该修复仍待真机复验。
+
+- 加载器源码来自 Sphaira `hbl` 3.0.0,提交 `338348e74b6d278bc570a9be5373d25197bf6c8d`;
+  `tools/build-forwarder.py` 在固定 devkitPro 容器中从源码编译 `main`/`main.npdm`,仓库不保存
+  编译后的 loader 二进制。源码哈希、编译镜像与产物哈希记录在 `data/forwarder_nsp_meta.bin`。
+- forwarder title id 为 `05e67f3a16603000`,由 Sphaira/hbmenu 实际使用的
+  `sdmc:/switch/ACNH-Manager/ACNH-Manager.nro` 按参考算法计算;NPDM 的 ACI0/ACID program id、
+  NACP 的 presence/save/device/local-communication id 与 CNMT title id 都已对齐。
+- `data/forwarder_nsp.bin` 为 264,408 B,sha256
+  `fb93909e0ad36e809a78597c667ed82fb6f82904c79104d84cca245df11e8512`。它由现场编译的
+  hbmenu loader 和本项目自己的 NCA/CNMT 构造器生成:
+  Program `faa5f2beb5e668f0e365bc1afa5512f86028d4b4c0a67ebf23e740332ed7e1f7`、Control
+  `cb249059f1f223ec97c99fe16b758bdc`、Meta `0ad19d60e709b0f2ee42a55f2490dbe6bf5dd2ab95097bfac08fefb29289a6cf`。
+- 从同一 loader 源码、同一 NACP/图标、同一固定镜像重跑生成器,得到的 NSP 与来源 JSON 均逐字节相同。
+- 开发机用 hactool 逐 NCA 开 `--verify`:Program / Control / Meta 三个 NCA 的层级哈希全部通过;
+  Program 的 ExeFS 可解出 loader `main`/`main.npdm`,RomFS 的 `nextArgv` 与 `nextNroPath`
+  都指向标准路径;Control 的 `control.nacp` 读出 `ACNH-Manager` / `acnh-game`,图标为当前应用图标;
+  Meta 的 CNMT 列出 Program 与 Control 两份内容。
+- host tests 覆盖 title id 稳定性、旧 identity 清理、forwarder 类型范围、内存来源越界拒绝、
+  Meta record 的 CNMT 大小模式,以及内嵌 NSP 的 PFS0 解析(3 个内容、meta 名以 `.cnmt.nca`
+  结尾);当前为 `3622 checks, 0 failures`。
+- release 构建 `./tools/build.sh --release` 零警告;`tools/verify-release.py --nro` 的 59 项检查
+  全过,包括内嵌 NSP 哈希、NSP 原始字节确实进入 NRO、`source/` + `data/` + `assets/` 构建戳一致。
+
+与 Sphaira 已安装的可用方块逐项对照后,补齐了六类此前会让方块空白但无法启动的差异:
+
+- NPDM 在 HOS 19.0.0+ 需要把 ACI0/ACID kernel capability 的 debug 位写成 `BIT(19)`;补完后
+  NPDM 与 Sphaira 同路径生成的 NPDM 逐字节一致。
+- 每个 NCA section table 项的保留字段 `+8` 必须写 `0x01`;此前一直是零。
+- 前端专用 CNMT 的 `storage_id` 是 `5`(microSD),不是下载包常见的 `0`。
+- 前端专用 NCM record 把 Meta 内容大小写成 CNMT 负载大小(当前 `192 B`),不是 Meta NCA
+  文件大小,并把 record header 的 storage 改回 `0`;安装内部包时走这一专用记录形状。
+- Sphaira 的 `write_padding()` 即使已经对齐也会再补一个完整块;我们此前只在未对齐时补,导致
+  PFS0/RomFS section 边界少了一个块。
+- RomFS 构造完成后,IVFC level 5 的 `hash_data_size` 必须写完整 RomFS 镜像长度,不能写文件
+  数据区长度;目录项 sibling 偏移必须相对于文件表起点,根目录 `nextHash` 必须是 `0xFFFFFFFF`。
+
+修正完成后,本项目自己的构造器从现场编译的 loader 生成的 Program NCA content id 为
+`faa5f2beb5e668f0e365bc1afa5512f8…`;loader 源码、编译镜像和产物哈希都可追溯到来源记录。
+
+安装与启动的真机复验已完成。当前代码已通过 hactool 的 NCA/IVFC 校验;构造器与参考实现的关键差异
+(NPDM debug bit、section 保留字段、CNMT storage、Meta record 大小、RomFS 完整长度)已逐项修正。
+
+## 不正确软件导致的启动故障与恢复(2026-10-22)
+
+安装了不完整或格式不正确的软件(尤其是桌面快捷方式/forwarder)后,主机可能在下次重启时黑屏、
+停在启动画面或报系统错误,无法进入 home menu。此时不要先格式化 SD 或 emuMMC,也不要删除游戏
+存档或 NCM 数据库;错误软件应当单独移除。
+
+恢复时先在 Hekate 分别试「正版系统」「真实系统」「虚拟系统」以判断问题是否只出在虚拟系统的
+安装内容。若卡上的 acnh-manager NRO 被截断或损坏,先恢复完整 NRO;若 SD 内容区有不完整、
+不可解密的 forwarder/NCA,先从活动安装目录移走。能进入系统后,再用 ACNH-Manager 或 Sphaira
+删除对应应用记录并重新安装;恢复前保留日志和现场备份,不要直接重装整张卡。

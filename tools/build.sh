@@ -31,12 +31,11 @@ if commit="$(git -C "${repo_dir}" rev-parse --short HEAD 2>/dev/null)"; then
         stamp="${stamp}-dirty"
     fi
 fi
-# Everything that goes into the binary: `source` *and* the embedded assets (`data/installer_page.html.bin`
-# is the installer's web page, `data/qr_miniapp.bin` its guide code, `assets/` its icon).  Hashing only
-# `source` left the stamp unchanged when the page changed -- and the stamp is exactly what the page's own
-# version chip and the console's footer print to answer "is this tab older than the console?"
-# (2026-10-17: a page-only fix kept the same chip, so the check that exists to catch a stale tab could
-# not see it).
+# Everything linked into the binary or required to certify its embedded assets: `source`, `data`
+# and `assets`.  The forwarder metadata is not linked, but it is part of that certification.
+# Hashing only `source` left the stamp unchanged when the web page changed -- and the stamp is what
+# the page's version chip and the console footer use to answer "is this tab older than the console?"
+# (2026-10-17: a page-only fix kept the same chip, so the stale-tab check could not see it).
 src_hash="$(cd "${repo_dir}" && find source data assets -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-8)"
 stamp="${stamp}+src:${src_hash}"
 if [ "${dev_aids}" -eq 1 ]; then
