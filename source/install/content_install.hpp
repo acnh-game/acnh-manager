@@ -68,10 +68,10 @@ public:
        read-out's fallback already registered it to mount it, or for an add-on, which has none. */
     bool Register(const InstallTask &task, const std::vector<TaskContent> &metas, std::string *error);
 
-    /* True when an application whose program id belongs to `title_id_hex` is running right now
-       (suspended in the background counts: the finish step deletes the older version's contents,
-       and doing that under a running title is not something to discover on hardware). */
-    bool ApplicationRunning(const std::string &title_id_hex, bool *out, std::string *error);
+    /* True when the application that owns this package meta is running right now.  The question is
+       asked by base application id, so an update or add-on also finds its suspended base game. */
+    bool ApplicationRunning(const std::string &title_id_hex, MetaType type, bool *out,
+                            std::string *error);
 
     /* Writes one whole content from `reader` into a fresh placeholder and flushes it.
        This exists because the meta (CNMT) and control (NACP) contents have to be *readable*, and
@@ -108,12 +108,6 @@ public:
        needs this to find the icon for a language: its name is not a fact the CNMT carries. */
     bool ListContentFiles(const std::string &path, std::uint64_t title_id, FsFileSystemType type,
                           std::vector<std::string> *out, std::string *error);
-
-    /* True when any application (a game) is running, suspended in the background included.  The
-       installer asks this before it even opens the package: its finish step deletes the older
-       version of the title it installs, and a player who is told "close the game first" can act
-       on that, while a player who is told "that file is broken" cannot. */
-    bool AnyApplicationRunning(bool *out, std::string *error);
 
     /* The version of `title_id` this console has, or 0 when it has none.  The skip decision and
        the "already installed" skip both come from this number, so it is read from the console

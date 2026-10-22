@@ -143,24 +143,6 @@ bool GameInstall::Prepare(std::string *error) {
        2026-10-16), i.e. ~0.5 s of the pause between "picked a file" and the confirm card.  RAII,
        because the dozen early returns below would otherwise leave the burst open. */
     const LogBurst burst(g_log);
-    /* Closing the game is a one-step fix for the player; nothing else in this flow is.  So the
-       running-game stop comes first, before the package is even read. */
-    {
-        bool running = false;
-        std::string running_error;
-        if (!m_installer.AnyApplicationRunning(&running, &running_error)) {
-            *error = running_error;
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-        if (running) {
-            *error = kErrorGameRunning;
-            m_status.stage = InstallStage::Failed;
-            m_status.error = *error;
-            return false;
-        }
-    }
     Note("install: reading the container (%llu bytes from %s)",
          static_cast<unsigned long long>(m_task.container_size), m_name.c_str());
     if (!ReadPackage(m_reader, m_name, m_task.container_size, &m_package, error)) {
@@ -329,6 +311,29 @@ bool GameInstall::Prepare(std::string *error) {
         return false;
     }
     m_primary = &m_metas.front();
+    /* Only the application this package targets has to be closed.  A different running game -- or
+       ACNH-Manager itself when launched from a HOME Menu shortcut -- does not conflict with this
+       package.  The check happens after the CNMTs are parsed because that is the first point where
+       the target application id is known. */
+    for (const MetaUnit &meta : m_metas) {
+        bool running = false;
+        std::string running_error;
+        if (!m_installer.ApplicationRunning(meta.cnmt.title_id, meta.cnmt.type, &running,
+                                            &running_error)) {
+            *error = running_error;
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+        if (running) {
+            Note("install: target application for %s (%s) is running",
+                 meta.cnmt.title_id.c_str(), MetaTypeLabel(meta.cnmt.type));
+            *error = kErrorGameRunning;
+            m_status.stage = InstallStage::Failed;
+            m_status.error = *error;
+            return false;
+        }
+    }
     if (m_primary->cnmt.type != MetaType::Application) {
         Note("install: none of the %zu metas is an application; the screens describe %s",
              m_metas.size(), m_primary->entry->name.c_str());

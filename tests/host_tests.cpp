@@ -51,6 +51,7 @@
 #include "manifest/manifest.hpp"
 #include "util/sha256.hpp"
 #include "ui/action.hpp"
+#include "ui/footer_version.hpp"
 #include "ui/header_tabs.hpp"
 #include "ui/home_state.hpp"
 #include "ui/list_view.hpp"
@@ -2012,7 +2013,8 @@ void TestHttpPage() {
     const char *const markers[] = {acnh_manager::net::kPageLabelsMarker,
                                    acnh_manager::net::kPageLangMarker,
                                    acnh_manager::net::kPageAddressMarker,
-                                   acnh_manager::net::kPageVersionMarker};
+                                   acnh_manager::net::kPageVersionMarker,
+                                   acnh_manager::net::kPageVersionTextMarker};
     int marker_count = 0;
     for (std::size_t at = 0; (at = page.find("__ACNH_", at)) != std::string::npos; ++marker_count) {
         bool known = false;
@@ -2029,7 +2031,7 @@ void TestHttpPage() {
             at += 8;
         }
     }
-    CHECK(marker_count == 4); /* three in the header plus the label object */
+    CHECK(marker_count == 5); /* labels, language, address, build identity and footer text */
     /* Every request the page makes carries a deadline: a bare `await fetch(` is how a console that
        went quiet for a few seconds filled the browser's six connections per host, after which the
        upload loop could not send a part at all (Chrome, 2026-10-16). */
@@ -2102,6 +2104,9 @@ void TestHttpPage() {
     CHECK(page.find("fetchWithTimeout(\"start\"") != std::string::npos);
     CHECK(page.find("fetchWithTimeout(\"target\"") != std::string::npos);
     CHECK(page.find("id=\"build\"") != std::string::npos);
+    CHECK(page.find("const VERSION_TEXT =") != std::string::npos);
+    CHECK(page.find("copyToClipboard(VERSION_TEXT)") != std::string::npos);
+    CHECK(page.find("status.build !== BUILD_TEXT") != std::string::npos);
     CHECK(page.find("id=\"resultBack\"") != std::string::npos);
     CHECK(page.find("id=\"confirmBack\"") != std::string::npos);
     CHECK(page.find("fetchWithTimeout(\"back\"") != std::string::npos);
@@ -2113,8 +2118,10 @@ void TestHttpPage() {
     CHECK(page.find("const locked = !uploading && !!status.upload_active") != std::string::npos);
     CHECK(page.find("const starting = ownRun || locked") != std::string::npos);
     CHECK(page.find("t(\"pageWaitOriginal\", waitLeft)") != std::string::npos);
+    CHECK(page.find("} else if (status.error)") != std::string::npos);
     CHECK(page.find("chooseBtn\").disabled = starting") != std::string::npos);
     CHECK(page.find("fileInput\").disabled = starting") != std::string::npos);
+    CHECK(page.find("status.error || t(\"pageUploadDropped\")") != std::string::npos);
     CHECK(page.find("id=\"pickSpinner\"") != std::string::npos);
     CHECK(page.find("function setNote(text, loading = false)") != std::string::npos);
     CHECK(page.find("id=\"cancelCard\"") == std::string::npos);
@@ -3316,6 +3323,28 @@ void TestSettings() {
     CHECK(DumpSettings(chinese) == "{\"schema\":1,\"language\":\"zh-Hans\",\"installTarget\":\"sd\"}");
 }
 
+void TestFooterVersion() {
+    using acnh_manager::i18n::Language;
+    using acnh_manager::ui::FooterVersionText;
+    using acnh_manager::ui::IsReleaseBuildStamp;
+
+    const std::string release =
+        "2026-10-22T08:27:56Z+5134b06+src:6d651fad+release";
+    const std::string dev =
+        "2026-10-22T08:27:56Z+5134b06-dirty+src:6d651fad+devaids";
+    const std::string dirty_release =
+        "2026-10-22T08:27:56Z+5134b06-dirty+src:6d651fad+release";
+
+    CHECK(IsReleaseBuildStamp(release));
+    CHECK(!IsReleaseBuildStamp(dev));
+    CHECK(!IsReleaseBuildStamp(dirty_release));
+    CHECK(!IsReleaseBuildStamp("manual"));
+    CHECK(FooterVersionText(release, "2.0.0", Language::ZhHans) == "版本 2.0.0");
+    CHECK(FooterVersionText(release, "2.0.0", Language::English) == "version 2.0.0");
+    CHECK(FooterVersionText(dev, "2.0.0", Language::English) == dev);
+    CHECK(FooterVersionText(dirty_release, "2.0.0", Language::English) == dirty_release);
+}
+
 }  // namespace
 
 /* The id arithmetic every console query depends on: a package's meta id spells its *own* title
@@ -3502,6 +3531,7 @@ int main() {
     TestMetaTypeCarriesGameVersion();
     TestHomeState();
     TestSettings();
+    TestFooterVersion();
     TestTitleNames();
     TestIconFile();
     TestNczTables();

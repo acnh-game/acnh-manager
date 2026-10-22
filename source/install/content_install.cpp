@@ -169,65 +169,28 @@ bool ContentInstaller::EnsureOpen(std::string *error) {
 
 bool ContentInstaller::Open(std::string *error) { return EnsureOpen(error); }
 
-bool ContentInstaller::AnyApplicationRunning(bool *out, std::string *error) {
-    *out = false;
-    const Result dmnt = pmdmntInitialize();
-    if (R_FAILED(dmnt)) {
-        *error = Describe("opening the process monitor (pm:dmnt)", dmnt);
-        return false;
-    }
-    u64 pid = 0;
-    const Result rc = pmdmntGetApplicationProcessId(&pid);
-    pmdmntExit();
-    if (R_FAILED(rc)) {
-        /* "no application is running" comes back as a failed lookup, which is the answer the
-           installer wants, not an error to report. */
-        return true;
-    }
-    *out = pid != 0;
-    return true;
-}
-
-bool ContentInstaller::ApplicationRunning(const std::string &title_id_hex, bool *out,
+bool ContentInstaller::ApplicationRunning(const std::string &title_id_hex, MetaType type, bool *out,
                                           std::string *error) {
-    /* The title family, not just the base game: a patch id and a DLC id share the base title's
-       high bits, so comparing the base id against the running program id would miss "the game is
-       running" whenever the running process is the update. */
     *out = false;
     const std::uint64_t wanted = std::strtoull(title_id_hex.c_str(), nullptr, 16);
     if (wanted == 0) {
         *error = "the title id is not 16 hex digits";
         return false;
     }
+    const std::uint64_t application_id = ApplicationIdOf(wanted, type);
     const Result dmnt = pmdmntInitialize();
     if (R_FAILED(dmnt)) {
         *error = Describe("opening the process monitor (pm:dmnt)", dmnt);
         return false;
     }
     u64 pid = 0;
-    const Result running = pmdmntGetApplicationProcessId(&pid);
-    if (R_FAILED(running) || pid == 0) {
-        /* Nothing is running: the common case, and the one the installer wants. */
-        pmdmntExit();
-        return true;
-    }
-    const Result info = pminfoInitialize();
-    if (R_FAILED(info)) {
-        pmdmntExit();
-        *error = Describe("opening the process info service (pm:info)", info);
-        return false;
-    }
-    u64 program_id = 0;
-    const Result rc = pminfoGetProgramId(&program_id, pid);
-    pminfoExit();
+    const Result rc = pmdmntGetProcessId(&pid, application_id);
     pmdmntExit();
     if (R_FAILED(rc)) {
-        *error = Describe("reading the running program id", rc);
-        return false;
+        /* A missing process is the common case, and the one the installer wants. */
+        return true;
     }
-    /* 01006F8002326000 -> base; the low bits identify the content kind, so the family is the
-       high 48 bits. */
-    *out = (program_id >> 16) == (wanted >> 16);
+    *out = pid != 0;
     return true;
 }
 

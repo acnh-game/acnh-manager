@@ -149,6 +149,7 @@ private:
        two overlap (measured in English: the subtitle reached under the "+" badge). */
     void DrawBrand(Surface surface, int limit);
     void RenderFooter(Surface surface);
+    void RefreshFooterText();
     /* Header tabs and the footer hint live on every page; added after the page's own controls
        so they never steal the entry focus (see app.cpp). */
     void AddChromeActions(int surface_width, int surface_height);
@@ -301,6 +302,7 @@ private:
 
     acnh_manager::Log *m_log{nullptr};
     FsFileSystem *m_sd{nullptr};
+    std::string m_footer_text{kBuildStamp};
     Font m_font{};
     Framebuffer m_fb{};
     bool m_fb_ready{false};

@@ -16,6 +16,7 @@
 #include "install/source_local_file.hpp"
 #include "install/network_source.hpp"
 #include "install/nx_services.hpp"
+#include "ui/footer_version.hpp"
 #include "ui/icon_image.hpp"
 #include "ui/storage_bars.hpp"
 #include "net/http_page.hpp"
@@ -481,6 +482,7 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     /* The chat-code explainer reads its code once; empty when the build carries none. */
     m_guide_qr = ui::QrMatrix::FromEmbedded();
     LoadSettings();
+    RefreshFooterText();
     Trace("ui: font init ...");
     if (!m_font.Init(log, error)) {
         return false;
@@ -999,6 +1001,7 @@ void App::ToggleLanguage() {
        the same process-wide language; and the collected report carries sentences built at
        Collect() time (the override advice), so re-collect to rebuild them. */
     i18n::SetLanguage(m_language);
+    RefreshFooterText();
     /* Remember it: the language used to live only in memory, so it was back to Chinese after
        every restart (reported from the console).  A failure here is logged and nothing more --
        the switch itself already took effect. */
@@ -2181,9 +2184,9 @@ void App::RenderFooter(Surface surface) {
                                                  kActionInstallStart, i18n::StringId::LabelBack,
                                                  kActionInstallBack);
         DrawInstallTargetHint(surface, y + 12, hints_end + 30);
-        const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
+        const int stamp_width = m_font.Measure(m_footer_text, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
-                    kBuildStamp);
+                    m_footer_text.c_str());
         return;
     }
     if (m_page == Page::GameInstall &&
@@ -2221,9 +2224,9 @@ void App::RenderFooter(Surface surface) {
                                m_install_no_network ? kActionInstallRecheck : kActionInstallUrl,
                                i18n::StringId::LabelBack, kActionInstallBack);
         DrawInstallTargetHint(surface, y + 12, hints_end + 30);
-        const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
+        const int stamp_width = m_font.Measure(m_footer_text, kFontSmall);
         m_font.Draw(surface, surface.width - kMargin - stamp_width, y + 14, kFontSmall, kSubtle,
-                    kBuildStamp);
+                    m_footer_text.c_str());
         return;
     }
     /* The confirmation and result pages carry their own Ⓑ button, so the footer stays quiet
@@ -2258,9 +2261,9 @@ void App::RenderFooter(Surface surface) {
                                  true});
         }
     }
-    const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
+    const int stamp_width = m_font.Measure(m_footer_text, kFontSmall);
     m_font.Draw(surface, surface.width - kMargin - stamp_width, hint.text_y, kFontSmall, kSubtle,
-                kBuildStamp);
+                m_footer_text.c_str());
     /* And how to move between the pages the header lists: the tabs themselves show Ⓛ / Ⓡ on the
        ends of that group, but only the footer has the room to say it in words.  Plain text, not a
        control -- it names two keys, so there is no single action a tap could mean.  Not on the
@@ -2296,11 +2299,15 @@ void App::RenderFooter(Surface surface) {
 void App::DrawInstallTargetHint(Surface surface, int text_y, int x) {
     const std::string hint = Tr(i18n::StringId::FooterInstallTargetHint);
     const int hint_width = m_font.Measure(hint, kFontSmall);
-    const int stamp_width = m_font.Measure(kBuildStamp, kFontSmall);
+    const int stamp_width = m_font.Measure(m_footer_text, kFontSmall);
     if (x + hint_width + stamp_width + 24 >= surface.width) {
         return; /* no room next to the stamps: saying nothing beats drawing over them */
     }
     m_font.Draw(surface, x, text_y, kFontSmall, kSubtle, hint.c_str());
+}
+
+void App::RefreshFooterText() {
+    m_footer_text = FooterVersionText(kBuildStamp, kAppVersion, i18n::Current());
 }
 
 bool App::HasOwnBackButton() const {
@@ -3451,7 +3458,8 @@ void App::RefreshForwarderTile() {
     m_forwarder_application_running = false;
     std::string process_error;
     bool process_running = false;
-    if (probe.ApplicationRunning(title_id, &process_running, &process_error)) {
+    if (probe.ApplicationRunning(title_id, install::MetaType::Application, &process_running,
+                                 &process_error)) {
         m_forwarder_application_running = process_running;
     } else {
         Trace("forwarder: running-state query unavailable: %s", process_error.c_str());
@@ -3538,7 +3546,9 @@ void App::RemoveForwarderTile() {
     const auto shortcut_running = [&]() {
         bool running = false;
         std::string query_error;
-        return probe.ApplicationRunning(title_hex, &running, &query_error) && running;
+        return probe.ApplicationRunning(title_hex, install::MetaType::Application, &running,
+                                        &query_error) &&
+               running;
     };
     const auto show_failure = [&](const std::string &reason) {
         m_result_forwarder = true;
@@ -5161,6 +5171,12 @@ std::string App::InstallerStatusJson() const {
                               ? m_install_status.installed_version
                               : m_install_status.effective_version);
     json += agent_next ? "true" : "false";
+    /* A source-screen error belongs on the browser too.  The upload path tears down its source
+       before returning there, so without this field the page saw only "pick the file again" and
+       lost the actionable reason the console was showing. */
+    json += ",\"error\":\"";
+    json += net::EscapeForJs(!finished ? InstallErrorText() : std::string());
+    json += "\"";
     json += ",\"message\":\"";
     json += net::EscapeForJs(finished ? InstallOutcomeLine() : std::string());
     json += "\",\"pending\":";
@@ -5214,6 +5230,8 @@ net::HttpResponse App::ServeHttp(const net::HttpRequest &request) {
         page = net::SubstituteLabels(page, net::kPageAddressMarker, InstallerAddressText());
         page = net::SubstituteLabels(page, net::kPageVersionMarker,
                                      net::EscapeForJs(kBuildStamp));
+        page = net::SubstituteLabels(page, net::kPageVersionTextMarker,
+                                     net::EscapeForJs(m_footer_text));
         response.body = std::move(page);
         return response;
     }
@@ -5718,9 +5736,16 @@ static void DrawNoNetworkCard(Surface surface, Font &font, const char *title, co
     const int card_h = 148;
     FillRoundedRect(surface, card_x, card_y, card_w, card_h, 18, kBorder);
     FillRoundedRect(surface, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 15, kCard);
-    DrawKeyBadge(surface, font, card_x + 46, card_y + 42, 22, "!", kWarn, kOnHeader);
-    font.DrawBold(surface, card_x + 82, card_y + 24, kFontHeading, kText, title);
-    font.Draw(surface, card_x + 82, card_y + 72, kFontSmall, kSubtle, hint, card_w - 120);
+    constexpr int kTextGap = 12;
+    const int hint_width = card_w - 120;
+    const int hint_lines = font.LineCount(hint, kFontSmall, hint_width);
+    const int hint_ink_h = (hint_lines - 1) * font.LineHeight(kFontSmall) + kFontSmall;
+    const int text_h = kFontHeading + kTextGap + hint_ink_h;
+    const int text_y = card_y + (card_h - text_h) / 2;
+    DrawKeyBadge(surface, font, card_x + 46, card_y + card_h / 2, 22, "!", kWarn, kOnHeader);
+    font.DrawBold(surface, card_x + 82, text_y, kFontHeading, kText, title);
+    font.Draw(surface, card_x + 82, text_y + kFontHeading + kTextGap, kFontSmall, kSubtle, hint,
+              hint_width);
 }
 
 void App::RenderInstallUrl(Surface surface) {
@@ -5745,25 +5770,30 @@ void App::RenderInstallUrl(Surface surface) {
     const Rect rect{card_x, card_y, card_w, card_h};
     FillRoundedRect(surface, rect.x, rect.y, rect.w, rect.h, 18, kBorder);
     FillRoundedRect(surface, rect.x + 3, rect.y + 3, rect.w - 6, rect.h - 6, 15, kCard);
-    DrawKeyBadge(surface, m_font, card_x + 46, card_y + 42, 22, "A", kHeader, kOnHeader);
+    DrawKeyBadge(surface, m_font, card_x + 46, card_y + card_h / 2, 22, "A", kHeader, kOnHeader);
     /* Centred, like the home page's main button: the badge on the left says "this is a key", and
        centred text is what the app's other full-width buttons do. */
     const int centre = surface.width / 2;
-    const auto centred = [&](i18n::StringId id, int size, Color color, int y) {
-        const std::string line = Tr(id);
+    constexpr int kTextGap = 12;
+    const bool has_last = !m_download_url.empty();
+    const int text_h = kFontHeading + kTextGap + kFontSmall +
+                       (has_last ? kTextGap + kFontSmall : 0);
+    const int text_y = card_y + (card_h - text_h) / 2;
+    const auto centred = [&](const std::string &line, int size, Color color, int y) {
         m_font.Draw(surface, centre - m_font.Measure(line, size) / 2, y, size, color,
                     line.c_str());
     };
-    centred(i18n::StringId::InstallTypeUrl, kFontHeading, kText, card_y + 20);
-    centred(i18n::StringId::InstallUrlHint, kFontSmall, kSubtle, card_y + 62);
-    if (!m_download_url.empty()) {
+    centred(Tr(i18n::StringId::InstallTypeUrl), kFontHeading, kText, text_y);
+    centred(Tr(i18n::StringId::InstallUrlHint), kFontSmall, kSubtle,
+            text_y + kFontHeading + kTextGap);
+    if (has_last) {
         /* The address that was tried: retrying is then a one-character job instead of typing the
            whole thing again. */
         const std::string last = m_font.Fit(
             i18n::Format(i18n::StringId::InstallUrlLast, m_download_url.c_str()), kFontSmall,
             card_w - 200, 1);
-        m_font.Draw(surface, centre - m_font.Measure(last, kFontSmall) / 2, card_y + 92,
-                    kFontSmall, kSubtle, last.c_str());
+        centred(last, kFontSmall, kSubtle,
+                text_y + kFontHeading + kTextGap + kFontSmall + kTextGap);
     }
     m_actions.push_back({kActionInstallUrl, rect, true});
 
@@ -5781,13 +5811,23 @@ void App::RenderInstallUrl(Surface surface) {
         const int strip_h = 12 + reason_lines * m_font.LineHeight(kFontBody) + 4 +
                             address_lines * m_font.LineHeight(kFontSmall) + 12;
         y += 20;
+        /* Center the visible ink block, not its font line boxes: CJK has no descender pixels, so a
+           line-height box centered inside the strip still reads several pixels high. */
+        const int reason_ink_h =
+            (reason_lines - 1) * m_font.LineHeight(kFontBody) + kFontBody;
+        const int address_ink_h = address_lines == 0
+                                      ? 0
+                                      : (address_lines - 1) * m_font.LineHeight(kFontSmall) +
+                                            kFontSmall;
+        const int group_gap = address_lines == 0 ? 0 : 4;
+        const int group_h = reason_ink_h + group_gap + address_ink_h;
+        const int group_y = y + (strip_h - group_h) / 2;
         FillRoundedRect(surface, card_x, y, card_w, strip_h, 12, kWarnTint);
         StrokeRect(surface, card_x, y, card_w, strip_h, 2, kWarnBright);
-        m_font.DrawBold(surface, card_x + 24, y + 10, kFontBody, kWarn, reason.c_str(),
+        m_font.DrawBold(surface, card_x + 24, group_y, kFontBody, kWarn, reason.c_str(),
                         card_w - 48);
         if (!m_download_url.empty()) {
-            m_font.Draw(surface, card_x + 24,
-                        y + 12 + reason_lines * m_font.LineHeight(kFontBody) + 2, kFontSmall,
+            m_font.Draw(surface, card_x + 24, group_y + reason_ink_h + group_gap, kFontSmall,
                         kSubtle, m_font.Fit(m_download_url, kFontSmall, card_w - 48, 1).c_str());
         }
         y += strip_h;

@@ -91,6 +91,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   `source/ui/action.hpp` 的 `TapTracker` 里改,并由 `tests/host_tests.cpp` 固住。
 - **首页焦点方向固定**：方向键 `上` / `右` 移到上一项，`下` / `左` 移到下一项；左摇杆按主轴
   方向使用同一映射。规则在 `source/ui/home_state.hpp`，由主机测试覆盖，输入层不得另写一套。
+- **安装前只检查目标游戏是否运行**：解析 CNMT 后按 `ApplicationIdOf` 归一到本体 title id，再查
+  `pmdmntGetProcessId`。禁止改回 `pmdmntGetApplicationProcessId` 的“任意应用”判断：HOME 快捷方式
+  会让 ACNH-Manager 自己成为 Application，而安装游戏 B 时游戏 A 在后台也不应冲突。
 - **画出来的按钮必须能点**:每个可见控件都要在同一次改动里进 `m_actions`(页眉标签页、页脚
   提示也算),且命中矩形与绘制几何来自同一个布局函数;只读页要清空动作表,否则会点中上一页
   遗留的按钮。真机踩过这两条(`docs/architecture.md` 第 7 节)。
@@ -205,7 +208,8 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   `update_task.*` 工作线程)。
   界面层里这几块纯逻辑单独成头文件、由主机测试钉住:`ui/action.hpp`(`HitTest`/`MoveFocus`/`TapTracker`)、
   `ui/header_tabs.hpp`(页眉标签页几何:绘制与命中矩形共用)、`ui/home_state.hpp`(首页八态分类)、
-  `ui/settings.hpp`(`settings.json` 的往返:界面语言必须活过重启与卸载)——
+  `ui/settings.hpp`(`settings.json` 的往返:界面语言必须活过重启与卸载)、
+  `ui/footer_version.hpp`(干净发布显示本地化版本号,开发/脏构建保留完整构建串)——
   改规则时先改头文件与 `tests/host_tests.cpp`。
 - `source/third_party/`:vendored 第三方源码(**只放上游原文件,不本地修改**),每个目录一个库,
   来源 URL / commit / sha256 / 许可证记在同目录 `README.md`,并由 `tools/verify-release.py` 核对:

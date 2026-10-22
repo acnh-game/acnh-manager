@@ -328,6 +328,7 @@
 const L = __ACNH_LABELS__;
 const PORT_TEXT = "__ACNH_ADDRESS__";
 const BUILD_TEXT = "__ACNH_VERSION__";
+const VERSION_TEXT = "__ACNH_VERSION_TEXT__";
 /* The labels below were injected in this language when the page was served. */
 const PAGE_LANG = document.documentElement.lang;
 /* Minimal keep-awake, distilled from NoSleep.js (MIT): native Wake Lock when the page is a secure
@@ -614,18 +615,18 @@ function showCover(id, status) {
 }
 document.getElementById("title").textContent = t("pageTitle");
 document.getElementById("subtitle").textContent = t("pageSubtitle") + " · " + PORT_TEXT;
-/* Which build this page came from, in the footer's right corner: the whole stamp, the same string the
-   console prints there -- so "is this tab older than the console?" is answered by looking at both, and
-   a tap copies it (a phone cannot hover; 2026-10-19). */
+/* What the footer says about this build: a clean release shows its localized version, while
+   development and dirty builds keep the full stamp.  BUILD_TEXT remains the full identity and is
+   used separately for the self-refresh comparison against /status.json. */
 {
   const stamp = document.getElementById("build");
-  /* The footer only needs enough of the stamp to tell two builds apart; the full string (with the
-     commit, dirty flag and timestamp) is what a tap copies. */
-  const shortBuild = (BUILD_TEXT.match(/src:[0-9a-f]+(?:\+(?:devaids|rel))?/) || [BUILD_TEXT])[0];
+  /* Development builds use the compact source hash in the visible footer; a tap still copies the
+     full stamp.  A release's VERSION_TEXT is already short and human-readable. */
+  const shortBuild = (VERSION_TEXT.match(/src:[0-9a-f]+(?:\+(?:devaids|rel))?/) || [VERSION_TEXT])[0];
   stamp.textContent = shortBuild;
-  stamp.title = BUILD_TEXT;
+  stamp.title = VERSION_TEXT;
   stamp.addEventListener("click", async () => {
-    const copied = await copyToClipboard(BUILD_TEXT);
+    const copied = await copyToClipboard(VERSION_TEXT);
     stamp.textContent = copied ? t("pageCopied") : shortBuild;
     setTimeout(() => { stamp.textContent = shortBuild; }, 1200);
   });
@@ -875,6 +876,13 @@ function render(status) {
        bytes, but it can say how long the console will wait before the task becomes selectable. */
     const waitLeft = Number(status.wait_seconds) || 0;
     setNote(waitLeft > 0 ? t("pageWaitOriginal", waitLeft) : t("pageUploadActive"), false);
+  } else if (status.error) {
+    /* The console rejected the package while reading its information.  Keep its exact reason on
+       the pick card; replacing it with a generic retry sentence sends the player hunting for a
+       problem with the file when the actionable fix is somewhere else. */
+    setNote(status.error, false);
+  } else if (status.state === "idle") {
+    setNote(t("pageKeepAwake"), false);
   }
   show("resultCard", finished);
   show("queueCard", !busy && !finished && !!status.pending);
@@ -1142,7 +1150,7 @@ async function runUpload(file) {
         if (status.source !== "upload" &&
             (sent_max > 0 || performance.now() - beginAt > 3000)) {
           dbg("upload dropped by the console");
-          setNote(t("pageUploadDropped"));
+          setNote(status.error || t("pageUploadDropped"));
           break;
         }
         await sleep(300);

@@ -183,7 +183,7 @@ constexpr Entry kStrings[] = {
     {"输入网址", "Enter address"},  /* InstallTypeUrl */
     {"连不上这个地址,检查地址与端口是否正确", "Cannot connect to this address; check the address and port"},  /* InstallNoNetwork */
     {"这个地址不完整或格式不对,请填写完整网址", "This address is incomplete or malformed; enter a full URL"},  /* InstallBadUrl */
-    {"请先完全退出游戏(主页上把游戏关掉)再试一次", "Close the game completely first (HOME screen, then X), then try again"},  /* InstallGameRunning */
+    {"检测到要安装的内容所属的游戏目前正在运行，请退出游戏后再执行安装动作", "The game for the content being installed is currently running. Exit the game before installing."},  /* InstallGameRunning */
     {"浏览器停止发送了:重新打开页面,再选一次这个文件即可继续", "The browser stopped sending - re-open the page and pick this file again"},  /* InstallUploadStopped */
     {"这个地址不支持断点续传,请换一个地址或用手机上传", "This address cannot be resumed; use another address or upload the file"},  /* InstallRangeUnsupported */
     {"地址打不开(HTTP %s),检查一下地址是否写对", "The address answered HTTP %s; check that it is correct"},  /* InstallHttpStatus */
@@ -233,6 +233,7 @@ constexpr Entry kStrings[] = {
     {"机器上已经有更新的版本,没有改动", "A newer version is already installed; nothing changed"},  /* ResultNewerVersionPlain */
     {"agent 已经装好了", "The agent is already installed"},  /* ResultAgentAlreadyInstalled */
     {"L / R 切换页面", "L / R switch pages"},  /* FooterPagesHint */
+    {"版本 %s", "version %s"},  /* FooterVersion */
 
     /* The step that follows a game install (the player asked for the game, the agent is what makes
        it useful): what it wrote, and the one case where it wrote nothing. */

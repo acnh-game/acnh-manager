@@ -250,6 +250,7 @@ enum class StringId {
     ResultNewerVersionPlain,
     ResultAgentAlreadyInstalled,
     FooterPagesHint,
+    FooterVersion,
     ResultAgentFollowUpInstalled,
     ResultAgentFollowUpFailed,
     MetaCount,

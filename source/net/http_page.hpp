@@ -49,10 +49,12 @@ inline constexpr const char *kPageLangMarker = "__ACNH_LANG__";
 inline constexpr const char *kPageAddressMarker = "__ACNH_ADDRESS__";
 /* And which build the page came from.  A browser keeps the JavaScript it already has until the tab
    is reloaded, so a page left open across a deploy behaves exactly like a page whose upload loop is
-   broken -- which is a debugging round nobody should pay twice (2026-10-16).  The marker carries the
-   console's own build stamp, so the stamp in the page's footer and the stamp in the console's footer
-   are the same string. */
+   broken -- which is a debugging round nobody should pay twice (2026-10-16).  This identity stays
+   the full build stamp in every build; it is compared with /status.json for self-refresh. */
 inline constexpr const char *kPageVersionMarker = "__ACNH_VERSION__";
+/* What the footer shows and copies: the full stamp for development/dirty builds, or the localized
+   application version for a clean release. */
+inline constexpr const char *kPageVersionTextMarker = "__ACNH_VERSION_TEXT__";
 
 /* The page with its label placeholder replaced.  `labels_object` is a JavaScript object literal
    (built by the app from the i18n table, one key per label the page shows). */
