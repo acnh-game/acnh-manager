@@ -60,8 +60,8 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 - **NRO 就是仓库里的一个文件**:`packaging/nro/acnh-manager-<版本>.nro`,由 `tools/release.sh`
   第 5 步拷进去,raw 地址就是商店包 update 资产与指南页指向的 permalink(带版本号是有意的:
   某个版本的 update 资产必须永远指向那个版本的 NRO)。
-- 推送与打 tag 直接用 git:**普通 `git push` 就行**(SSH,本机 key 已注册):
-  `git push`、`git tag v<版本> && git push origin v<版本>`。
+- 推送与打 tag 直接用 git,但不要依赖不带远端名的默认 `git push`:默认远端只会覆盖一边。
+  分支与 tag 都显式按下一段的两远端命令推送。
 - **两个远端,推送必须两边都走**:`origin` 是 Gitee(默认),`github` =
   `https://github.com/acnh-game/acnh-manager.git`(同一份代码的第二处)。只推一边两边就会分叉,
   所以改完是 `git push origin main && git push github main`;tag 同理
@@ -89,6 +89,8 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
 - **触摸判定必须用"按下期间的最后坐标"**:`hidGetTouchScreenStates` 在松手那一帧没有坐标
   (count=0),拿它做拖拽判定会让每次点击都变成"滑动"而静默失效。规则只能在
   `source/ui/action.hpp` 的 `TapTracker` 里改,并由 `tests/host_tests.cpp` 固住。
+- **首页焦点方向固定**：方向键 `上` / `右` 移到上一项，`下` / `左` 移到下一项；左摇杆按主轴
+  方向使用同一映射。规则在 `source/ui/home_state.hpp`，由主机测试覆盖，输入层不得另写一套。
 - **画出来的按钮必须能点**:每个可见控件都要在同一次改动里进 `m_actions`(页眉标签页、页脚
   提示也算),且命中矩形与绘制几何来自同一个布局函数;只读页要清空动作表,否则会点中上一页
   遗留的按钮。真机踩过这两条(`docs/architecture.md` 第 7 节)。
@@ -223,8 +225,8 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   `agent-manifest.json` 是它的副本,给 App 的更新检查读);`packaging/agent-lock.json` 是发布锁。
   `packaging/nro/`:每次发布拷进来的 `acnh-manager-<版本>.nro`(对外下载就是它的 raw 地址)。
 - `tools/`:开发与真机迭代工具(见 `docs/tools-guide.md`)。
-- `tests/`:主机侧单元测试(`make -C tests`);`packaging/`:M4 放商店打包与 `pkgbuild.json`;
-  `docs/device-acceptance.md`:M5 写真机验收记录。
+- `tests/`:主机侧单元测试(`make -C tests`);`packaging/`:商店打包输入与 `pkgbuild.json`;
+  `docs/device-acceptance.md`:真机验收记录。
 
 ## 文档导航
 

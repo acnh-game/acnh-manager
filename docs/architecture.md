@@ -12,7 +12,7 @@ ACNH-Manager 是 `acnh-agent` 的安装器:识别控制台上游戏的实际构�
 | `/switch/ACNH-Manager/acnh-manager.nro` | 应用本体 |
 | `/switch/ACNH-Manager/state.json` | 安装记录:agent 版本、写入的文件与 sha256、时间 |
 | `/switch/ACNH-Manager/settings.json` | 用户设置(界面语言、安装目标存储 `sd` / `nand`) |
-| `/switch/ACNH-Manager/log.txt` | 运行日志(含失败原因;M1 起产生)。**开发构建一律写;发布构建只在卡上有下面那个开关文件时才写** —— 每行日志是一次"开→写→flush→关",一次启动约 2.2 s,发布件默认不为没人看的日志付这笔钱(`source/log.hpp` 的 `LogWanted`) |
+| `/switch/ACNH-Manager/log.txt` | 运行日志(含失败原因)。**开发构建一律写;发布构建只在卡上有下面那个开关文件时才写** —— 每行日志是一次"开→写→flush→关",一次启动约 2.2 s,发布件默认不为没人看的日志付这笔钱(`source/log.hpp` 的 `LogWanted`) |
 | `/switch/ACNH-Manager/log-on` | 日志开关(空文件即可,内容不看):发布构建启动时看到它就写 `log.txt`,缺席时既不创建也不删除那份文件 |
 | `/switch/ACNH-Manager/spike.log`、`spike-history.log` | M0 环境探测输出(仅 spike 构建产生) |
 | `atmosphere/contents/01006F8002326000/exefs/subsdk9` | agent 模块(跨构建共享) |
@@ -25,7 +25,11 @@ ACNH-Manager 是 `acnh-agent` 的安装器:识别控制台上游戏的实际构�
 
 设置与安装记录**分开存**:`state.json` 是安装记录,卸载会删掉它;界面语言必须活过卸载,所以
 它有自己的文件(`ui::Settings` 负责 `settings.json` 的解析/序列化,主机测试钉住往返)。文件缺失
-或读不动都不是错误 —— 用默认值,原因写进 `log.txt`。
+时,首次启动读取主机系统语言:中文语言族选简体中文,其他可用系统语言选 English,并把结果写入
+`settings.json`;之后始终使用玩家保存的选择。文件读不动不是错误 —— 用默认值,原因写进 `log.txt`。
+
+agent 安装遇到目标目录里已有的非本应用 `subsdk9` / `main.npdm` 时**直接覆盖,不向用户弹确认,
+也不保留旧文件备份**。安装事务内部的临时文件与 `.acnh-old` 只用于失败回滚，成功提交后会删除。
 
 ### 2.1 写盘错误码:`0xD401` = 内核 `InvalidMemoryState`
 
@@ -235,7 +239,7 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 | `lr` 与 `ncm` 的关系 | `lr` 解析 base title id 返回 `@SdCardContent://registered/00000010/80cbc793d37b6f493ba53561106bb5c6.nca`,而 `ncm` 显示 `80CBC793…` 属于**基础标题**(version 0)的 Program 内容;因此门控改用 `ncm` 的更新内容 id |
 | 指纹绑定(游戏运行中,同一次运行) | `dmnt:cht` 的 ModuleId `FF1D1C05670DB6021C85B624A710B963` 与 `ncm[update]` 的 version 2228224 / type=1 内容 id `E10617820DB06889E1638499478DA0DE` 同时成立;`tools/summarize-spike-log.py` 判定 gate ①+② 与 hardening ③ 均 PASS |
 
-## 6. 核心逻辑模块(M1 起)
+## 6. 核心逻辑模块
 
 判据与决策已从探针代码抽成**不依赖 libnx 的纯逻辑**,主机侧可直接测试;真机部分只负责"取数"和"落盘"。
 
@@ -275,7 +279,7 @@ spike 只读:不写游戏目录,不创建 `state.json`。
 | 状态 | 触发条件 | 处理 |
 |---|---|---|
 | `Supported` | 命中 `games[]` 条目:title 与 version 相同、内容 id 相同;若游戏在运行且条目有 `buildId`,ModuleId 也必须相同 | 允许安装 |
-| `NoManifest` | App 没有可用清单(M1 阶段即如此,清单由 M4 导入) | 不写盘;首页文案见本表下面那段说明 |
+| `NoManifest` | App 没有可用清单(只可能出现在未导入发布记录的自制开发构建) | 不写盘;首页文案见本表下面那段说明 |
 | `TitleMissing` | 控制台上既没有该 title 的 Application 条目,也读不到它的 NACP(游戏真的不在这台机器上) | 首页"没有找到" |
 | `TitleNotSupported` | 清单里没有该 title | 拒绝 |
 | `VersionNotSupported` | title 有但版本不同(含"只装了基础版、version 0"的情形) | 拒绝;首页给出实际版本与本应用支持的版本 |
@@ -360,7 +364,7 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
   "能不能当目录打开"**不能**用作判据(`fs` 对拼接文件和普通文件都拒绝)。本机文件来源能直接装
   这种包,安装路径读到的就是一个普通文件。
 
-## 7. 界面层(M1)
+## 7. 界面层
 
 | 模块 | 职责 |
 |---|---|
@@ -379,7 +383,8 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
   (`stride * ((win->height + 7) & ~7)`),`height_aligned` 却是 GOB 向上取整(720 → 768 行);
   按它绘制每帧会越界写堆 48 行(约 245 KB),破坏与 hbl 加载器共享的进程堆,表现为
   "进入游戏或按键就整机崩溃"。宽度用 `width_aligned` 是安全的(1280 本来就对齐)。
-- 交互(现状):首页始终有一个焦点按钮,`上` / `下` 按视觉顺序移动,`A` 执行当前按钮
+- 交互(现状):首页始终有一个焦点按钮，`上` / `右` 移到上一项，`下` / `左` 移到下一项，
+  左摇杆按主轴方向执行同一映射，`A` 执行当前按钮
   (安装 / 重装 / 重试 / 检查更新 / 卸载 / 安装或删除桌面快捷方式);首页不再用 `X` / `Y` / `ZR`
   快捷键。**`L` / `R` 在"给人看"的页面之间循环**(状态 → 详情 → 功能说明,两头环绕;顺序与
   页眉绘制顺序一致,规则在 `ui/header_tabs.hpp` 的 `CyclePeerTab`,由主机测试钉住),以后新增
@@ -399,7 +404,8 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
   《森友物码册》小程序码采样成模块矩阵(`data/qr_miniapp.bin`),界面用矩形填充逐格画出,主机侧没有图片解码器。
 - **输入统一走动作表**(`source/ui/action.hpp`,纯逻辑 + 主机测试):一个控件 = `{id, 矩形,
   是否可用}`。触摸用 `HitTest` 命中它;普通页面用 `MoveFocus` 做空间移动,首页使用独立的
-  `MoveHomeFocus` 线性循环,`A` 执行当前焦点。触摸本身在 `source/ui/touch.*`:
+  `MoveHomeFocus` 线性循环，方向键与左摇杆先在 `ui/home_state.hpp` 归一成 Previous / Next，
+  `A` 执行当前焦点。触摸本身在 `source/ui/touch.*`:
   只初始化一次,之后每帧读 `hidGetTouchScreenStates`,坐标即屏幕坐标(实测见
   `docs/device-acceptance.md`);没有触摸(座机模式/服务不可用)时按钮依旧可用。
 - **点击判定在 `TapTracker`**(同文件):触摸面板**只在手指接触时给出坐标**,松手那一帧
@@ -533,7 +539,7 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
   `payload/` 与 `dev-manifest.json`),否则一旦内嵌通道缺失,回退安装的是过期 payload。
   允许开发清单时才会被读到。App 用两处文案区分来源("已内置(NRO 自带)" / "开发用清单文件")。
 - 清单校验默认要求"发布形态"(`dirty=false` 且 `buildFlags` 只含语义钩子位);开发构建会被
-  **默认拒绝**并在状态页显示原因。要在 M4 之前干跑,必须在详情页显式打开"允许开发清单",
+  **默认拒绝**并在状态页显示原因。开发期需要使用未导入的清单干跑时,必须在详情页显式打开"允许开发清单",
   此时 UI 会标注清单来自开发文件 —— 这是有意的:发布门控不接受非发布产物。
   这个开关**不持久化**(每次启动回到默认的"拒绝开发清单"):它是调试入口,不该跟着用户走。
 - payload 与清单同源:内嵌清单配内嵌 payload,开发清单配 SD 上的 payload 目录,不会混用。

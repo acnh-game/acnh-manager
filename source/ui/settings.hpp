@@ -7,6 +7,7 @@
    JSON module (`source/util/json.hpp`, the same one state.json uses); parse/dump are pure,
    so the host tests pin the round trip exactly like they do for the install record. */
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -21,6 +22,12 @@ struct Settings {
        SD, so an older settings file keeps working, and an unusable value is reported and ignored. */
     bool install_to_nand{false};
 };
+
+/* The app has two interface languages.  On the first launch only, a Chinese system language
+   selects Simplified Chinese and every other usable system language selects English.  An
+   unavailable language code keeps the historical Simplified Chinese default.  `language_code`
+   is the packed ASCII code returned by setGetSystemLanguage(), for example "zhCN" or "enUS". */
+i18n::Language InitialLanguageFromSystemLanguageCode(std::uint64_t language_code, bool known);
 
 std::string DumpSettings(const Settings &settings);
 

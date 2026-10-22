@@ -27,6 +27,21 @@ bool ParseLanguage(const std::string &name, i18n::Language *out) {
 
 }  // namespace
 
+i18n::Language InitialLanguageFromSystemLanguageCode(std::uint64_t language_code, bool known) {
+    if (!known || language_code == 0) {
+        return i18n::Language::ZhHans;
+    }
+    /* Language codes are an eight-byte ASCII string stored little-endian in the service's u64.
+       Chinese has both legacy and current region variants; every one maps to the app's only
+       Chinese UI language.  Other system languages use English because the app is bilingual. */
+    const char first = static_cast<char>(language_code & 0xFF);
+    const char second = static_cast<char>((language_code >> 8) & 0xFF);
+    if (first == 'z' && second == 'h') {
+        return i18n::Language::ZhHans;
+    }
+    return i18n::Language::English;
+}
+
 std::string DumpSettings(const Settings &settings) {
     json::Value root;
     root.type = json::Type::Object;

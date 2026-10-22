@@ -2620,8 +2620,11 @@ void TestHomeState() {
     using acnh_manager::ui::Classify;
     using acnh_manager::ui::DefaultHomeFocus;
     using acnh_manager::ui::ForwarderActionBlocked;
+    using acnh_manager::ui::HomeDirectionFromButtons;
+    using acnh_manager::ui::HomeDirectionFromStick;
     using acnh_manager::ui::HomeInputs;
     using acnh_manager::ui::HomeKind;
+    using acnh_manager::ui::HomeMoveDirection;
     using acnh_manager::ui::MoveHomeFocus;
     using acnh_manager::ui::Rect;
 
@@ -2717,6 +2720,22 @@ void TestHomeState() {
     CHECK(DefaultHomeFocus(disabled_primary, 0) == 1);
     CHECK(MoveHomeFocus(disabled_primary, 30, +1, 0) == 1);
     CHECK(MoveHomeFocus(disabled_primary, 1, -1, 0) == 30);
+
+    /* Home treats Up/Right as one direction and Down/Left as the other.  The left stick follows
+       the same mapping, using its dominant axis so diagonal pushes remain deterministic. */
+    CHECK(HomeDirectionFromButtons(true, false, false, false) == HomeMoveDirection::Previous);
+    CHECK(HomeDirectionFromButtons(false, true, false, false) == HomeMoveDirection::Previous);
+    CHECK(HomeDirectionFromButtons(false, false, true, false) == HomeMoveDirection::Next);
+    CHECK(HomeDirectionFromButtons(false, false, false, true) == HomeMoveDirection::Next);
+    CHECK(HomeDirectionFromButtons(false, false, false, false) == HomeMoveDirection::None);
+
+    CHECK(HomeDirectionFromStick(0, 20000, 14000) == HomeMoveDirection::Previous);
+    CHECK(HomeDirectionFromStick(20000, 0, 14000) == HomeMoveDirection::Previous);
+    CHECK(HomeDirectionFromStick(0, -20000, 14000) == HomeMoveDirection::Next);
+    CHECK(HomeDirectionFromStick(-20000, 0, 14000) == HomeMoveDirection::Next);
+    CHECK(HomeDirectionFromStick(1000, -1000, 14000) == HomeMoveDirection::None);
+    CHECK(HomeDirectionFromStick(15000, 20000, 14000) == HomeMoveDirection::Previous);
+    CHECK(HomeDirectionFromStick(20000, -15000, 14000) == HomeMoveDirection::Previous);
 }
 
 /* The tables inside one compressed content of an NSZ / XCZ (install/ncz.hpp).  The shape and the
@@ -3223,9 +3242,23 @@ void TestTitleNames() {
    language is how "the language resets after a restart" came back from the console. */
 void TestSettings() {
     using acnh_manager::ui::DumpSettings;
+    using acnh_manager::ui::InitialLanguageFromSystemLanguageCode;
     using acnh_manager::ui::ParseSettings;
     using acnh_manager::ui::Settings;
     using acnh_manager::i18n::Language;
+
+    const auto language_code = [](const char text[5]) {
+        std::uint64_t code = 0;
+        for (int i = 0; i < 4 && text[i] != '\0'; ++i) {
+            code |= static_cast<std::uint64_t>(static_cast<unsigned char>(text[i])) << (i * 8);
+        }
+        return code;
+    };
+    CHECK(InitialLanguageFromSystemLanguageCode(language_code("zhCN"), true) == Language::ZhHans);
+    CHECK(InitialLanguageFromSystemLanguageCode(language_code("zhTW"), true) == Language::ZhHans);
+    CHECK(InitialLanguageFromSystemLanguageCode(language_code("enUS"), true) == Language::English);
+    CHECK(InitialLanguageFromSystemLanguageCode(language_code("ja"), true) == Language::English);
+    CHECK(InitialLanguageFromSystemLanguageCode(0, false) == Language::ZhHans);
 
     Settings written;
     written.language = Language::English;

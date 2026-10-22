@@ -121,4 +121,42 @@ inline int DefaultHomeFocus(const std::vector<Action> &actions, int anchor_id) {
     return MoveHomeFocus(actions, -1, +1, anchor_id);
 }
 
+enum class HomeMoveDirection { None, Previous, Next };
+
+/* Home treats its controls as one linear cycle.  Up and Right choose the previous control;
+   Down and Left choose the next one.  Keeping this mapping pure makes the d-pad and stick share
+   exactly the same behaviour instead of drifting apart in the input glue. */
+inline HomeMoveDirection HomeDirectionFromButtons(bool up, bool right, bool down, bool left) {
+    if (up || right) {
+        return HomeMoveDirection::Previous;
+    }
+    if (down || left) {
+        return HomeMoveDirection::Next;
+    }
+    return HomeMoveDirection::None;
+}
+
+/* A pushed stick uses its dominant axis.  Ties keep the historical vertical behaviour; the
+   resulting Previous/Next meaning is identical to the d-pad mapping above. */
+inline HomeMoveDirection HomeDirectionFromStick(int x, int y, int dead_zone) {
+    const int abs_x = x < 0 ? -x : x;
+    const int abs_y = y < 0 ? -y : y;
+    if (abs_x > abs_y) {
+        if (x > dead_zone) {
+            return HomeMoveDirection::Previous;
+        }
+        if (x < -dead_zone) {
+            return HomeMoveDirection::Next;
+        }
+        return HomeMoveDirection::None;
+    }
+    if (y > dead_zone) {
+        return HomeMoveDirection::Previous;
+    }
+    if (y < -dead_zone) {
+        return HomeMoveDirection::Next;
+    }
+    return HomeMoveDirection::None;
+}
+
 }  // namespace acnh_manager::ui

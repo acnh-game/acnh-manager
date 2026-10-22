@@ -17,6 +17,8 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Ho
 - 名字里的 `nh` = Nintendo Homebrew,是本项目线的家族前缀;覆盖全部动森作品,但 agent 当前只有
   上面这一个受支持的构建。
 - 界面支持简体中文与 English。
+- 首次启动没有已保存设置时按主机系统语言选择界面:中文系统使用简体中文,其他语言使用 English;
+  用户在详情页切换后会持久化，不再跟随系统变化。
 
 ## 它做什么
 
@@ -71,9 +73,11 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Ho
 
 ## 安装与使用
 
-1. **官方 Homebrew App Store**(推荐):在相册里打开 Sphaira 等商店客户端,搜索 `ACNH-Manager`;
-2. **直接下载 NRO**:`https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-<版本>.nro`,
-   放进 `switch/ACNH-Manager/`,从相册打开;
+1. **官方 Homebrew App Store**:在相册里打开 Sphaira 等商店客户端,搜索 `ACNH-Manager`。
+   商店收录版本可能暂时落后于本文描述的 2.0.0;2.0.0 升级 PR 已按计划暂缓,未提交;
+2. **直接下载发布 NRO**:发布版本入库并推送后,地址为
+   `https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-<版本>.nro`;
+   放进 `switch/ACNH-Manager/`,从相册打开。源码用户也可先运行 `./tools/build.sh`;
 3. 首页按 `＋` 进入「游戏安装/更新」,选一种来源;
 4. 手机上传:进入「上传安装」后扫码打开页面、选择文件。**请让页面保持在前台**——锁屏或切到后台
    会被浏览器暂停,重新打开页面重选同一个文件即可从断点继续。
@@ -83,6 +87,8 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Ho
 ## 已知边界(明确不做)
 
 - 不卸载游戏或更新包,不修改存档;不管理 cheat 文件,只检测冲突并提示路径。
+- 安装 agent 时,若目标目录已有非本应用写入的同名 `subsdk9` / `main.npdm`,会**直接覆盖**,
+  不弹覆盖确认,也不保留用户可见的旧文件备份。
 - 一次只装一个文件;主机与页面都不提供主动取消。异常中断可续传,但收尾阶段不可取消。
 - **不读取 `prod.keys` / `title.keys`**:需要密钥的转换(转公共票、转标准 crypto、降低 master key)
   不做;包内票据原样导入,交给系统判断。

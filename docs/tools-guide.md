@@ -9,7 +9,7 @@
 | 工具 | 作用 | 何时用 |
 |---|---|---|
 | `tools/build.sh` | 在固定镜像 `devkitpro/devkita64:20260219` 里执行 `make`,产出 `acnh-manager.nro` | 每次改完源码构建时 |
-| `tools/deploy-nro.py` | 经 sys-agent 的内置 FTP(默认 `switch:6001`)把 NRO 推到 `/switch/ACNH-Manager/`;`--fetch-log` 取回 `spike.log`、`spike-history.log`、`log.txt`(后者 M1 起产生) | 真机迭代:构建 → 部署 → 启动 → 回读日志 |
+| `tools/deploy-nro.py` | 经 sys-agent 的内置 FTP(默认 `switch:6001`)把 NRO 推到 `/switch/ACNH-Manager/`;`--fetch-log` 取回 `spike.log`、`spike-history.log`、`log.txt` | 真机迭代:构建 → 部署 → 启动 → 回读日志 |
 | `tools/summarize-spike-log.py` | 解析环境探测日志:打印 `ns` 内容表、`ncm` 的更新标题 version 与 Program 内容 id、`dmnt:cht` 的 ModuleId,按当前判据(①ns 版本 ②ncm 内容 id ③ModuleId 复核)给出 PASS/FAIL;`fsp-ldr` 相关行仅作历史信息 | 每次真机探测后复核结论 |
 | `tools/make-icons.py` | 从两张主图生成三种素材:`assets/icon-org.png` → `assets/icon.jpg`(256×256 JPEG,NACP/hbmenu 图标)+ `assets/icon.png`(256×256 PNG,商店图标);`assets/screen-org.png`(可选,不入库)→ `assets/screen.png`(**848×208** 商店横幅,按 848:208 居中裁带,绝不拉伸填满;主图不在就跳过)。`--source`/`--banner-source` 可指向别处的主图,`--skip-banner` 跳过横幅;需带 Pillow 的运行时 | 换图标/横幅或商店素材时 |
 | `tools/build-forwarder.py` | 校验 `packaging/forwarder/hbl-3.0.0/SOURCE.json`,在固定 devkitPro 容器中从 `source/main.c` + `source/trampoline.s` 现场编译 `main`/`main.npdm`,再调用 `make-forwarder-nsp.py` 生成内嵌 forwarder。仓库不保存编译后的第三方 loader 二进制 | 升级 hbl 源码、NRO 图标/版本,或重新发布 forwarder 时 |
@@ -34,7 +34,7 @@
 主机侧测试不在 `tools/` 下,单独放在 `tests/`:`make -C tests` 编译并运行清单解析、门控判定、
 安装决策与 `state.json` 往返的单元测试(不需要 Docker 与真机)。
 
-构建产物与日志等过程性材料放 `build/scratch/`(已忽略);真机验收结论写入 `docs/device-acceptance.md`(M5 建立)。
+构建产物与日志等过程性材料放 `build/scratch/`(已忽略);真机验收结论写入 `docs/device-acceptance.md`。
 
 ## upload-client.py — 扮演安装页面的上传客户端
 

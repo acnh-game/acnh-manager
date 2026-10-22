@@ -442,6 +442,32 @@ const char *PlanActionName(install::PlanAction action) {
     return "?";
 }
 
+std::uint64_t ReadSystemLanguageCode(bool *known) {
+    *known = false;
+    if (R_FAILED(setInitialize())) {
+        return 0;
+    }
+    std::uint64_t code = 0;
+    const Result rc = setGetSystemLanguage(&code);
+    setExit();
+    if (R_FAILED(rc)) {
+        return 0;
+    }
+    *known = true;
+    return code;
+}
+
+bool FileIsMissing(FsFileSystem &sd, const char *path) {
+    FsFile file{};
+    const util::FsPath arg(path);
+    const Result rc = fsFsOpenFile(&sd, arg.c_str(), FsOpenMode_Read, &file);
+    if (R_SUCCEEDED(rc)) {
+        fsFileClose(&file);
+        return false;
+    }
+    return rc == 0x00000202; /* PathNotFound */
+}
+
 
 }  // namespace
 
@@ -834,8 +860,17 @@ void App::LoadSettings() {
         Trace("settings: read failed: %s", error.c_str());
         return;
     }
-    if (!found) {
-        Trace("settings: no usable file (%s), keeping defaults",
+    const bool first_launch = !found && FileIsMissing(*m_sd, kSettingsPath);
+    if (first_launch) {
+        bool system_language_known = false;
+        const std::uint64_t system_language = ReadSystemLanguageCode(&system_language_known);
+        settings.language =
+            InitialLanguageFromSystemLanguageCode(system_language, system_language_known);
+        Trace("settings: no file; first launch language=%s (system code=%s)",
+              settings.language == i18n::Language::English ? "en" : "zh-Hans",
+              system_language_known ? "available" : "unavailable");
+    } else if (!found) {
+        Trace("settings: file could not be read (%s), keeping defaults",
               error.empty() ? "no reason given" : error.c_str());
     } else {
         std::string problem;
@@ -858,6 +893,9 @@ void App::LoadSettings() {
     m_install_target = settings.install_to_nand ? install::TargetStorage::Nand
                                                : install::TargetStorage::SdCard;
     Trace("settings: install target=%s", settings.install_to_nand ? "nand" : "sd");
+    if (first_launch) {
+        SaveSettings();
+    }
 }
 
 void App::SaveSettings() {
@@ -1326,9 +1364,17 @@ void App::HandleStick(const PadState &pad) {
     constexpr u64 kFirstDelayMs = 320; /* before the first repeat */
     constexpr u64 kRepeatMs = 110;
     const HidAnalogStickState stick = padGetStickPos(&pad, 0);
-    const bool up = stick.y > kDeadZone;
-    const bool down = stick.y < -kDeadZone;
-    if (!up && !down) {
+    HomeMoveDirection move = HomeMoveDirection::None;
+    if (m_page == Page::Home) {
+        move = HomeDirectionFromStick(stick.x, stick.y, kDeadZone);
+    } else if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Files) {
+        if (stick.y > kDeadZone) {
+            move = HomeMoveDirection::Previous;
+        } else if (stick.y < -kDeadZone) {
+            move = HomeMoveDirection::Next;
+        }
+    }
+    if (move == HomeMoveDirection::None) {
         m_stick_next_tick = 0; /* centred: the next push steps immediately */
         return;
     }
@@ -1337,11 +1383,11 @@ void App::HandleStick(const PadState &pad) {
         return;
     }
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Files) {
-        m_file_list.MoveFocus(up ? -1 : +1);
+        m_file_list.MoveFocus(move == HomeMoveDirection::Previous ? -1 : +1);
     } else if (m_page == Page::Home) {
-        MoveHomeFocus(up ? -1 : +1);
+        MoveHomeFocus(move == HomeMoveDirection::Previous ? -1 : +1);
     } else {
-        return; /* the page has no vertical focus to move */
+        return;
     }
     m_stick_next_tick = now + (m_stick_next_tick == 0 ? kFirstDelayMs : kRepeatMs);
 }
@@ -1423,9 +1469,12 @@ void App::HandleKeys(u32 down) {
         }
     }
     if (m_page == Page::Home) {
-        if ((down & HidNpadButton_Up) != 0) {
+        const HomeMoveDirection move = HomeDirectionFromButtons(
+            (down & HidNpadButton_Up) != 0, (down & HidNpadButton_Right) != 0,
+            (down & HidNpadButton_Down) != 0, (down & HidNpadButton_Left) != 0);
+        if (move == HomeMoveDirection::Previous) {
             MoveHomeFocus(-1);
-        } else if ((down & HidNpadButton_Down) != 0) {
+        } else if (move == HomeMoveDirection::Next) {
             MoveHomeFocus(+1);
         } else if ((down & HidNpadButton_A) != 0) {
             if (m_focus >= 0) {
