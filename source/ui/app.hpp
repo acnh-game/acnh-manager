@@ -116,8 +116,8 @@ private:
     std::string InstalledPayloadHash() const;
     std::string ManifestPayloadHash() const;
     void ToggleLanguage();
-    /* Update check: started on demand (X) or once at startup; runs on a worker thread, so the
-       UI polls it every frame instead of waiting for the network. */
+    /* Update check: started from Home's focused check button or once at startup; runs on a
+       worker thread, so the UI polls it every frame instead of waiting for the network. */
     void StartUpdateCheck(bool silent = false);
     void PollUpdateCheck();
     void ApplyUpdateCheck(net::UpdateCheckResult result);
@@ -260,11 +260,12 @@ private:
     /* Home-screen actions, rebuilt every frame from the same rectangles that get painted, so
        touch hit-testing and the painted buttons can never disagree. */
     void BuildHomeActions(int width, int height);
+    void MoveHomeFocus(int direction);
+    void NormalizeHomeFocus();
     void ActivateAction(int id);
     void HandleKeys(u32 down);
     /* The left stick drives the same focus the d-pad does, with a repeat that starts slow enough
-       to land on one row and then accelerates: a picker you cannot scroll with the stick feels
-       broken, and one that jumps five rows per nudge is worse. */
+       to land on one row and then accelerates. */
     void HandleStick(const PadState &pad);
     u64 m_stick_next_tick{0};
     void HandleTouch();
@@ -550,6 +551,7 @@ private:
     TapTracker m_tap{};
     std::vector<Action> m_actions{};
     int m_focus{-1};
+    bool m_home_focus_needs_default{true};
     bool m_should_exit{false};
 
     HomeKind m_home_kind{HomeKind::NeedsInstall};

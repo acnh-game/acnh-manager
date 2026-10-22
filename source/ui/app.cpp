@@ -1,6 +1,5 @@
 #include "app.hpp"
 
-#include <cmath>
 #include <cstdio>
 #include <algorithm>
 #include <initializer_list>
@@ -170,10 +169,10 @@ constexpr int kListTopGap = 14;
 constexpr int kLabelColumn = 280;
 constexpr int kRowGap = 8;
 
-/* Home-screen action ids: the primary control and the three fixed secondary controls. */
-constexpr int kActionPrimary = 0;     /* install / update / repair / retry / check again (A) */
-constexpr int kActionCheckUpdate = 1; /* X */
-constexpr int kActionUninstall = 2;   /* Y */
+/* Home-screen action ids: the primary control and the three secondary controls. */
+constexpr int kActionPrimary = 0;     /* install / update / repair / retry / check again */
+constexpr int kActionCheckUpdate = 1; /* check for updates */
+constexpr int kActionUninstall = 2;   /* remove the agent */
 constexpr int kActionBack = 3;        /* B: leave the confirmation pages */
 constexpr int kActionTabStatus = 10;  /* L: the status page (also a touch target) */
 constexpr int kActionTabDetails = 11; /* R: the details page (also a touch target) */
@@ -195,7 +194,12 @@ constexpr int kActionPendingResume = 26;   /* "continue" on the unfinished-insta
 constexpr int kActionPendingAbandon = 27;  /* "give up and clean up" on that screen (X) */
 constexpr int kActionPendingPickNew = 28;  /* "pick something else" on that screen (Y) */
 constexpr int kActionStartupRepair = 29;   /* the startup page's only action (A) */
-constexpr int kActionForwarder = 30;       /* install/remove the desktop tile (ZR) */
+constexpr int kActionForwarder = 30;       /* install/remove the desktop tile */
+
+constexpr bool IsHomeFocusAction(int id) {
+    return id == kActionPrimary || id == kActionCheckUpdate || id == kActionUninstall ||
+           id == kActionForwarder;
+}
 
 /* Where each header entry's key badge sits (the layout needs the same answer for the drawn pill
    and for the touch target -- see RenderHeader).  Same order as the tabs there: + installer,
@@ -1182,16 +1186,16 @@ void App::HandleStick(const PadState &pad) {
     if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Files) {
         m_file_list.MoveFocus(up ? -1 : +1);
     } else if (m_page == Page::Home) {
-        m_focus = MoveFocus(m_actions, m_focus, 0, up ? -1 : +1);
+        MoveHomeFocus(up ? -1 : +1);
     } else {
         return; /* the page has no vertical focus to move */
     }
     m_stick_next_tick = now + (m_stick_next_tick == 0 ? kFirstDelayMs : kRepeatMs);
 }
 
-/* Keyboard half of the input model.  Home has four actions with dedicated keys (A for the
-   primary one, X/Y for the two secondary ones, ZR for the shortcut tile) plus focus movement for
-   the d-pad; the details page uses focus and A, and B always means "back" (or exit on Home). */
+/* Keyboard half of the input model.  Home always has one focused button: Up/Down move the focus
+   and A activates it.  The details page uses spatial focus and A, and B means "back" (or exit on
+   Home). */
 void App::HandleKeys(u32 down) {
     /* While the engine is working, the progress page owns the screen and the thread: no key can
        leave it (the install is synchronous, so in practice nothing arrives here at all -- this
@@ -1237,7 +1241,7 @@ void App::HandleKeys(u32 down) {
        and *returning* here instead of falling through would leave B doing nothing at all. */
     if ((down & HidNpadButton_B) != 0 && m_page != Page::GameInstall) {
         if (m_page == Page::Home) {
-            m_should_exit = true; /* B on the home screen leaves the app, as before */
+            m_should_exit = true;
             return;
         }
         /* Leaving the guide or the installer goes back to whatever it was opened from;
@@ -1266,33 +1270,15 @@ void App::HandleKeys(u32 down) {
         }
     }
     if (m_page == Page::Home) {
-        const int step = 1;
-        if ((down & HidNpadButton_Left) != 0) {
-            m_focus = MoveFocus(m_actions, m_focus, -step, 0);
-        } else if ((down & HidNpadButton_Right) != 0) {
-            m_focus = MoveFocus(m_actions, m_focus, +step, 0);
-        } else if ((down & HidNpadButton_Up) != 0) {
-            m_focus = MoveFocus(m_actions, m_focus, 0, -step);
+        if ((down & HidNpadButton_Up) != 0) {
+            MoveHomeFocus(-1);
         } else if ((down & HidNpadButton_Down) != 0) {
-            m_focus = MoveFocus(m_actions, m_focus, 0, +step);
+            MoveHomeFocus(+1);
         } else if ((down & HidNpadButton_A) != 0) {
-            /* A has a fixed meaning on this page (the primary action).  It must not go through
-               the focus: key-bound controls are no longer focus targets, so the focus is -1
-               here and "A stopped working" would come straight back. */
-            ActivateAction(kActionPrimary);
-            return;
-        } else if ((down & HidNpadButton_X) != 0) {
-            ActivateAction(kActionCheckUpdate);
-            return;
-        } else if ((down & HidNpadButton_Y) != 0) {
-            ActivateAction(kActionUninstall);
-            return;
-        } else if ((down & HidNpadButton_ZR) != 0) {
-            ActivateAction(kActionForwarder);
-            return;
+            if (m_focus >= 0) {
+                ActivateAction(m_focus);
+            }
         }
-        /* Focus may have landed on a disabled action (e.g. "already up to date"); A then does
-           nothing, which is what a greyed-out button should do. */
         return;
     }
     switch (m_page) {
@@ -1634,6 +1620,9 @@ void App::Run() {
         HandleKeys(buttons_down);
         HandleStick(pad);
         HandleTouch();
+        if (m_page != Page::Home) {
+            m_home_focus_needs_default = true;
+        }
         /* After the input, before the draw: a key or a tap is what changes the screen, and the
            screen that just appeared has to be served before its own first frame is drawn. */
         SyncInstallerServer();
@@ -1897,9 +1886,8 @@ void App::AddChromeActions(int surface_width, int surface_height) {
             RefreshStorageRow(surface_width);
         }
         const ui::StorageBarsLayout &layout = m_storage_row;
-        /* SD first: the pair reads in the order L / R moves through it.  Not focus targets: they
-           have their own keys, and the badge rule in ui/action.hpp says a control with a key does
-           not also take the focus ring. */
+        /* SD first: the pair reads in the order L / R moves through it.  They have their own
+           keys and are not generic spatial-focus targets. */
         m_actions.push_back({kActionInstallTargetSd, layout.panel[0], true, false});
         m_actions.push_back({kActionInstallTargetNand, layout.panel[1], true, false});
         return;
@@ -2259,26 +2247,6 @@ void DrawKeyBadge(Surface surface, Font &font, int cx, int cy, int radius, const
     font.DrawBold(surface, cx - width / 2, cy - kFontBody / 2 - 1, kFontBody, text, key);
 }
 
-/* Busy indicator: eight dots in a ring, the brightest one walking around, drawn where the key
-   badge would be so the button's layout does not move while a check is in flight.  Alpha is
-   blended by the drawing layer, so it reads as a spinner on any button face colour. */
-void DrawSpinner(Surface surface, int cx, int cy, int radius, Color color) {
-    constexpr int kDots = 8;
-    constexpr double kTwoPi = 6.283185307179586;
-    /* One dot step every 1/8 s, so a revolution takes about a second; the phase comes from the
-       clock rather than the frame count, so the speed does not depend on the frame rate. */
-    const u64 ticks = armGetSystemTick();
-    const u64 phase = (ticks / (armGetSystemTickFreq() / 8)) % kDots;
-    for (int i = 0; i < kDots; ++i) {
-        const int step = (static_cast<int>(phase) + i) % kDots;
-        const double angle = (kTwoPi * step) / kDots - kTwoPi / 4;
-        const int x = cx + static_cast<int>(radius * std::cos(angle));
-        const int y = cy + static_cast<int>(radius * std::sin(angle));
-        const u8 alpha = static_cast<u8>(40 + (215 * (kDots - i)) / kDots);
-        FillRoundedRect(surface, x - 3, y - 3, 7, 7, 3, Color{color.r, color.g, color.b, alpha});
-    }
-}
-
 /* The attention mark of the home warning strip: a filled triangle with an exclamation mark
    knocked out of it.  The drawing layer has no polygon primitive, so the triangle is painted one
    scanline at a time.  `size` is its height and the base is a fifth wider -- an equilateral
@@ -2362,8 +2330,52 @@ void App::BuildHomeActions(int width, int height) {
                          !forwarder_remove_blocked});
 }
 
+void App::MoveHomeFocus(int direction) {
+    if (m_page != Page::Home) {
+        return;
+    }
+    std::vector<Action> focus_actions;
+    for (const Action &action : m_actions) {
+        if (IsHomeFocusAction(action.id)) {
+            focus_actions.push_back(action);
+        }
+    }
+    if (m_focus < 0) {
+        m_focus = acnh_manager::ui::DefaultHomeFocus(focus_actions, kActionPrimary);
+        return;
+    }
+    const int next =
+        acnh_manager::ui::MoveHomeFocus(focus_actions, m_focus, direction, kActionPrimary);
+    if (next >= 0) {
+        m_focus = next;
+    }
+}
+
+void App::NormalizeHomeFocus() {
+    if (m_page != Page::Home) {
+        return;
+    }
+    std::vector<Action> focus_actions;
+    for (const Action &action : m_actions) {
+        if (IsHomeFocusAction(action.id)) {
+            focus_actions.push_back(action);
+        }
+    }
+    for (const Action &action : focus_actions) {
+        if (action.id == m_focus && action.enabled) {
+            return;
+        }
+    }
+    m_focus = acnh_manager::ui::DefaultHomeFocus(focus_actions, kActionPrimary);
+}
+
 void App::RenderHome(Surface surface) {
     BuildHomeActions(surface.width, surface.height);
+    if (m_home_focus_needs_default) {
+        m_focus = -1;
+        m_home_focus_needs_default = false;
+    }
+    NormalizeHomeFocus();
     /* Colour carries the state: teal = ready to act, green = fine, amber = needs attention,
        red = something failed. */
     Color dot = kHeader;
@@ -2493,7 +2505,7 @@ void App::RenderHome(Surface surface) {
                     m_report.legacy_cheat_path);
     }
 
-    /* Buttons, with their key badge and the focus ring. */
+    /* The focused button is filled and carries the only key badge on the page. */
     const Action *primary = nullptr;
     const Action *check = nullptr;
     const Action *uninstall = nullptr;
@@ -2505,41 +2517,38 @@ void App::RenderHome(Surface surface) {
         if (action.id == kActionForwarder) forwarder = &action;
     }
 
-    auto block = [&](const Action *action, const char *label, const std::string &sub,
-                     const char *key, bool filled, bool busy = false) {
+    auto block = [&](const Action *action, const char *label, const std::string &sub) {
         if (action == nullptr) {
             return;
         }
-        const Color face = !action->enabled ? kCardDisabled : (filled ? kHeader : kCard);
-        const Color border = action->enabled ? (filled ? kHeader : kBorder) : kBorder;
-        const Color text = !action->enabled ? kSubtle : (filled ? kOnHeader : kText);
-        const int thickness = m_focus == action->id ? 6 : 3;
+        const bool focused = action->id == m_focus;
+        const Color face =
+            !action->enabled ? kCardDisabled : (focused ? kHeader : kCard);
+        const Color border = action->enabled ? (focused ? kHeader : kBorder) : kBorder;
+        const Color text = !action->enabled ? kSubtle : (focused ? kOnHeader : kText);
+        constexpr int thickness = 3;
         FillRoundedRect(surface, action->rect.x, action->rect.y, action->rect.w, action->rect.h,
                         18, border);
         FillRoundedRect(surface, action->rect.x + thickness, action->rect.y + thickness,
                         action->rect.w - thickness * 2, action->rect.h - thickness * 2, 18 - thickness,
                         face);
-        /* The key badge is about the physical button, not about the state: it keeps the app's
-           accent colour so a state change (purple/orange/red) never repaints it.  Only a
-           disabled control greys its badge out, because then the key really does nothing.  While
-           a check is in flight the same slot carries the spinner, so the button proves it is
-           working and its layout does not move. */
-        if (busy) {
-            DrawSpinner(surface, action->rect.x + 46, action->rect.y + action->rect.h / 2, 13,
-                        filled ? kOnHeader : kHeader);
-        } else {
-            DrawKeyBadge(surface, m_font, action->rect.x + 46, action->rect.y + action->rect.h / 2,
-                         22, key,
-                         !action->enabled ? kBorder : (filled ? kOnHeader : kHeader),
-                         !action->enabled ? kSubtle : (filled ? kHeader : kOnHeader));
+        if (focused) {
+            DrawKeyBadge(surface, m_font, action->rect.x + 46,
+                         action->rect.y + action->rect.h / 2, 22, "A",
+                         focused ? kOnHeader : kHeader,
+                         focused ? kHeader : kOnHeader);
         }
-        const int label_width = m_font.Measure(label, kFontHeading + 8);
+        constexpr int kButtonLabelSize = kFontHeading + 8;
+        const int label_width = m_font.Measure(label, kButtonLabelSize);
         const int centre = action->rect.x + action->rect.w / 2;
-        m_font.Draw(surface, centre - label_width / 2,
-                    action->rect.y + action->rect.h / 2 - 40, kFontHeading + 8, text, label);
+        const int label_line = m_font.LineHeight(kButtonLabelSize);
+        const int sub_line = m_font.LineHeight(kFontSmall);
+        const int text_top =
+            action->rect.y + (action->rect.h - label_line - sub_line) / 2 + kLabelOpticalBias;
+        m_font.Draw(surface, centre - label_width / 2, text_top, kButtonLabelSize, text, label);
         const int sub_width = m_font.Measure(sub, kFontSmall);
-        m_font.Draw(surface, centre - sub_width / 2, action->rect.y + action->rect.h / 2 + 8,
-                    kFontSmall, filled && action->enabled ? kOnHeader : kSubtle, sub);
+        m_font.Draw(surface, centre - sub_width / 2, text_top + label_line,
+                    kFontSmall, focused && action->enabled ? kOnHeader : kSubtle, sub);
     };
 
     /* One switch per line instead of nesting: the button has to match the state, and the state
@@ -2584,12 +2593,10 @@ void App::RenderHome(Surface surface) {
             ? i18n::Format(i18n::StringId::BtnUpdate, NewerAgentVersion().c_str())
             : std::string(Tr(label_id));
     const std::string primary_sub = Tr(sub_id);
-    block(primary, primary_label.c_str(), primary_sub, "A", true);
-    block(check, Tr(i18n::StringId::BtnCheckUpdate), UpdateSubtitle(), "X", false,
-          m_update_running);
+    block(primary, primary_label.c_str(), primary_sub);
+    block(check, Tr(i18n::StringId::BtnCheckUpdate), UpdateSubtitle());
     if (uninstall != nullptr) {
-        block(uninstall, Tr(i18n::StringId::BtnUninstall), Tr(i18n::StringId::SubUninstall), "Y",
-              false);
+        block(uninstall, Tr(i18n::StringId::BtnUninstall), Tr(i18n::StringId::SubUninstall));
     }
     const bool forwarder_remove_blocked = ForwarderRemovalBlocked(
         m_forwarder_installed, m_report.applet_type == AppletType_Application);
@@ -2599,8 +2606,7 @@ void App::RenderHome(Surface surface) {
           Tr(forwarder_remove_blocked ? i18n::StringId::SubForwarderRemoveBlocked
                                       : (m_forwarder_installed
                                              ? i18n::StringId::SubForwarderRemove
-                                             : i18n::StringId::SubForwarderInstall)),
-          "ZR", false);
+                                             : i18n::StringId::SubForwarderInstall)));
     if (m_trace_frames > 0) {
         Trace("home: rendered kind=%d actions=%zu focus=%d", static_cast<int>(m_home_kind),
               m_actions.size(), m_focus);

@@ -6,6 +6,10 @@
    primary button), so it is testable without a console.  The app fills the inputs from the
    environment report, the gate verdict, the install plan and the update check. */
 
+#include <vector>
+
+#include "ui/action.hpp"
+
 namespace acnh_manager::ui {
 
 enum class HomeKind {
@@ -64,6 +68,57 @@ inline HomeKind Classify(const HomeInputs &in) {
    from album/applet mode. */
 inline bool ForwarderRemovalBlocked(bool installed, bool application_mode) {
     return installed && application_mode;
+}
+
+/* Home always has one focused button.  Its controls are a wide primary button, an optional pair
+   in one row, then a wide shortcut button; spatial movement cannot visit both members of that
+   pair reliably, so Up/Down cycle the vector's visual order instead. */
+inline int MoveHomeFocus(const std::vector<Action> &actions, int current, int direction,
+                         int anchor_id) {
+    if (actions.empty() || direction == 0) {
+        return -1;
+    }
+    int start = -1;
+    if (current >= 0) {
+        for (std::size_t i = 0; i < actions.size(); ++i) {
+            if (actions[i].id == current) {
+                start = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+    if (start < 0) {
+        for (std::size_t i = 0; i < actions.size(); ++i) {
+            if (actions[i].id == anchor_id) {
+                start = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+    if (start < 0) {
+        return -1;
+    }
+    const int step = direction > 0 ? 1 : -1;
+    const int count = static_cast<int>(actions.size());
+    for (int offset = 1; offset <= count; ++offset) {
+        const int raw = start + step * offset;
+        const int index = ((raw % count) + count) % count;
+        if (actions[static_cast<std::size_t>(index)].enabled) {
+            return actions[static_cast<std::size_t>(index)].id;
+        }
+    }
+    return -1;
+}
+
+/* The primary action is Home's initial focus when it is enabled.  If it is disabled (for
+   example, "already up to date"), start on the next enabled control instead. */
+inline int DefaultHomeFocus(const std::vector<Action> &actions, int anchor_id) {
+    for (const Action &action : actions) {
+        if (action.id == anchor_id && action.enabled) {
+            return action.id;
+        }
+    }
+    return MoveHomeFocus(actions, -1, +1, anchor_id);
 }
 
 }  // namespace acnh_manager::ui

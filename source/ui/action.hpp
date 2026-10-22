@@ -28,9 +28,9 @@ struct Action {
     int id{-1};
     Rect rect{};
     bool enabled{true};
-    /* Controls that already have a dedicated key (A/X/Y/L/R/B) are not focus targets: the key
-       badge already says everything about them, so a focus ring on them is noise.  Only
-       controls without their own key can be focused (today: the details page's language row). */
+    /* Generic spatial focus skips controls that already have a dedicated key (A/X/Y/L/R/B).
+       The home screen uses its own linear focus mode instead, because its wide and half-width
+       buttons do not form a clean spatial grid. */
     bool focusable{false};
 };
 

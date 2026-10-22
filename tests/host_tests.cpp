@@ -1729,8 +1729,8 @@ void TestActions() {
     /* The home screen from the design: a wide primary button plus two half-width ones. */
     const std::vector<Action> home = {
         {0, Rect{120, 270, 1040, 144}, true},  /* A: primary */
-        {1, Rect{120, 450, 508, 110}, true},   /* X: check for updates */
-        {2, Rect{652, 450, 508, 110}, true},   /* Y: uninstall */
+        {1, Rect{120, 450, 508, 110}, true},   /* check for updates */
+        {2, Rect{652, 450, 508, 110}, true},   /* uninstall */
     };
 
     /* Hit-testing: inside, on the border (top-left counts, bottom-right does not), outside. */
@@ -2613,10 +2613,14 @@ void TestMetaTypeCarriesGameVersion() {
 /* Home-screen state: the eight states and their priority.  Getting the order wrong would
    show "install" to someone whose game is not even installed, so it is pinned here. */
 void TestHomeState() {
+    using acnh_manager::ui::Action;
     using acnh_manager::ui::Classify;
+    using acnh_manager::ui::DefaultHomeFocus;
     using acnh_manager::ui::ForwarderRemovalBlocked;
     using acnh_manager::ui::HomeInputs;
     using acnh_manager::ui::HomeKind;
+    using acnh_manager::ui::MoveHomeFocus;
+    using acnh_manager::ui::Rect;
 
     HomeInputs ready; /* the healthy baseline: game found, supported, installed, current */
     ready.game_found = true;
@@ -2679,6 +2683,37 @@ void TestHomeState() {
     CHECK(!ForwarderRemovalBlocked(false, true));
     CHECK(!ForwarderRemovalBlocked(true, false));
     CHECK(ForwarderRemovalBlocked(true, true));
+
+    /* Home opens with focus on the primary button and then uses a linear visual cycle rather than
+       the spatial walk used by ordinary pages. */
+    const std::vector<Action> home_focus = {
+        {0, Rect{40, 260, 1200, 144}, true},
+        {1, Rect{40, 440, 590, 110}, true},
+        {2, Rect{650, 440, 590, 110}, true},
+        {30, Rect{40, 590, 1200, 110}, true},
+    };
+    CHECK(DefaultHomeFocus(home_focus, 0) == 0);
+    CHECK(MoveHomeFocus(home_focus, 0, +1, 0) == 1);
+    CHECK(MoveHomeFocus(home_focus, 0, -1, 0) == 30);
+    CHECK(MoveHomeFocus(home_focus, 1, +1, 0) == 2);
+    CHECK(MoveHomeFocus(home_focus, 30, +1, 0) == 0);
+    CHECK(MoveHomeFocus(home_focus, 2, -1, 0) == 1);
+
+    /* Missing and disabled controls never become focus stops. */
+    std::vector<Action> without_uninstall = {home_focus[0], home_focus[1], home_focus[3]};
+    CHECK(MoveHomeFocus(without_uninstall, 1, +1, 0) == 30);
+    CHECK(MoveHomeFocus(without_uninstall, 30, -1, 0) == 1);
+
+    std::vector<Action> blocked_forwarder = home_focus;
+    blocked_forwarder[3].enabled = false;
+    CHECK(MoveHomeFocus(blocked_forwarder, 0, -1, 0) == 2);
+    CHECK(MoveHomeFocus(blocked_forwarder, 2, +1, 0) == 0);
+
+    std::vector<Action> disabled_primary = home_focus;
+    disabled_primary[0].enabled = false;
+    CHECK(DefaultHomeFocus(disabled_primary, 0) == 1);
+    CHECK(MoveHomeFocus(disabled_primary, 30, +1, 0) == 1);
+    CHECK(MoveHomeFocus(disabled_primary, 1, -1, 0) == 30);
 }
 
 /* The tables inside one compressed content of an NSZ / XCZ (install/ncz.hpp).  The shape and the
