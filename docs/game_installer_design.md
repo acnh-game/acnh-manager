@@ -1,8 +1,12 @@
 # 通用游戏安装器与 agent 管理器(2.0.0)
 
+> 术语：用户界面与产品文案使用 **动森 Game Agent** / **Game Agent**；本文和代码里的 `agent`、`acnh-agent`、
+> `agent-manifest.json` 等写法保留为现有实现、协议和文件标识，不作为玩家可见名称。
+
 ## 1. 定位与范围
 
-**新定位**:ACNH-Manager 从"agent 安装器"扩展为"**Switch 主机的通用安装器 + agent 管理器**"。
+**新定位**:ACNH-Manager 从"Game Agent 安装器"扩展为
+"**Switch 主机的通用安装器 + Game Agent 管理器**"。
 安装器支持任天堂官方包与官方包的各种封装形式(**NSP / NSZ / XCI / XCZ**),**来源由用户提供**,
 我们**不再托管任何游戏内容,也不在清单里放任何下载地址**。
 

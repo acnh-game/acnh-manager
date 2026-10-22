@@ -1,8 +1,9 @@
 # ACNH-Manager
 
-Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Horizons 的 agent 管理器**。
+Switch 上的自制应用(NRO):**通用游戏安装器 + 动森 Game Agent 管理器**。
 安装包由用户自己提供——从 SD 卡选本机文件、给一个下载网址,或用手机/电脑浏览器直接上传;
-支持 NSP / NSZ / XCI / XCZ,可装游戏本体、更新包与追加内容,装完还能一键管理 `acnh-agent`。
+支持 NSP / NSZ / XCI / XCZ,可装游戏本体、更新包与追加内容,装完还能一键管理动森 Game Agent
+(当前实现为 `acnh-agent`)。
 
 本工具**不提供、也不托管任何游戏内容**。
 
@@ -10,11 +11,11 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Ho
 
 - **安装器**:NSP / NSZ / XCI / XCZ;游戏本体、更新包、追加内容。一个文件里带多份 meta 的整合包
   会逐份安装。`.msp`(mod 包)明确不支持,请用支持它的工具安装。
-- **acnh-agent**:**仅支持 Animal Crossing: New Horizons 3.0.3**(title id `01006F8002326000`,
-  标题版本 `2228224`)。其他游戏的安装包照样能装,只是不会涉及 agent;动森其他版本的包会明确
-  提示"agent 不支持此版本",不会给出误导性的提示。
+- **动森 Game Agent**(当前实现为 `acnh-agent`):**仅支持 Animal Crossing: New Horizons 3.0.3**
+  (title id `01006F8002326000`,标题版本 `2228224`)。其他游戏的安装包照样能装,只是不会涉及
+  动森 Game Agent;动森其他版本的包会明确提示"动森 Game Agent 不支持此版本",不会给出误导性的提示。
 - 游戏内容由用户自备:本应用不下载、不内置、不分发任何游戏或更新文件。
-- 名字里的 `nh` = Nintendo Homebrew,是本项目线的家族前缀;覆盖全部动森作品,但 agent 当前只有
+- 名字里的 `nh` = Nintendo Homebrew,是本项目线的家族前缀;覆盖全部动森作品,但动森 Game Agent 当前只有
   上面这一个受支持的构建。
 - 界面支持简体中文与 English。
 - 首次启动没有已保存设置时按主机系统语言选择界面:中文系统使用简体中文,其他语言使用 English;
@@ -50,14 +51,14 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Ho
 - **手机页面是主机的镜像**:同一份进度、同一张封面、同样的「开始安装 / 返回」、存储切换与页脚
   构建戳;开始与返回都通过带 `runId` 的接口在主机上执行同一动作。页面不提供取消,与主机一致。
 
-### 管理 agent
+### 管理动森 Game Agent
 
 1. 识别控制台上实际装的是哪个构建:读应用版本(`ns`)与更新包的 Program 内容 id(`ncm`),再用
    `(title id, 版本号, 内容 id)` 在发布清单 `games[]` 中选中对应条目;游戏恰好在运行时还会用
    `dmnt:cht` 读 `main` 的 ModuleId 做字节级复核。
 2. 校验并写入 `atmosphere/contents/01006F8002326000/exefs/{subsdk9, main.npdm, acnh-agent.version}`,
    记录安装状态;支持一键卸载回滚。
-3. **自动跟随安装**:装完本体或更新、且最终版本受支持(3.0.3)时,自动把 agent 一并装上;
+3. **自动跟随安装**:装完本体或更新、且最终版本受支持(3.0.3)时,自动把动森 Game Agent 一并装上;
    追加内容、数据补丁与不受支持的版本都不触发,已装则跳过。
 4. **离线可用**:发布清单与 payload 内嵌在 NRO 里;启动时静默检查一次更新,首页也可把焦点移到「检查更新」后按 `A` 手动检查。
    远端版本更高时直接给出"更新到 X";下载由清单签名的公钥背书(App 内嵌公钥,ECDSA P-256),
@@ -90,7 +91,7 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + Animal Crossing: New Ho
 ## 已知边界(明确不做)
 
 - 不卸载游戏或更新包,不修改存档;不管理 cheat 文件,只检测冲突并提示路径。
-- 安装 agent 时,若目标目录已有非本应用写入的同名 `subsdk9` / `main.npdm`,会**直接覆盖**,
+- 安装动森 Game Agent 时,若目标目录已有非本应用写入的同名 `subsdk9` / `main.npdm`,会**直接覆盖**,
   不弹覆盖确认,也不保留用户可见的旧文件备份。
 - 一次只装一个文件;主机与页面都不提供主动取消。异常中断可续传,但收尾阶段不可取消。
 - **不读取 `prod.keys` / `title.keys`**:需要密钥的转换(转公共票、转标准 crypto、降低 master key)

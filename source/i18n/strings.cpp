@@ -47,7 +47,7 @@ constexpr Entry kStrings[] = {
     {"这个版本没有带安装包，请更新应用后重试", "This build has no installer bundled; update the app and try again"},  /* ResultNoManifest */
     {"联网检查", "Update check"},  /* LabelUpdateCheck */
     {"(未检查)", "(not checked)"},  /* ValueNotChecked */
-    {"清单可用，agent %s", "manifest ok, agent %s"},  /* UpdateCheckOk */
+    {"清单可用，动森 Game Agent %s", "manifest ok, Game Agent %s"},  /* UpdateCheckOk */
     {"失败: %s", "failed: %s"},  /* UpdateCheckFailed */
     {"正在检查…", "Checking…"},  /* SubUpdateChecking */
     {"已是最新 %s", "up to date: %s"},  /* SubUpdateUpToDate */
@@ -57,8 +57,8 @@ constexpr Entry kStrings[] = {
     /* A release host that moved on without this console's game build: nothing to install, and
        the reason is not "you are up to date". */
     {"新版 %s 不支持当前游戏版本", "new %s does not support this game version"},  /* SubUpdateNewerUnsupported */
-    {"正在安装 agent", "Installing the agent"},  /* ProgressInstalling */
-    {"正在卸载 agent", "Removing the agent"},  /* ProgressUninstalling */
+    {"正在安装动森 Game Agent", "Installing Game Agent"},  /* ProgressInstalling */
+    {"正在卸载动森 Game Agent", "Removing Game Agent"},  /* ProgressUninstalling */
     {"请不要关机,也不要退出应用", "Do not power off or leave the app"},  /* ProgressNote */
     {"当前文件", "Current file"},  /* LabelProgressFile */
     {"聊天码是什么?", "What is a chat code?"},  /* GuideTitle */
@@ -76,7 +76,7 @@ constexpr Entry kStrings[] = {
     {"清单不可用", "manifest is unusable"},  /* UpdateShortManifest */
     {"应用内部错误", "internal error"},  /* UpdateShortInternal */
     {"随应用自带", "bundled with the app"},  /* ValueEmbeddedManifest */
-    {"从发布端下载(agent %s)", "downloaded (agent %s)"},  /* ValueNetworkManifest */
+    {"从发布端下载(动森 Game Agent %s)", "downloaded (Game Agent %s)"},  /* ValueNetworkManifest */
     /* The version on the card, plus what this build of the app carries when the two differ. */
     {"%s(随应用自带 %s)", "%s (bundled %s)"},  /* ValueAgentCarried */
     {"%s(本应用支持 %s)", "%s (this build supports %s)"},  /* ValueGameVersionSupported */
@@ -99,26 +99,26 @@ constexpr Entry kStrings[] = {
     {"没有找到《集合啦!动物森友会》", "Animal Crossing: New Horizons was not found"},  /* StateGameMissing */
     {"不支持当前安装的游戏版本", "The installed game version is not supported"},  /* StateUnsupported */
     {"上次安装失败", "The last install failed"},  /* StateFailed */
-    {"现在安装的 agent 不是当前发布版本", "The installed agent is not the current release"},  /* StateRepair */
+    {"现在安装的动森 Game Agent 不是当前发布版本", "The installed Game Agent is not the current release"},  /* StateRepair */
     {"已安装的文件不完整", "The installed files are incomplete"},  /* StateIncomplete */
-    {"还没有安装 agent", "The agent is not installed yet"},  /* StateNotInstalled */
-    {"agent 已安装 · 有新版本", "The agent is installed - a newer version exists"},  /* StateUpdateAvailable */
-    {"agent 已安装，可以使用", "The agent is installed and ready"},  /* StateInstalled */
+    {"还没有安装动森 Game Agent", "Game Agent is not installed yet"},  /* StateNotInstalled */
+    {"动森 Game Agent 已安装 · 有新版本", "Game Agent is installed - a newer version exists"},  /* StateUpdateAvailable */
+    {"动森 Game Agent 已安装，可以使用", "Game Agent is installed and ready"},  /* StateInstalled */
     {"没有检测到游戏本体 · 可用本应用安装一份", "No base game found - this app can install one"},  /* StateGameMissingSub */
     {"本应用目前无法处理这个版本", "This build cannot handle the installed version"},  /* StateUnsupportedSub */
-    {"游戏 %s · agent %s", "Game %s - agent %s"},  /* HomeVersions */
+    {"游戏 %s · 动森 Game Agent %s", "Game %s - Game Agent %s"},  /* HomeVersions */
     {"游戏 %s · 本应用支持 %s", "Game %s - this build supports %s"},  /* HomeVersionsUnsupported */
-    {"游戏 %s · 可安装 agent %s", "Game %s - agent %s ready to install"},  /* HomeVersionsAvailable */
-    {"游戏 %s · agent %s → %s", "Game %s - agent %s -> %s"},  /* HomeVersionsUpdate */
+    {"游戏 %s · 可安装动森 Game Agent %s", "Game %s - Game Agent %s ready to install"},  /* HomeVersionsAvailable */
+    {"游戏 %s · 动森 Game Agent %s → %s", "Game %s - Game Agent %s -> %s"},  /* HomeVersionsUpdate */
     {"未安装", "not installed"},  /* ValueNotInstalled */
-    {"安装 agent", "Install the agent"},  /* BtnInstall */
+    {"安装动森 Game Agent", "Install Game Agent"},  /* BtnInstall */
     {"更新到 %s", "Update to %s"},  /* BtnUpdate */
     {"已是最新", "Already up to date"},  /* BtnUpToDate */
     {"重新安装", "Install again"},  /* BtnRepair */
     {"重试", "Try again"},  /* BtnRetry */
     {"安装游戏", "Install the game"},  /* BtnInstallGame */
     {"检查更新", "Check for updates"},  /* BtnCheckUpdate */
-    {"卸载 agent", "Remove the agent"},  /* BtnUninstall */
+    {"卸载动森 Game Agent", "Remove Game Agent"},  /* BtnUninstall */
     {"安装桌面快捷方式", "Add HOME Menu shortcut"},  /* BtnForwarderInstall */
     {"删除桌面快捷方式", "Remove HOME Menu shortcut"},  /* BtnForwarderRemove */
     {"内置的桌面快捷方式不可用", "The built-in HOME Menu shortcut is unavailable"},  /* InstallForwarderUnavailable */
@@ -126,17 +126,17 @@ constexpr Entry kStrings[] = {
     {"当前 %s · 最新 %s", "current %s - latest %s"},  /* SubRepair */
     {"再试一次，失败原因在详情里", "Tries once more; the reason is in Details"},  /* SubRetry */
     {"已经装好了，不需要操作", "Nothing to do"},  /* SubUpToDate */
-    {"查看有没有更高版本的 agent", "Checks whether a newer agent exists"},  /* SubCheckUpdate */
+    {"查看有没有更高版本的动森 Game Agent", "Checks whether a newer Game Agent exists"},  /* SubCheckUpdate */
     {"装一份游戏本体", "Install a base game"},  /* SubInstallGame */
     {"删除已安装的文件", "Deletes the installed files"},  /* SubUninstall */
     {"装好后可从桌面直接启动", "Launch directly from the HOME Menu"},  /* SubForwarderInstall */
     {"删除桌面上的快捷方式", "Remove the HOME Menu shortcut"},  /* SubForwarderRemove */
     {"请先退出，从相册重新打开后再删除", "Exit, then reopen from the album to remove it"},  /* SubForwarderRemoveBlocked */
     {"请先在主页关闭快捷方式，再重新打开本程序", "Close the HOME Menu shortcut, then reopen this app"},  /* SubForwarderProcessRunning */
-    {"动森增强 Mod(agent) 管理器", "Manager for the Animal Crossing agent"},  /* HeadSubtitle */
+    {"动森 Game Agent 管理器", "Game Agent manager"},  /* HeadSubtitle */
     {"暂不可用", "Not available"},  /* BtnUnavailable */
     {"高级", "Advanced"},  /* SectionAdvanced */
-    {"agent 版本", "Agent version"},  /* LabelEmbeddedAgent */
+    {"动森 Game Agent 版本", "Game Agent version"},  /* LabelEmbeddedAgent */
     {"安装记录", "Install record"},  /* LabelInstallRecord */
     {"日志", "Log file"},  /* LabelLogPath */
     {"%d 个文件，已逐个校验", "%d files, each one verified"},  /* ValueInstallRecord */
@@ -147,7 +147,7 @@ constexpr Entry kStrings[] = {
     {"相册(小程序)模式", "Album (applet) mode"},  /* AppletModeLibrary */
     {"装好后重启游戏即可使用聊天码", "Restart the game afterwards to use chat codes"},  /* ConfirmInstallNote */
     {"卸载后游戏恢复原样，随时可以再装", "The game goes back to normal; you can install again anytime"},  /* ConfirmUninstallNote */
-    {"将安装 agent %s", "Installs agent %s"},  /* ConfirmWillInstall */
+    {"将安装动森 Game Agent %s", "Installs Game Agent %s"},  /* ConfirmWillInstall */
     {"开始安装", "Install now"},  /* ConfirmStart */
     {"删除文件", "Delete the files"},  /* ConfirmRemove */
     {"完成", "Done"},  /* Done */
@@ -198,7 +198,7 @@ constexpr Entry kStrings[] = {
     {"类型", "Type"},  /* ConfirmType */
     {"大小", "Size"},  /* ConfirmSize */
     {"目标存储", "Install to"},  /* ConfirmTarget */
-    {"装好后会自动安装 agent", "The agent is installed automatically afterwards"},  /* ConfirmAgentNote */
+    {"装好后会自动安装动森 Game Agent", "Game Agent is installed automatically afterwards"},  /* ConfirmAgentNote */
     {"本体", "Base game"},  /* TypeBase */
     {"更新", "Update"},  /* TypeUpdate */
     {"追加内容", "Add-on"},  /* TypeDlc */
@@ -211,12 +211,12 @@ constexpr Entry kStrings[] = {
     {"已安装,跳过", "Already installed - skipped"},  /* ResultSkippedInstalled */
     {"已有更高版本,已跳过", "A newer version is installed - skipped"},  /* ResultSkippedNewer */
     {"安装失败", "Install failed"},  /* ResultFailed */
-    {"可以安装 agent 了(首页按 A)", "The agent can be installed now (press A on the home screen)"},  /* ResultAgentReady */
+    {"可以安装动森 Game Agent 了(首页按 A)", "Game Agent can be installed now (press A on the home screen)"},  /* ResultAgentReady */
     {"--.--", "--.--"},  /* StorageUnavailable */
     {"microSD", "microSD"},  /* StorageSdCard */
     {"系统", "System"},  /* StorageSystem */
     {"安装游戏更新", "Install the game update"},  /* HomeInstallUpdate */
-    {"升级完会自动安装 agent", "The agent is installed automatically once it is updated"},  /* HomeInstallUpdateSub */
+    {"升级完会自动安装动森 Game Agent", "Game Agent is installed automatically once it is updated"},  /* HomeInstallUpdateSub */
     {"上一级", "Up one level"},  /* InstallUpOneLevel */
     {"目录", "Directory"},  /* InstallDirectory */
     {"安装包", "Package"},  /* InstallPackage */
@@ -224,21 +224,21 @@ constexpr Entry kStrings[] = {
     {"这个目录里没有可安装的文件", "No installable file in this directory"},  /* InstallNoFiles */
     {"这个文件不是可安装的安装包(nsp / nsz / xci / xcz)", "This file is not an install package (nsp / nsz / xci / xcz)"},  /* InstallNotAPackage */
     {"这个包里没有可安装的内容", "This package has no installable content"},  /* InstallNoContent */
-    {"agent 不支持此版本(游戏/更新): 支持版本为: %s", "The agent does not support this version (game/update) - supported versions: %s"},  /* InstallAgentUnsupported */
+    {"动森 Game Agent 不支持此版本(游戏/更新): 支持版本为: %s", "Game Agent does not support this version (game/update) - supported versions: %s"},  /* InstallAgentUnsupported */
     {"已写入 %s · %d 个内容 · %s", "Written to %s - %d contents, %s"},  /* ResultWroteLine */
     {"机器上已经有这个版本,没有改动", "This version is already installed; nothing changed"},  /* ResultSameVersionDetail */
     {"机器上已经有更新的版本(%s),没有改动", "A newer version (%s) is already installed; nothing changed"},  /* ResultNewerVersionDetail */
 
     {"传输进行中,请不要离开本页面", "Transfer in progress - please stay on this screen"},  /* ProgressDoNotInterrupt */
     {"机器上已经有更新的版本,没有改动", "A newer version is already installed; nothing changed"},  /* ResultNewerVersionPlain */
-    {"agent 已经装好了", "The agent is already installed"},  /* ResultAgentAlreadyInstalled */
+    {"动森 Game Agent 已经装好了", "Game Agent is already installed"},  /* ResultAgentAlreadyInstalled */
     {"L / R 切换页面", "L / R switch pages"},  /* FooterPagesHint */
     {"版本 %s", "version %s"},  /* FooterVersion */
 
     /* The step that follows a game install (the player asked for the game, the agent is what makes
        it useful): what it wrote, and the one case where it wrote nothing. */
-    {"agent 已一并安装", "The agent was installed as well"},  /* ResultAgentFollowUpInstalled */
-    {"agent 这次没能装上:回首页可以重新安装", "The agent was not installed this time - install it again from the home screen"},  /* ResultAgentFollowUpFailed */
+    {"动森 Game Agent 已一并安装", "Game Agent was installed as well"},  /* ResultAgentFollowUpInstalled */
+    {"动森 Game Agent 这次没能装上:回首页可以重新安装", "Game Agent was not installed this time - install it again from the home screen"},  /* ResultAgentFollowUpFailed */
     /* "<type> xN": one piece of a dump that carries more than one meta ("更新 ×1 · 追加内容 ×2").
        The word order works in both languages because the count follows the type. */
     {"%s ×%d", "%s x%d"},  /* MetaCount */
@@ -283,7 +283,7 @@ constexpr Entry kStrings[] = {
     {"Switch 主机已离线(可能已经离开安装界面)", "The console is offline (it may have left the install screen)"},  /* PageOffline */
     {"本页由 Switch 主机直接提供,「上传安装」全程不需要互联网。", "The console serves this page itself; uploading needs no internet connection."},  /* PageNoteNoInternet */
     {"Switch 主机屏幕上会同步显示同一份进度。", "The same progress is shown on the console's own screen."},  /* PageNoteHostScreen */
-    {"回到 Switch 主机即可安装 agent", "Back on the console, the agent can be installed"},  /* PageAgentReady */
+    {"回到 Switch 主机即可安装动森 Game Agent", "Back on the console, Game Agent can be installed"},  /* PageAgentReady */
     {"%d 个内容 · %s → %s", "%d contents · %s → %s"},  /* PageWrittenLine */
     /* The browser's own upload loop (the page's JavaScript). */
     {"正在把文件交给 Switch 主机……", "Handing the file to the console…"},  /* PageUploadStarting */
