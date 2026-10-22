@@ -1,5 +1,6 @@
 #include "app.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <algorithm>
 #include <initializer_list>
@@ -112,6 +113,124 @@ constexpr Color kCardDisabled{0xF0, 0xEC, 0xE0, 0xFF};
    the action button and from the green/orange/red of the other states. */
 constexpr Color kUninstalled{0x8A, 0x62, 0xD4, 0xFF};
 
+void SetResultError(const char *what, Result rc, std::string *error) {
+    if (error != nullptr) {
+        char text[112];
+        std::snprintf(text, sizeof(text), "%s (0x%08x)", what, static_cast<unsigned>(rc));
+        *error = text;
+    }
+}
+
+/* Custom forwarder records are valid enough for NCM and the HOME Menu, but nsDeleteApplication-
+   Completely rejects them on some consoles.  Sphaira's deletion path removes the same record in
+   NCM's own order: contents, meta key, then the NS application entity. */
+bool DeleteApplicationRecordViaNcm(std::uint64_t title_id, std::string *error) {
+    NsApplicationContentMetaStatus statuses[16]{};
+    s32 status_count = 0;
+    Result rc = nsListApplicationContentMetaStatus(title_id, 0, statuses, 16, &status_count);
+    if (R_FAILED(rc)) {
+        SetResultError("listing application meta failed", rc, error);
+        return false;
+    }
+
+    bool ok = true;
+    for (s32 i = 0; i < status_count && ok; ++i) {
+        const NsApplicationContentMetaStatus &status = statuses[i];
+        if (status.storageID != NcmStorageId_SdCard &&
+            status.storageID != NcmStorageId_BuiltInUser) {
+            continue;
+        }
+
+        NcmContentStorage storage{};
+        rc = ncmOpenContentStorage(&storage, static_cast<NcmStorageId>(status.storageID));
+        if (R_FAILED(rc)) {
+            SetResultError("opening content storage failed", rc, error);
+            ok = false;
+            break;
+        }
+        NcmContentMetaDatabase db{};
+        rc = ncmOpenContentMetaDatabase(&db, static_cast<NcmStorageId>(status.storageID));
+        if (R_FAILED(rc)) {
+            ncmContentStorageClose(&storage);
+            SetResultError("opening content meta database failed", rc, error);
+            ok = false;
+            break;
+        }
+
+        NcmContentMetaKey key{};
+        s32 total = 0;
+        s32 written = 0;
+        const std::uint64_t app_id = status.application_id;
+        rc = ncmContentMetaDatabaseList(
+            &db, &total, &written, &key, 1,
+            static_cast<NcmContentMetaType>(status.meta_type), app_id, app_id, app_id,
+            NcmContentInstallType_Full);
+        if (R_FAILED(rc) || total != 1 || written != 1) {
+            ncmContentMetaDatabaseClose(&db);
+            ncmContentStorageClose(&storage);
+            if (R_FAILED(rc)) {
+                SetResultError("locating content meta failed", rc, error);
+            } else if (error != nullptr) {
+                *error = "content meta key was not unique";
+            }
+            ok = false;
+            break;
+        }
+
+        NcmContentInfo infos[64]{};
+        s32 info_count = 0;
+        rc = ncmContentMetaDatabaseListContentInfo(&db, &info_count, infos, 64, &key, 0);
+        if (R_FAILED(rc)) {
+            ncmContentMetaDatabaseClose(&db);
+            ncmContentStorageClose(&storage);
+            SetResultError("listing content files failed", rc, error);
+            ok = false;
+            break;
+        }
+        for (s32 content = 0; content < info_count; ++content) {
+            bool present = false;
+            rc = ncmContentStorageHas(&storage, &present, &infos[content].content_id);
+            if (R_FAILED(rc)) {
+                ok = false;
+                SetResultError("querying content file failed", rc, error);
+                break;
+            }
+            if (present) {
+                rc = ncmContentStorageDelete(&storage, &infos[content].content_id);
+                if (R_FAILED(rc)) {
+                    ok = false;
+                    SetResultError("deleting content file failed", rc, error);
+                    break;
+                }
+            }
+        }
+        if (ok) {
+            rc = ncmContentMetaDatabaseRemove(&db, &key);
+            if (R_FAILED(rc)) {
+                SetResultError("removing content meta failed", rc, error);
+                ok = false;
+            } else {
+                rc = ncmContentMetaDatabaseCommit(&db);
+                if (R_FAILED(rc)) {
+                    SetResultError("saving content meta failed", rc, error);
+                    ok = false;
+                }
+            }
+        }
+        ncmContentMetaDatabaseClose(&db);
+        ncmContentStorageClose(&storage);
+    }
+
+    if (ok) {
+        rc = nsDeleteApplicationEntity(title_id);
+        if (R_FAILED(rc) && rc != 0x410) {
+            SetResultError("deleting application record failed", rc, error);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 bool DeleteApplicationTitles(std::initializer_list<std::uint64_t> title_ids,
                              std::string *error) {
     Result rc = nsInitialize();
@@ -128,14 +247,17 @@ bool DeleteApplicationTitles(std::initializer_list<std::uint64_t> title_ids,
     for (const std::uint64_t title_id : title_ids) {
         rc = nsDeleteApplicationCompletely(title_id);
         if (R_FAILED(rc) && rc != 0x410) { /* 0x410: already absent */
-            ok = false;
-            if (error != nullptr) {
-                char text[96];
-                std::snprintf(text, sizeof(text),
-                              "deleting %016llx failed (0x%08x)",
-                              static_cast<unsigned long long>(title_id),
-                              static_cast<unsigned>(rc));
-                *error = text;
+            const Result complete_rc = rc;
+            if (!DeleteApplicationRecordViaNcm(title_id, error)) {
+                if (error != nullptr) {
+                    char first[96];
+                    std::snprintf(first, sizeof(first),
+                                  "deleting %016llx failed (0x%08x)",
+                                  static_cast<unsigned long long>(title_id),
+                                  static_cast<unsigned>(complete_rc));
+                    *error = std::string(first) + "; fallback: " + *error;
+                }
+                ok = false;
             }
         }
     }
@@ -667,6 +789,37 @@ std::string App::SupportedGameVersionNote() const {
                                       ? entry->display_version
                                       : std::to_string(entry->version);
     return supported == InstalledGameVersion() ? std::string() : supported;
+}
+
+std::string App::GateResultText() const {
+    switch (m_gate.status) {
+        case install::GateStatus::Supported:
+            return i18n::Format(i18n::StringId::GateResultSupported,
+                                InstalledGameVersion().c_str());
+        case install::GateStatus::NoManifest:
+            return Tr(i18n::StringId::GateResultNoManifest);
+        case install::GateStatus::TitleMissing:
+            return Tr(i18n::StringId::GateResultTitleMissing);
+        case install::GateStatus::TitleNotSupported:
+            return Tr(i18n::StringId::GateResultTitleNotSupported);
+        case install::GateStatus::VersionNotSupported: {
+            const manifest::GameEntry *entry =
+                m_gate.title_entry != nullptr ? m_gate.title_entry : m_gate.game;
+            const std::string supported =
+                entry != nullptr && !entry->display_version.empty()
+                    ? entry->display_version
+                    : std::string(Tr(i18n::StringId::ValueNotAvailable));
+            return i18n::Format(i18n::StringId::GateResultVersion,
+                                InstalledGameVersion().c_str(), supported.c_str());
+        }
+        case install::GateStatus::ContentIdMissing:
+            return Tr(i18n::StringId::GateResultContentMissing);
+        case install::GateStatus::ContentIdMismatch:
+            return Tr(i18n::StringId::GateResultContentMismatch);
+        case install::GateStatus::BuildIdMismatch:
+            return Tr(i18n::StringId::GateResultBuildMismatch);
+    }
+    return Tr(i18n::StringId::ValueNotAvailable);
 }
 
 /* Settings live in their own file because the install record is deleted by uninstall; the
@@ -1506,9 +1659,9 @@ void App::ActivateAction(int id) {
             break;
         case kActionCheckUpdate: StartUpdateCheck(); break;
         case kActionForwarder:
-            if (ForwarderRemovalBlocked(
-                    m_forwarder_installed,
-                    m_report.applet_type == AppletType_Application)) {
+            if (ForwarderActionBlocked(
+                    m_report.applet_type == AppletType_Application,
+                    m_forwarder_application_running)) {
                 return;
             }
             if (m_forwarder_installed) {
@@ -2247,6 +2400,24 @@ void DrawKeyBadge(Surface surface, Font &font, int cx, int cy, int radius, const
     font.DrawBold(surface, cx - width / 2, cy - kFontBody / 2 - 1, kFontBody, text, key);
 }
 
+/* Eight dots in a ring, one step every eighth of a second.  The clock phase keeps the speed
+   independent of the frame rate; the in-flight update check uses this in the key-badge slot. */
+void DrawSpinner(Surface surface, int cx, int cy, int radius, Color color) {
+    constexpr int kDots = 8;
+    constexpr double kTwoPi = 6.283185307179586;
+    const u64 ticks = armGetSystemTick();
+    const u64 phase = (ticks / (armGetSystemTickFreq() / 8)) % kDots;
+    for (int i = 0; i < kDots; ++i) {
+        const int step = (static_cast<int>(phase) + i) % kDots;
+        const double angle = (kTwoPi * step) / kDots - kTwoPi / 4;
+        const int x = cx + static_cast<int>(radius * std::cos(angle));
+        const int y = cy + static_cast<int>(radius * std::sin(angle));
+        const u8 alpha = static_cast<u8>(40 + (215 * (kDots - i)) / kDots);
+        FillRoundedRect(surface, x - 3, y - 3, 7, 7, 3,
+                        Color{color.r, color.g, color.b, alpha});
+    }
+}
+
 /* The attention mark of the home warning strip: a filled triangle with an exclamation mark
    knocked out of it.  The drawing layer has no polygon primitive, so the triangle is painted one
    scanline at a time.  `size` is its height and the base is a fifth wider -- an equilateral
@@ -2306,8 +2477,8 @@ void App::BuildHomeActions(int width, int height) {
     const int primary_y = kHomePrimaryY + shift;
     const int secondary_y = primary_y + kHomeButtonHeight + kHomeSecondaryGap;
     const int forwarder_y = secondary_y + kHomeSecondaryHeight + kHomeForwarderGap;
-    const bool forwarder_remove_blocked = ForwarderRemovalBlocked(
-        m_forwarder_installed, m_report.applet_type == AppletType_Application);
+    const bool forwarder_action_blocked = ForwarderActionBlocked(
+        m_report.applet_type == AppletType_Application, m_forwarder_application_running);
     m_actions.clear();
     m_actions.push_back(
         {kActionPrimary, Rect{kHomeMargin, primary_y, inner, kHomeButtonHeight},
@@ -2327,7 +2498,7 @@ void App::BuildHomeActions(int width, int height) {
     }
     m_actions.push_back({kActionForwarder,
                          Rect{kHomeMargin, forwarder_y, inner, kHomeForwarderHeight},
-                         !forwarder_remove_blocked});
+                         !forwarder_action_blocked});
 }
 
 void App::MoveHomeFocus(int direction) {
@@ -2517,7 +2688,8 @@ void App::RenderHome(Surface surface) {
         if (action.id == kActionForwarder) forwarder = &action;
     }
 
-    auto block = [&](const Action *action, const char *label, const std::string &sub) {
+    auto block = [&](const Action *action, const char *label, const std::string &sub,
+                     bool busy = false) {
         if (action == nullptr) {
             return;
         }
@@ -2532,7 +2704,11 @@ void App::RenderHome(Surface surface) {
         FillRoundedRect(surface, action->rect.x + thickness, action->rect.y + thickness,
                         action->rect.w - thickness * 2, action->rect.h - thickness * 2, 18 - thickness,
                         face);
-        if (focused) {
+        if (busy) {
+            DrawSpinner(surface, action->rect.x + 46,
+                        action->rect.y + action->rect.h / 2, 13,
+                        focused ? kOnHeader : kHeader);
+        } else if (focused) {
             DrawKeyBadge(surface, m_font, action->rect.x + 46,
                          action->rect.y + action->rect.h / 2, 22, "A",
                          focused ? kOnHeader : kHeader,
@@ -2594,19 +2770,23 @@ void App::RenderHome(Surface surface) {
             : std::string(Tr(label_id));
     const std::string primary_sub = Tr(sub_id);
     block(primary, primary_label.c_str(), primary_sub);
-    block(check, Tr(i18n::StringId::BtnCheckUpdate), UpdateSubtitle());
+    block(check, Tr(i18n::StringId::BtnCheckUpdate), UpdateSubtitle(), m_update_running);
     if (uninstall != nullptr) {
         block(uninstall, Tr(i18n::StringId::BtnUninstall), Tr(i18n::StringId::SubUninstall));
     }
-    const bool forwarder_remove_blocked = ForwarderRemovalBlocked(
-        m_forwarder_installed, m_report.applet_type == AppletType_Application);
+    const bool forwarder_action_blocked = ForwarderActionBlocked(
+        m_report.applet_type == AppletType_Application, m_forwarder_application_running);
+    const bool forwarder_process_running =
+        m_forwarder_installed && m_forwarder_application_running;
     block(forwarder,
           Tr(m_forwarder_installed ? i18n::StringId::BtnForwarderRemove
                                    : i18n::StringId::BtnForwarderInstall),
-          Tr(forwarder_remove_blocked ? i18n::StringId::SubForwarderRemoveBlocked
-                                      : (m_forwarder_installed
-                                             ? i18n::StringId::SubForwarderRemove
-                                             : i18n::StringId::SubForwarderInstall)));
+          Tr(forwarder_process_running
+                 ? i18n::StringId::SubForwarderProcessRunning
+                 : (forwarder_action_blocked
+                        ? i18n::StringId::SubForwarderRemoveBlocked
+                        : (m_forwarder_installed ? i18n::StringId::SubForwarderRemove
+                                                 : i18n::StringId::SubForwarderInstall))));
     if (m_trace_frames > 0) {
         Trace("home: rendered kind=%d actions=%zu focus=%d", static_cast<int>(m_home_kind),
               m_actions.size(), m_focus);
@@ -2665,7 +2845,7 @@ void App::RenderDetails(Surface surface) {
        app is usable; this row is what shows the result afterwards. */
     {
         const bool known = !m_startup.current_path.empty();
-        const bool standard = m_startup.current_path == env::kStandardNroPath;
+        const bool standard = env::IsStandardNroPath(m_startup.current_path);
         version_rows.push_back({Tr(i18n::StringId::LabelProgramLocation),
                                 known ? Tr(standard ? i18n::StringId::ValueStandard
                                                     : i18n::StringId::ValueNonstandard)
@@ -2718,7 +2898,7 @@ void App::RenderDetails(Surface surface) {
        detection problem have to be here. */
     version_rows.push_back(
         {Tr(i18n::StringId::LabelGateResult),
-         std::string(m_gate.reason) + " [" + PlanActionName(m_plan.action) + "]",
+         GateResultText(),
          m_gate.status == install::GateStatus::Supported ? kGood : kWarn, 2});
     std::string problems = m_report.problems;
     if (!m_manifest_error.empty()) {
@@ -3207,6 +3387,7 @@ void App::OpenGameInstall() {
     RefreshPendingTask();
     m_install_screen = m_have_pending_task ? InstallScreen::Pending : InstallScreen::Choose;
     m_install_origin = InstallScreen::Choose;
+    m_install_returns_to_launcher = false;
     m_file_dir = "/";
     m_focus = FirstEnabled(m_actions);
     Trace("install: opened from page %d", static_cast<int>(m_game_install_return));
@@ -3218,6 +3399,14 @@ void App::RefreshForwarderTile() {
     std::snprintf(title_id, sizeof(title_id), "%016llx",
                   static_cast<unsigned long long>(env::StandardForwarderTitleId()));
     install::ContentInstaller probe(install::TargetStorage::SdCard, install::InstallOptions{});
+    m_forwarder_application_running = false;
+    std::string process_error;
+    bool process_running = false;
+    if (probe.ApplicationRunning(title_id, &process_running, &process_error)) {
+        m_forwarder_application_running = process_running;
+    } else {
+        Trace("forwarder: running-state query unavailable: %s", process_error.c_str());
+    }
     std::string error;
     if (!probe.Open(&error)) {
         Trace("forwarder: installed-state query unavailable: %s", error.c_str());
@@ -3236,6 +3425,8 @@ void App::RefreshForwarderTile() {
 
 void App::InstallForwarderTile() {
     m_result_forwarder = false;
+    m_game_install_return = m_page;
+    m_install_returns_to_launcher = true;
     const std::string_view nsp = payload::EmbeddedForwarderNsp();
     if (nsp.empty()) {
         m_install_error = Tr(i18n::StringId::InstallForwarderUnavailable);
@@ -3245,7 +3436,6 @@ void App::InstallForwarderTile() {
         return;
     }
 
-    m_game_install_return = m_page;
     m_page = Page::GameInstall;
     m_install_screen = InstallScreen::Choose;
     m_install_origin = InstallScreen::Choose;
@@ -3292,6 +3482,33 @@ void App::InstallForwarderTile() {
 
 void App::RemoveForwarderTile() {
     const std::uint64_t title_id = env::StandardForwarderTitleId();
+    char title_hex[17];
+    std::snprintf(title_hex, sizeof(title_hex), "%016llx",
+                  static_cast<unsigned long long>(title_id));
+    install::ContentInstaller probe(install::TargetStorage::SdCard, install::InstallOptions{});
+    const auto shortcut_running = [&]() {
+        bool running = false;
+        std::string query_error;
+        return probe.ApplicationRunning(title_hex, &running, &query_error) && running;
+    };
+    const auto show_failure = [&](const std::string &reason) {
+        m_result_forwarder = true;
+        m_result_uninstall = false;
+        m_result_ok = false;
+        m_result_files = 0;
+        m_result_error = reason;
+        Trace("forwarder: remove failed title=%016llx error=%s",
+              static_cast<unsigned long long>(title_id), reason.c_str());
+        Collect();
+        m_page = Page::Result;
+        m_focus = FirstEnabled(m_actions);
+    };
+
+    if (shortcut_running()) {
+        show_failure(Tr(i18n::StringId::ResultForwarderRemoveRunning));
+        return;
+    }
+
     std::string error;
     const bool ok = DeleteApplicationTitles(
         {title_id, env::LegacyForwarderTitleId()}, &error);
@@ -3304,7 +3521,8 @@ void App::RemoveForwarderTile() {
         Trace("forwarder: removed title=%016llx",
               static_cast<unsigned long long>(title_id));
     } else {
-        m_result_error = error;
+        m_result_error = shortcut_running() ? Tr(i18n::StringId::ResultForwarderRemoveRunning)
+                                            : Tr(i18n::StringId::ResultForwarderRemoveSystem);
         Trace("forwarder: remove failed title=%016llx error=%s",
               static_cast<unsigned long long>(title_id), error.c_str());
     }
@@ -3874,6 +4092,7 @@ void App::LeaveGameInstall() {
     /* The modal page is what the server existed for, so it goes down with it (design section 3). */
     StopInstallerServer();
     m_install_page_drives = false; /* a fresh entry into the install page starts from scratch */
+    m_install_returns_to_launcher = false;
     LeaveInstallScreen();
     m_page = m_game_install_return;
 }
@@ -3919,6 +4138,10 @@ void App::InstallStepBack() {
     switch (m_install_screen) {
         case InstallScreen::Confirm:
         case InstallScreen::Result:
+            if (m_install_returns_to_launcher) {
+                LeaveGameInstall();
+                break;
+            }
             /* Back to where the run in hand started: the package (and the placeholders the
                CNMT/NACP read created for it) is dropped on the way. */
             LeaveInstallScreen();

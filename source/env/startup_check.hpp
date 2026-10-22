@@ -41,6 +41,12 @@ bool NroLooksOurs(const NroMeta &meta);
    cached spelling that differs from the on-card one ("ACNH-Manager.nro" vs "acnh-manager.nro"). */
 bool SameNroPath(std::string_view a, std::string_view b);
 
+/* The one definition of "running from the standard location": FAT32 path matching, not byte
+   equality.  The startup check and the details page must use the same rule. */
+inline bool IsStandardNroPath(std::string_view path) {
+    return SameNroPath(path, kStandardNroPath);
+}
+
 /* "1.2.3" against "1.2.4" -> negative/zero/positive.  Missing components count as zero; a string
    with no digits compares as 0.0.0. */
 int CompareVersions(std::string_view a, std::string_view b);

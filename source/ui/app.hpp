@@ -110,6 +110,9 @@ private:
        where naming it explains anything.  Empty when no manifest lists this title, or when both
        sides carry the same version and the gate refused for another reason. */
     std::string SupportedGameVersionNote() const;
+    /* Player-facing wording for the gate row on Details.  The raw gate reason stays in the log;
+       version mismatches use display versions (for example 2.0.0 / 3.0.3), not title versions. */
+    std::string GateResultText() const;
     /* "0.11.0(c47d2b47)" -- version plus the first bytes of its payload hash, which is what
        tells two builds of the same version apart. */
     std::string BuildLabel(const std::string &version, const std::string &sha256) const;
@@ -317,6 +320,9 @@ private:
        confirm / progress / result screens join them next. */
     enum class InstallScreen { Choose, Files, Url, Upload, Confirm, Progress, Result, Pending };
     InstallScreen m_install_screen{InstallScreen::Choose};
+    /* A Home-screen helper started the embedded package directly, without the normal source
+       picker.  Its result page returns to Home in one step. */
+    bool m_install_returns_to_launcher{false};
     /* The address screen offers two ways in (the system keyboard now, the browser page that can
        submit an address once the server exists).  Neither works without a network, so the screen
        asks first and says so instead of letting a download fail a minute later. */
@@ -539,6 +545,7 @@ private:
     bool m_pending_restarts{false};
     std::unique_ptr<install::GameInstall> m_game_install;
     bool m_forwarder_installed{false};
+    bool m_forwarder_application_running{false};
     install::InstallStatus m_install_status;
     std::string m_install_error;
     ui::Bitmap m_cover{};

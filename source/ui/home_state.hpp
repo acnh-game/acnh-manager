@@ -63,11 +63,11 @@ inline HomeKind Classify(const HomeInputs &in) {
     return in.newer_agent ? HomeKind::UpdateAvailable : HomeKind::UpToDate;
 }
 
-/* A HOME-menu shortcut launches this NRO as a full-memory Application.  ncm/ns cannot remove
-   the title while that process is the title being removed, so the UI must offer the action only
-   from album/applet mode. */
-inline bool ForwarderRemovalBlocked(bool installed, bool application_mode) {
-    return installed && application_mode;
+/* Adding or removing the shortcut is possible only when neither this applet nor a suspended
+   Application instance is running from the shortcut title.  NS rejects the operation while
+   either process exists. */
+inline bool ForwarderActionBlocked(bool application_mode, bool shortcut_process_running) {
+    return application_mode || shortcut_process_running;
 }
 
 /* Home always has one focused button.  Its controls are a wide primary button, an optional pair

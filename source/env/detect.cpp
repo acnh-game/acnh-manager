@@ -113,6 +113,19 @@ void CollectDmnt(EnvironmentReport *report) {
     report->build.module_id_known = true;
 }
 
+/* "Game running" means the Animal Crossing process exists, not that some application does.
+   A HOME Menu shortcut launches ACNH-Manager itself in Application mode, so the ns-wide
+   any-application query reports true even when the game is closed. */
+bool IsAcnhProcessRunning() {
+    if (R_FAILED(pmdmntInitialize())) {
+        return false;
+    }
+    u64 pid = 0;
+    const Result rc = pmdmntGetProcessId(&pid, kAcnhTitleId);
+    pmdmntExit();
+    return R_SUCCEEDED(rc) && pid != 0;
+}
+
 /* `update_absent` means we already know from the ns content table that no update package is
    installed (the list came back and carried no Patch meta).  That is not a fault: a bare 1.0.0
    copy has no update title at all, so `ncm` answering "no such content meta" is the expected
@@ -433,10 +446,7 @@ EnvironmentReport Collect(FsFileSystem &sd) {
                 report.notes.emplace_back("ns app list unavailable");
             }
         }
-        bool running = false;
-        if (R_SUCCEEDED(nsIsAnyApplicationRunning(&running))) {
-            report.application_running = running;
-        }
+        report.application_running = IsAcnhProcessRunning();
         if (title_present || (have_control_data && rc != kNoSuchApplication)) {
             report.build.title_id = TitleIdHex(kAcnhTitleId);
         }

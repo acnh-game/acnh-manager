@@ -2332,6 +2332,9 @@ void TestStartupCheck() {
     CHECK(CompareVersions("1.2", "1.2.0") == 0);
     CHECK(CompareVersions("", "0.0.1") < 0);
     CHECK(SameNroPath("/switch/ACNH-Manager/ACNH-Manager.nro", kStandardNroPath));
+    CHECK(IsStandardNroPath(kStandardNroPath));
+    CHECK(IsStandardNroPath("/SWITCH/ACNH-MANAGER/ACNH-MANAGER.NRO"));
+    CHECK(!IsStandardNroPath("/switch/acnh-manager.nro"));
 
     StartupInputs in;
     in.current_path = "/switch/acnh-manager.nro";
@@ -2616,7 +2619,7 @@ void TestHomeState() {
     using acnh_manager::ui::Action;
     using acnh_manager::ui::Classify;
     using acnh_manager::ui::DefaultHomeFocus;
-    using acnh_manager::ui::ForwarderRemovalBlocked;
+    using acnh_manager::ui::ForwarderActionBlocked;
     using acnh_manager::ui::HomeInputs;
     using acnh_manager::ui::HomeKind;
     using acnh_manager::ui::MoveHomeFocus;
@@ -2677,12 +2680,12 @@ void TestHomeState() {
     missing_game.game_found = false;
     CHECK(Classify(missing_game) == HomeKind::GameMissing);
 
-    /* A shortcut launches the app as an Application; removing that title from inside its own
-       process is invalid.  The action remains available from album/applet mode. */
-    CHECK(!ForwarderRemovalBlocked(false, false));
-    CHECK(!ForwarderRemovalBlocked(false, true));
-    CHECK(!ForwarderRemovalBlocked(true, false));
-    CHECK(ForwarderRemovalBlocked(true, true));
+    /* A shortcut launches the app as an Application.  Both adding and removing are blocked from
+       that process, or while another suspended shortcut instance is alive. */
+    CHECK(!ForwarderActionBlocked(false, false));
+    CHECK(ForwarderActionBlocked(true, false));
+    CHECK(ForwarderActionBlocked(false, true));
+    CHECK(ForwarderActionBlocked(true, true));
 
     /* Home opens with focus on the primary button and then uses a linear visual cycle rather than
        the spatial walk used by ordinary pages. */

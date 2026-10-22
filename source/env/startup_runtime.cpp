@@ -213,7 +213,7 @@ StartupPlan RunStartupCheck(FsFileSystem &sd, const std::string &argv0, bool dev
     plan.current_path = NormalizePath(argv0);
     plan.inputs.dev = dev;
     plan.inputs.current_path = plan.current_path;
-    const bool standard = SameNroPath(plan.current_path, kStandardNroPath);
+    const bool standard = IsStandardNroPath(plan.current_path);
     const char *mode =
         appletGetAppletType() == AppletType_Application ? "application" : "applet";
     std::uint64_t program_id = 0;
@@ -232,7 +232,7 @@ StartupPlan RunStartupCheck(FsFileSystem &sd, const std::string &argv0, bool dev
         plan.decision = DecideStartup(plan.inputs);
         return plan;
     }
-    if (!plan.current_path.empty() && !SameNroPath(plan.current_path, kStandardNroPath)) {
+    if (!plan.current_path.empty() && !IsStandardNroPath(plan.current_path)) {
         std::string read_error;
         plan.inputs.current_readable =
             ReadNroMetaFromFile(sd, plan.current_path, &plan.current, &read_error);

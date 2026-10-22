@@ -24,6 +24,14 @@ constexpr Entry kStrings[] = {
     {"覆盖键提示", "Override key advice"},  /* LabelOverrideConfig */
     {"旧金手指代码", "Legacy cheat code"},  /* LabelLegacyCheat */
     {"检测结果", "Check result"},  /* LabelGateResult */
+    {"可以使用(游戏 %s)", "Ready (game %s)"},  /* GateResultSupported */
+    {"没有可用的安装信息", "No usable installation information"},  /* GateResultNoManifest */
+    {"没有检测到游戏", "The game was not found"},  /* GateResultTitleMissing */
+    {"当前游戏不在兼容列表中", "This game is not in the compatibility list"},  /* GateResultTitleNotSupported */
+    {"当前游戏 %s，本应用支持 %s", "Game %s - this build supports %s"},  /* GateResultVersion */
+    {"无法读取当前游戏的文件标识", "Could not read the installed game's file id"},  /* GateResultContentMissing */
+    {"当前游戏文件与支持的版本不一致", "The installed game files do not match the supported version"},  /* GateResultContentMismatch */
+    {"正在运行的游戏文件与支持的版本不一致", "The running game build does not match the supported version"},  /* GateResultBuildMismatch */
     {"检测异常", "Detection problems"},  /* LabelProblems */
     {"界面语言", "Language"},  /* LanguageLabel */
     {"简体中文", "简体中文"},  /* LanguageChinese */
@@ -124,6 +132,7 @@ constexpr Entry kStrings[] = {
     {"装好后可从桌面直接启动", "Launch directly from the HOME Menu"},  /* SubForwarderInstall */
     {"删除桌面上的快捷方式", "Remove the HOME Menu shortcut"},  /* SubForwarderRemove */
     {"请先退出，从相册重新打开后再删除", "Exit, then reopen from the album to remove it"},  /* SubForwarderRemoveBlocked */
+    {"请先在主页关闭快捷方式，再重新打开本程序", "Close the HOME Menu shortcut, then reopen this app"},  /* SubForwarderProcessRunning */
     {"动森增强 Mod(agent) 管理器", "Manager for the Animal Crossing agent"},  /* HeadSubtitle */
     {"暂不可用", "Not available"},  /* BtnUnavailable */
     {"高级", "Advanced"},  /* SectionAdvanced */
@@ -147,6 +156,8 @@ constexpr Entry kStrings[] = {
     {"卸载失败", "Removal failed"},  /* ResultUninstallFailed */
     {"已删除桌面快捷方式", "HOME Menu shortcut removed"},  /* ResultForwarderRemoved */
     {"无法删除桌面快捷方式", "Could not remove the HOME Menu shortcut"},  /* ResultForwarderRemoveFailed */
+    {"快捷方式仍在运行。请先在主页关闭它，再从相册重新打开删除", "The HOME Menu shortcut is still running. Close it on the HOME Menu, then reopen from the album to remove it"},  /* ResultForwarderRemoveRunning */
+    {"系统拒绝删除这个快捷方式，请重启主机后再试", "The system refused to remove the shortcut - restart the console and try again"},  /* ResultForwarderRemoveSystem */
     {"桌面可能需要一点时间刷新", "The HOME Menu may take a moment to refresh"},  /* ResultForwarderRemovedNote */
     {"将要删除的文件", "Files to remove"},  /* LabelPlanRemove */
     {"还有 %d 个文件 · 完整清单见详情页", "%d more files - see Details for the full list"},  /* LabelPlanMore */
