@@ -48,5 +48,12 @@
         }
       ]
     }
-  ]
+  ],
+  "manager": {
+    "version": "2.1.0",
+    "url": "https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-2.1.0.nro",
+    "size": 3840141,
+    "sha256": "2f8d896ecac24e999cf600478174af621a93b530e50494e55387ebe10d69556e",
+    "changelog": ""
+  }
 }

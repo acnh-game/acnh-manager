@@ -362,6 +362,23 @@ void TestManifestOk() {
     CHECK(game.files.size() == 3);
     CHECK(game.files.front().restart == "game");
     CHECK(game.files.back().restart == "none");
+    CHECK(!result.manifest.manager.present);
+
+    std::string with_manager = SampleManifest();
+    const std::size_t closing = with_manager.find_last_of('}');
+    with_manager.insert(closing, R"(,
+  "manager": {
+    "version": "2.1.0",
+    "url": "https://example.com/acnh-manager-2.1.0.nro",
+    "size": 3819661,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+)");
+    const auto managed = acnh_manager::manifest::Parse(with_manager, "2.0.0");
+    CHECK(managed.ok);
+    CHECK(managed.manifest.manager.present);
+    CHECK(managed.manifest.manager.version == "2.1.0");
+    CHECK(managed.manifest.manager.size == 3819661);
 }
 
 std::string ReplaceOnce(std::string text, const std::string &from, const std::string &to) {
@@ -394,6 +411,26 @@ void TestManifestRejects() {
         {"minver", ReplaceOnce(base, "\"minVersion\": \"0.1.0\"", "\"minVersion\": \"0.2.0\""),
          "requires app >="},
         {"nogames", ReplaceOnce(base, "\"games\": [", "\"gamesUnused\": ["), "games"},
+        {"manager-http",
+         ReplaceOnce(base, "\"agent\": {",
+                     "\"manager\":{\"version\":\"2.1.0\",\"url\":\"http://example.com/a.nro\","
+                     "\"size\":1,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},"
+                     "\"agent\": {"),
+         "https"},
+        {"manager-sha",
+         ReplaceOnce(base, "\"agent\": {",
+                     "\"manager\":{\"version\":\"2.1.0\",\"url\":\"https://example.com/a.nro\","
+                     "\"size\":1,\"sha256\":\"abc\"},\"agent\": {"),
+         "64 hex"},
+        {"manager-size",
+         ReplaceOnce(base, "\"agent\": {",
+                     "\"manager\":{\"version\":\"2.1.0\",\"url\":\"https://example.com/a.nro\","
+                     "\"size\":999999999,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},"
+                     "\"agent\": {"),
+         "size"},
+        {"manager-type",
+         ReplaceOnce(base, "\"agent\": {", "\"manager\": [], \"agent\": {"),
+         "manager is not an object"},
     };
     for (const Case &item : cases) {
         const auto result = Parse(item.text, "0.1.0");
@@ -613,6 +650,15 @@ void TestUpdateAdoption() {
     other_content.games[0].content_id = "29A8CE65E45B800CBC73214B7B818F68";
     auto mismatch = DecideAdoption(other_content, build, "0.11.0");
     CHECK(mismatch.newer && !mismatch.adopt && mismatch.unsupported);
+
+    acnh_manager::manifest::ManagerRelease manager;
+    manager.present = true;
+    manager.version = "2.1.0";
+    CHECK(acnh_manager::net::ManagerReleaseAvailable(manager, "2.0.0"));
+    CHECK(!acnh_manager::net::ManagerReleaseAvailable(manager, "2.1.0"));
+    CHECK(!acnh_manager::net::ManagerReleaseAvailable(manager, "2.2.0"));
+    manager.present = false;
+    CHECK(!acnh_manager::net::ManagerReleaseAvailable(manager, "2.0.0"));
 
     /* Not adopting a release is not the same as allowing writes onto an unknown build: with
        nothing installed, the gate still refuses to install that manifest's files. */

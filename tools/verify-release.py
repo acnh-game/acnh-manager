@@ -90,6 +90,13 @@ def source_tree_hash(repo: pathlib.Path) -> str:
     return hashlib.sha256(lines.encode()).hexdigest()[:8]
 
 
+def app_version() -> str:
+    for line in (REPO_ROOT / "Makefile").read_text().splitlines():
+        if line.startswith("APP_VERSION") and ":=" in line:
+            return line.split(":=", 1)[1].strip()
+    return ""
+
+
 class Report:
     def __init__(self) -> None:
         self.checks = 0
@@ -205,10 +212,48 @@ def main(argv: list[str] | None = None) -> int:
                  (record_dir / "manifest.json").read_bytes(),
                  "manifest.bin equals the record's manifest.json")
     # The update check fetches the repo root copy over Gitee's raw endpoint, so a stale copy
-    # there would quietly tell every player about the wrong release.
+    # there would quietly tell every player about the wrong release.  It may carry one extra
+    # signed `manager` object for self-update; every agent/game field must still equal the record.
     latest = REPO_ROOT / "agent-manifest.json"
-    report.check(latest.is_file() and latest.read_bytes() == (record_dir / "manifest.json").read_bytes(),
-                 "agent-manifest.json (read by the in-app update check) equals the record")
+    latest_json = None
+    latest_error = ""
+    if latest.is_file():
+        try:
+            latest_json = json.loads(latest.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            latest_error = str(error)
+    if report.check(isinstance(latest_json, dict),
+                    "agent-manifest.json (read by the in-app update check) is a JSON object",
+                    latest_error):
+        served_without_manager = dict(latest_json)
+        manager_entry = served_without_manager.pop("manager", None)
+        report.check(served_without_manager == manifest,
+                     "served manifest agent/game fields equal the release record")
+        if manager_entry is not None:
+            version = manager_entry.get("version")
+            url = manager_entry.get("url", "")
+            marker = "/raw/main/"
+            report.check(isinstance(version, str) and version == app_version(),
+                         "served manager version matches APP_VERSION")
+            report.check(isinstance(url, str) and url.startswith("https://") and marker in url,
+                         "served manager URL is an HTTPS Gitee raw path")
+            if marker in url:
+                nro = REPO_ROOT / url.split(marker, 1)[1]
+                inside_repo = False
+                try:
+                    nro.resolve().relative_to(REPO_ROOT.resolve())
+                    inside_repo = True
+                except ValueError:
+                    pass
+                if (report.check(inside_repo, "served manager path stays inside the repository") and
+                        report.check(nro.is_file(),
+                                     f"served manager NRO exists: {show(nro)}")):
+                    report.check(manager_entry.get("size") == nro.stat().st_size,
+                                 "served manager size matches the NRO")
+                    report.check(str(manager_entry.get("sha256", "")).lower() == sha256_of(nro),
+                                 "served manager SHA-256 matches the NRO")
+        else:
+            print("  skip no manager self-update object in the served manifest")
     for name, data_name in PAYLOAD_MAP.items():
         path = args.data / data_name
         if not report.check(path.is_file(), f"{data_name} exists"):

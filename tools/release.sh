@@ -163,6 +163,9 @@ if [ "${skip_nro}" -eq 0 ]; then
     cp "${repo_dir}/acnh-manager.nro" "${repo_dir}/packaging/nro/acnh-manager-${app_version}.nro"
     echo "  packaging/nro/acnh-manager-${app_version}.nro <- acnh-manager.nro"
     echo "  commit it with the release: that raw URL is what players and the store download"
+    python3 "${repo_dir}/tools/update-manager-manifest.py" \
+        --version "${app_version}" \
+        --nro "${repo_dir}/packaging/nro/acnh-manager-${app_version}.nro"
 else
     echo "  skipped with --skip-nro"
 fi

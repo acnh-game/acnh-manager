@@ -21,6 +21,7 @@
 | `tools/import-agent-release.py` | 发布门控 + 导入:校验 `dirty=false`/`buildFlags=2`/NSO 哈希/**NPDM 重放校验**(用同一原始 NPDM 再派生并逐字节比对)/profile 指纹,通过后写 `packaging/agent-lock.json`、`packaging/agent/<版本>/`(原始文件名的发布记录)与 `data/`(bin2s 构建输入)。`--nso/--npdm/--version-json` 必填,不吃 `acnh-agent/dist/` 里的现成产物 | 发布链的第 3 步;手工单独跑时也要自己给刚构建出来的路径 |
 | `tools/make-signing-key.py` | 生成发布签名密钥对(ECDSA P-256,私钥放仓库外,默认给成 `~/.acnh/acnh-manager-signing-key.pem`),并把公钥写进 `data/agent_pubkey.bin`(入库、编进 NRO)。已有私钥时拒绝覆盖,除非 `--force` | 只做一次:项目第一次发布前;换密钥等于换身份(见 `docs/architecture.md` 9.2) |
 | `tools/sign-manifest.py` | 用 `--key`(默认 `~/.acnh/acnh-manager-signing-key.pem`)给根目录 `agent-manifest.json` 签名 → `agent-manifest.json.sig`,先核对私钥与内嵌公钥配套,再用 openssl 复验;`--manifest/--signature` 可指向别处的副本(本地镜像测试用) | 每次发布,导入清单之后、push 之前 |
+| `tools/update-manager-manifest.py` | 把 `packaging/nro/acnh-manager-<版本>.nro` 的版本、大小、SHA-256 与 Gitee raw 地址写入根清单的 `manager` 对象。内嵌清单不写该对象,避免 NRO 包含自身未来哈希;`tools/release.sh` 在拷贝发布 NRO 后自动调用 | 生成或刷新更新中心使用的 Manager 自更新条目时 |
 | `tools/verify-release.py` | 核对"锁 ↔ 发布记录 ↔ `data/` ↔ 已构建 NRO"四处一致,并验一次对外清单的签名;`--nro` 时还会在 NRO 里搜内嵌清单、三个 payload 与 forwarder NSP 的原始字节,并校验 **NRO 构建戳的 `src:` 哈希 == 当前 `source/` + `data/` + `assets/`**(抓"源码或内嵌素材改了但 NRO 没重建") | 发布链的第 6 步;也可单独挂 CI |
 | `tools/make-qr.py` | 把《森友物码册》小程序码(`src/acnh-chat-code-miniapp/resources/小程序码.jpg`)采样成模块矩阵,写进 `data/qr_miniapp.bin`(u16 宽高 + 每行位打包),供 App 的“聊天码说明”页用矩形逐格画出;同时输出 `build/scratch/qr-check.png` 便于肉眼复核。需要带 Pillow+numpy 的运行时 | 小程序码更新后(或改采样规则后);换码后请用手机扫一次真机截图确认可扫 |
 | `tools/sync-guide-fallback.py` | 把**当前发布版本**同步到指南页仓库的兜底目录:按 SD 卡目录结构写 `switch/ACNH-Manager/acnh-manager.nro`(与卡上同名)与 `atmosphere/contents/01006F8002326000/exefs/{subsdk9,main.npdm,acnh-agent.version}`,并刷新页面运行时读的 `agent-files.json`;写之前逐文件与发布锁/记录核对哈希,发现版本化的旧 NRO 会删掉。**NRO 是唯一在发布记录里没有哈希的文件**,于是改为核对它里面确实嵌着记录中的清单与三件套(`verify-release.py --nro` 用的同一判据),挡住 `--skip-nro` 留下的旧件;`agent-files.json` 的 `generated` 只在内容真的变了才刷新,所以没变化时跑一遍不会弄脏指南页仓库。只写文件、**不碰 git**;`--guide-dir`/`--dry-run` 可选 | 每次发布后(发布链之外的人工一步);之后在指南页仓库提交并部署 |
@@ -35,6 +36,76 @@
 安装决策与 `state.json` 往返的单元测试(不需要 Docker 与真机)。
 
 构建产物与日志等过程性材料放 `build/scratch/`(已忽略);真机验收结论写入 `docs/device-acceptance.md`。
+
+## 本机联调更新中心
+
+开发构建(`./tools/build.sh`,带 `+devaids`)会读取卡上的
+`/switch/ACNH-Manager/dev-update-url`;release 构建忽略这个文件。App 的 HTTP 层只接受 HTTPS,
+但 Switch 端不校验证书,所以本机自签 HTTPS 足够。清单仍必须用项目签名私钥签署。
+`tools/build.sh` 也接受 `APP_VERSION=<版本>`;它会清理编译对象再构建,但保留
+`build/scratch/` 下的日志、截图和本机测试素材。
+
+下面的流程用一台本机发布 `2.2.0` 测试 NRO,让当前 `2.1.0` 开发版走完整的 Manager 自更新:
+
+```bash
+# 1. 先构建一份只用于本机测试的更高版本 NRO
+APP_VERSION=2.2.0 ./tools/build.sh
+mkdir -p build/scratch/update-test
+cp acnh-manager.nro build/scratch/update-test/acnh-manager-2.2.0.nro
+
+# 2. 生成本地清单和签名
+cp agent-manifest.json build/scratch/update-test/agent-manifest.json
+MAC_IP="$(ipconfig getifaddr en0)"
+python3 tools/update-manager-manifest.py \
+  --manifest build/scratch/update-test/agent-manifest.json \
+  --nro build/scratch/update-test/acnh-manager-2.2.0.nro \
+  --version 2.2.0 \
+  --url "https://${MAC_IP}:9443/acnh-manager-2.2.0.nro"
+python3 tools/sign-manifest.py \
+  --manifest build/scratch/update-test/agent-manifest.json \
+  --signature build/scratch/update-test/agent-manifest.json.sig
+
+# 3. 自签证书并启动 HTTPS 服务(单独占一个终端)
+mkdir -p build/scratch/update-test-tls
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -keyout build/scratch/update-test-tls/key.pem \
+  -out build/scratch/update-test-tls/cert.pem \
+  -subj "/CN=${MAC_IP}" -addext "subjectAltName=IP:${MAC_IP}"
+cd build/scratch/update-test
+python3 - <<'PY'
+import http.server
+import ssl
+server = http.server.ThreadingHTTPServer(("0.0.0.0", 9443),
+                                         http.server.SimpleHTTPRequestHandler)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain("../update-test-tls/cert.pem", "../update-test-tls/key.pem")
+server.socket = context.wrap_socket(server.socket, server_side=True)
+server.serve_forever()
+PY
+```
+
+回到仓库根,构建并部署正常的 2.1.0 开发版,再写入本机清单地址:
+
+```bash
+./tools/build.sh
+python3 tools/deploy-nro.py
+printf 'https://%s:9443/agent-manifest.json\n' "$(ipconfig getifaddr en0)" \
+  > build/scratch/dev-update-url
+python3 tools/deploy-nro.py \
+  --push-file build/scratch/dev-update-url --remote dev-update-url
+```
+
+从相册打开 App → 首页「检查更新」→ 更新中心。Manager 条目应显示可更新到 `2.2.0`;按 `A`
+下载并替换标准 NRO,随后提示退出并从相册重新打开。重新打开后版本应为 `2.2.0`。
+
+测试结束时停止 HTTPS 服务,把空的 `dev-update-url` 推到卡上,再重新构建/部署正常 2.1.0:
+
+```bash
+: > build/scratch/dev-update-url
+python3 tools/deploy-nro.py --push-file build/scratch/dev-update-url --remote dev-update-url
+./tools/build.sh
+python3 tools/deploy-nro.py
+```
 
 ## upload-client.py — 扮演安装页面的上传客户端
 

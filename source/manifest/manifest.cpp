@@ -285,6 +285,52 @@ ParseResult Parse(std::string_view text, std::string_view app_version, ParseOpti
         return result;
     }
 
+    const json::Value *manager = root.Find("manager");
+    if (manager != nullptr) {
+        if (!manager->IsObject()) {
+            result.error = "manifest: manager is not an object";
+            return result;
+        }
+        ManagerRelease release;
+        release.present = true;
+        release.version =
+            StringField(manager, "version", true, &ok, &result.error, "manager");
+        release.url = StringField(manager, "url", true, &ok, &result.error, "manager");
+        release.sha256 =
+            Upper(StringField(manager, "sha256", true, &ok, &result.error, "manager"));
+        release.changelog =
+            StringField(manager, "changelog", false, &ok, &result.error, "manager");
+        if (!ok) {
+            return result;
+        }
+        const json::Value *size = manager->Find("size");
+        if (size == nullptr || !size->IsNumber()) {
+            result.error = "manifest: manager requires numeric size";
+            return result;
+        }
+        const std::int64_t size_value = json::IntOr(*size, -1);
+        if (size_value <= 0 || static_cast<std::uint64_t>(size_value) > kManagerNroMaxBytes) {
+            result.error = Describe("manifest: manager size %lld is outside 1..%llu bytes",
+                                    static_cast<long long>(size_value),
+                                    static_cast<unsigned long long>(kManagerNroMaxBytes));
+            return result;
+        }
+        release.size = static_cast<std::uint64_t>(size_value);
+        if (release.version.empty()) {
+            result.error = "manifest: manager version is empty";
+            return result;
+        }
+        if (release.url.rfind("https://", 0) != 0) {
+            result.error = "manifest: manager url must use https";
+            return result;
+        }
+        if (!IsSha256Hex(release.sha256)) {
+            result.error = "manifest: manager sha256 is not 64 hex digits";
+            return result;
+        }
+        result.manifest.manager = std::move(release);
+    }
+
     const json::Value *games = root.Find("games");
     if (games == nullptr || !games->IsArray() || games->Size() == 0) {
         result.error = "manifest: missing non-empty games array";

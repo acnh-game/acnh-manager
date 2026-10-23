@@ -22,6 +22,8 @@ namespace acnh_manager::manifest {
 inline constexpr int kSchemaVersion = 1;
 /* Semantic hook bit (bit1); a release build must not carry DEV / RPC server / anything else. */
 inline constexpr std::uint32_t kReleaseBuildFlags = 1u << 1;
+/* Hard ceiling for the self-update NRO loaded into memory by the worker. */
+inline constexpr std::uint64_t kManagerNroMaxBytes = 32ull * 1024 * 1024;
 
 struct FileEntry {
     std::string name;
@@ -49,6 +51,17 @@ struct AgentInfo {
     bool dirty{true};
 };
 
+/* The self-update half of the same signed release manifest.  The remote manifest may carry it;
+   an embedded manifest omits it because the NRO cannot contain its own future hash. */
+struct ManagerRelease {
+    bool present{false};
+    std::string version;
+    std::string url;
+    std::uint64_t size{0};
+    std::string sha256;
+    std::string changelog;
+};
+
 struct Manifest {
     int schema{0};
     std::string channel;
@@ -57,6 +70,7 @@ struct Manifest {
     std::string changelog;
     std::string app_min_version;
     AgentInfo agent;
+    ManagerRelease manager;
     std::vector<GameEntry> games;
 };
 

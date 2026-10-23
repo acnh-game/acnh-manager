@@ -18,6 +18,7 @@
 #include "install/engine.hpp"
 #include "install/gate.hpp"
 #include "manifest/manifest.hpp"
+#include "net/manager_update.hpp"
 #include "net/update.hpp"
 #include "net/update_task.hpp"
 #include "net/http_server.hpp"
@@ -77,6 +78,7 @@ private:
     enum class Page {
         Home,
         Details,
+        UpdateCenter,
         Install,
         Uninstall,
         Progress,
@@ -127,6 +129,13 @@ private:
     /* Home page: the check button's second line (idle / running / result, in the current
        language, built at render time so a language switch cannot leave a stale sentence). */
     std::string UpdateSubtitle() const;
+    void EnterUpdateCenter();
+    void RenderUpdateCenter(Surface surface);
+    void MoveUpdateCenterFocus(int direction);
+    bool ManagerUpdateAvailable() const;
+    void StartManagerUpdate();
+    void PollManagerUpdate();
+    void ApplyManagerDownload(net::HttpResult result);
     /* Details page: the raw outcome, for when someone needs to know what actually happened. */
     std::string UpdateDetailText() const;
     /* The agent version a press of the primary button would install, when that is newer than
@@ -599,6 +608,7 @@ private:
     bool m_result_uninstall{false};
     bool m_result_forwarder{false};
     net::UpdateCheckTask m_update_task{};
+    net::ManagerDownloadTask m_manager_task{};
     bool m_update_running{false};
     /* A startup check keeps a failure to itself (the button keeps its normal wording); a
        check the player asked for always reports what happened. */
@@ -615,6 +625,11 @@ private:
        instead of the embedded release while it stands. */
     manifest::Manifest m_update_manifest{};
     bool m_have_update_manifest{false};
+    manifest::Manifest m_remote_manifest{};
+    bool m_have_remote_manifest{false};
+    bool m_manager_update_running{false};
+    std::string m_manager_update_error{};
+    std::string m_manager_installed_version{};
     /* Log every drawing stage of the first frame, so a crash points at one of them. */
     int m_trace_frames{1};
     /* First-frame stage pauses (when dev-pause exists): wait for + after each stage. */

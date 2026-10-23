@@ -57,6 +57,26 @@ constexpr Entry kStrings[] = {
     /* A release host that moved on without this console's game build: nothing to install, and
        the reason is not "you are up to date". */
     {"新版 %s 不支持当前游戏版本", "new %s does not support this game version"},  /* SubUpdateNewerUnsupported */
+    {"更新中心", "Update center"},  /* UpdateCenterTitle */
+    {"动森 Game Agent", "Game Agent"},  /* UpdateAgentTitle */
+    {"ACNH-Manager", "ACNH-Manager"},  /* UpdateManagerTitle */
+    {"当前 %s", "Current %s"},  /* UpdateCurrentVersion */
+    {"可用 %s", "Available %s"},  /* UpdateAvailableVersion */
+    {"已是最新", "Up to date"},  /* UpdateStatusCurrent */
+    {"有可用更新", "Update available"},  /* UpdateStatusAvailable */
+    {"更新信息不可用", "Update information unavailable"},  /* UpdateStatusUnavailable */
+    {"不可用", "Unavailable"},  /* UpdateUnavailableShort */
+    {"尚未安装", "Not installed"},  /* UpdateStatusNotInstalled */
+    {"检查失败", "Check failed"},  /* UpdateStatusFailed */
+    {"当前程序不在标准位置,无法自动更新", "Cannot update from this program location"},  /* UpdatePathUnavailable */
+    {"更新", "Update"},  /* UpdateAction */
+    {"正在下载更新…", "Downloading update…"},  /* UpdateDownloading */
+    {"更新失败: %s", "Update failed: %s"},  /* UpdateDownloadFailed */
+    {"更新完成,请退出并从相册重新打开", "Updated - exit and reopen from the album"},  /* UpdateRestartRequired */
+    {"重新检查", "Check again"},  /* UpdateRecheck */
+    {"%d 项更新可用", "%d updates available"},  /* UpdateSummaryAvailable */
+    {"全部已是最新", "Everything is up to date"},  /* UpdateSummaryCurrent */
+    {"检查完成,部分更新信息不可用", "Checked - some update information is unavailable"},  /* UpdateSummaryPartial */
     {"正在安装动森 Game Agent", "Installing Game Agent"},  /* ProgressInstalling */
     {"正在卸载动森 Game Agent", "Removing Game Agent"},  /* ProgressUninstalling */
     {"请不要关机,也不要退出应用", "Do not power off or leave the app"},  /* ProgressNote */
@@ -130,7 +150,7 @@ constexpr Entry kStrings[] = {
     {"当前 %s · 最新 %s", "current %s - latest %s"},  /* SubRepair */
     {"再试一次，失败原因在详情里", "Tries once more; the reason is in Details"},  /* SubRetry */
     {"已经装好了，不需要操作", "Nothing to do"},  /* SubUpToDate */
-    {"查看有没有更高版本的动森 Game Agent", "Checks whether a newer Game Agent exists"},  /* SubCheckUpdate */
+    {"查看动森 Game Agent 与 ACNH-Manager 的更新", "Game Agent and ACNH-Manager updates"},  /* SubCheckUpdate */
     {"装一份游戏本体", "Install a base game"},  /* SubInstallGame */
     {"删除已安装的文件", "Deletes the installed files"},  /* SubUninstall */
     {"装好后可从桌面直接启动", "Launch directly from the HOME Menu"},  /* SubForwarderInstall */

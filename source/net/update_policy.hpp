@@ -20,6 +20,7 @@
        build; the latter stays blocked by the gate, which `install::Plan()` still enforces. */
 
 #include <string>
+#include <string_view>
 
 #include "install/gate.hpp"
 #include "manifest/manifest.hpp"
@@ -31,6 +32,12 @@ struct AdoptionDecision {
     bool adopt{false};       /* ...and it covers this build, so it becomes the install source */
     bool unsupported{false}; /* newer, but nothing in games[] covers this build */
 };
+
+inline bool ManagerReleaseAvailable(const manifest::ManagerRelease &release,
+                                    std::string_view current) {
+    return release.present && !release.version.empty() && !current.empty() &&
+           manifest::CompareVersions(release.version, current) > 0;
+}
 
 /* `current` is the version on the card (install record), or the version this build carries when
    nothing is installed. */

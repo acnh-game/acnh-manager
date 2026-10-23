@@ -22,7 +22,7 @@
 | 3 | 发布门控 + 导入 | 见第 2 节 |
 | 4 | 用固定容器从 hbl 源码编译 loader 并生成 forwarder NSP | 仓库不保存编译后的 loader 二进制;源码与产物哈希进入 provenance |
 | 5 | 构建 NRO(`data/` 经 bin2s 进 `.rodata`) | 与普通构建同一条命令 |
-| 6 | 把 NRO 拷进 `packaging/nro/acnh-manager-<APP_VERSION>.nro` | 这个 raw 地址就是对外的下载直链(商店 update 资产与指南页都指它);文件名的版本号取自 Makefile 的 `APP_VERSION`,不另设一处 |
+| 6 | 把 NRO 拷进 `packaging/nro/acnh-manager-<APP_VERSION>.nro`,并把其版本/大小/SHA-256 写入根清单的 `manager` 自更新对象 | 这个 raw 地址就是对外的下载直链(商店 update 资产、指南页和更新中心都指它);文件名的版本号取自 Makefile 的 `APP_VERSION`,不另设一处 |
 | 7 | **给根目录的 `agent-manifest.json` 签名**(`tools/sign-manifest.py`) | 漏签 = 线上每个 App 都把清单当垃圾丢掉(见第 6 节);私钥路径用 `--key` 或 `ACNH_MANAGER_SIGNING_KEY` 指,缺了前置检查直接拒绝 |
 | 8 | 自检 `tools/verify-release.py` | 见第 3 节;自检同时验签,抓"清单改了没重签" |
 | 9 | 打商店包 | `tools/make-store-package.py` |
@@ -39,7 +39,8 @@
 
 1. 提交这一轮的产物:内嵌清单/payload、forwarder 的 `data/forwarder_nsp.bin` 与
    `data/forwarder_nsp_meta.bin`、`packaging/agent/<版本>/`、`packaging/agent-lock.json`、
-   `packaging/nro/acnh-manager-<版本>.nro`、`agent-manifest.json` 与 `agent-manifest.json.sig`;
+   `packaging/nro/acnh-manager-<版本>.nro`、带 `manager` 对象的 `agent-manifest.json` 与
+   `agent-manifest.json.sig`;
 2. 分支与 tag 都要同时推到两个远端:
 
    ```bash
@@ -90,8 +91,9 @@ data/manifest.bin                  内嵌发布清单(json 文本)
 data/subsdk9.bin                   内嵌 payload 文件(清单里 source=subsdk9)
 data/main_npdm.bin                 内嵌 payload 文件(source=main.npdm)
 data/acnh_agent_version.bin        内嵌 payload 文件(source=acnh-agent.version)
-agent-manifest.json                仓库根目录的"当前版本"清单(发布记录的副本;
-                                   App 的更新检查按 raw 地址读它)
+agent-manifest.json                仓库根目录的"当前版本"清单(agent/game 字段来自
+                                     发布记录,另带 Manager 自更新对象;更新中心按 raw
+                                     地址读它)
 agent-manifest.json.sig            上面那份清单的签名(第 7 步生成,两个文件一起提交;
                                     App 先验它再决定要不要信清单的内容)
 ```
@@ -114,6 +116,8 @@ python3 tools/verify-release.py --nro acnh-manager.nro
 
 核对四处一致:发布锁必须仍是发布形态;`packaging/agent/<版本>/` 里三个文件的哈希与锁一致、
 `acnh-agent.version`/`manifest.json` 的内容与锁一致;`data/` 里的内嵌 trio 与发布记录逐字节相同;
+根清单除可选的 `manager` 对象外必须与发布记录相同,且该对象的大小/哈希/版本必须匹配
+`packaging/nro/` 里的 NRO;
 forwarder 的 NSP 与 `SOURCE.json`/源码哈希一致,且仓库没有编译后的 loader 二进制;给了 `--nro`
 时还要求 **NRO 里确实找得到内嵌清单、三个 payload 与 forwarder NSP 的原始字节**,并且 **NRO 的
 构建戳对得上当前 `source/` + `data/` + `assets/`**(戳里的 `src:<8 hex>` 与现场重算值一致)。

@@ -1,6 +1,7 @@
 #include "app.hpp"
 
 #include <cmath>
+#include <cctype>
 #include <cstdio>
 #include <algorithm>
 #include <initializer_list>
@@ -26,6 +27,7 @@
 #include "version.hpp"
 #include "util/fs_path.hpp"
 #include "util/json.hpp"
+#include "util/sha256.hpp"
 #include "util/size_text.hpp"
 #include "util/swkbd.hpp"
 
@@ -318,6 +320,9 @@ constexpr int kActionPendingAbandon = 27;  /* "give up and clean up" on that scr
 constexpr int kActionPendingPickNew = 28;  /* "pick something else" on that screen (Y) */
 constexpr int kActionStartupRepair = 29;   /* the startup page's only action (A) */
 constexpr int kActionForwarder = 30;       /* install/remove the desktop tile */
+constexpr int kActionUpdateAgent = 31;     /* Update Center: apply the Game Agent release */
+constexpr int kActionUpdateManager = 32;   /* Update Center: download this app's NRO */
+constexpr int kActionUpdateRecheck = 33;   /* Update Center: check the manifest again */
 
 constexpr bool IsHomeFocusAction(int id) {
     return id == kActionPrimary || id == kActionCheckUpdate || id == kActionUninstall ||
@@ -480,6 +485,7 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
         m_page = Page::StartupCheck;
     }
     m_update_task.SetLog(log);
+    m_manager_task.SetLog(log);
     /* The chat-code explainer reads its code once; empty when the build carries none. */
     m_guide_qr = ui::QrMatrix::FromEmbedded();
     /* High error correction leaves room for the small centered brand mark. */
@@ -625,6 +631,7 @@ void App::SetStartupPlan(env::StartupPlan plan) {
 
 void App::Exit() {
     m_update_task.Stop();
+    m_manager_task.Stop();
     if (m_fb_ready) {
         framebufferClose(&m_fb);
         m_fb_ready = false;
@@ -1017,7 +1024,38 @@ void App::ToggleLanguage() {
    the UI.  The interface therefore stays alive while the request is in flight. */
 void App::StartUpdateCheck(bool silent) {
     m_update_silent = silent;
-    const std::string start_error = m_update_task.Start(net::kDefaultManifestUrl);
+    m_manager_update_error.clear();
+    std::string manifest_url = net::kDefaultManifestUrl;
+#if ACNH_DEV_AIDS
+    if (m_sd != nullptr) {
+        constexpr const char *kDevUpdateUrl = "/switch/ACNH-Manager/dev-update-url";
+        std::string text;
+        bool found = false;
+        std::string read_error;
+        if (install::ReadTextFile(*m_sd, kDevUpdateUrl, &text, &found, &read_error) && found) {
+            while (!text.empty() &&
+                   (text.back() == '\n' || text.back() == '\r' ||
+                    text.back() == ' ' || text.back() == '\t')) {
+                text.pop_back();
+            }
+            std::size_t first = 0;
+            while (first < text.size() &&
+                   (text[first] == ' ' || text[first] == '\t')) {
+                ++first;
+            }
+            const std::string candidate = text.substr(first);
+            if (candidate.rfind("https://", 0) == 0) {
+                manifest_url = candidate;
+                Trace("update check: dev URL %s", manifest_url.c_str());
+            } else {
+                Trace("update check: ignoring non-HTTPS dev URL");
+            }
+        } else if (!read_error.empty()) {
+            Trace("update check: dev URL read failed: %s", read_error.c_str());
+        }
+    }
+#endif
+    const std::string start_error = m_update_task.Start(manifest_url);
     m_update_running = m_update_task.Running();
     if (!start_error.empty()) {
         /* No worker means no check: report it like any other failure, so the button never looks
@@ -1028,7 +1066,7 @@ void App::StartUpdateCheck(bool silent) {
         ApplyUpdateCheck(std::move(failed));
         return;
     }
-    Trace("update check: started (url=%s)", net::kDefaultManifestUrl);
+    Trace("update check: started (url=%s)", manifest_url.c_str());
 }
 
 void App::PollUpdateCheck() {
@@ -1050,6 +1088,8 @@ void App::ApplyUpdateCheck(net::UpdateCheckResult result) {
     m_update_newer_unsupported = false;
     m_have_update_manifest = false;
     m_update_manifest = manifest::Manifest{};
+    m_have_remote_manifest = false;
+    m_remote_manifest = manifest::Manifest{};
     if (result.outcome == net::UpdateOutcome::Ok) {
         m_update_remote_version = result.agent_version;
         /* What this console has: the record's version, or the version this build carries when
@@ -1059,6 +1099,8 @@ void App::ApplyUpdateCheck(net::UpdateCheckResult result) {
             !installed.empty() ? installed : (m_have_manifest ? m_manifest.agent.version : installed);
         const auto parsed = manifest::Parse(result.manifest_text, kAppVersion);
         if (parsed.ok) {
+            m_remote_manifest = parsed.manifest;
+            m_have_remote_manifest = true;
             /* The rule lives in net/update_policy.hpp (pure, host-tested): a newer release is
                only adopted when the gate accepts *this* build. */
             const auto decision = net::DecideAdoption(parsed.manifest, m_report.build, current);
@@ -1123,11 +1165,19 @@ std::string App::UpdateSubtitle() const {
                 return i18n::Format(i18n::StringId::SubUpdatePublished,
                                     m_update_remote_version.c_str());
             }
-            return NewerAgentVersion().empty()
-                       ? i18n::Format(i18n::StringId::SubUpdateUpToDate,
-                                      m_update_remote_version.c_str())
-                       : i18n::Format(i18n::StringId::SubUpdateNewer,
-                                      m_update_remote_version.c_str());
+            {
+                int updates = NewerAgentVersion().empty() ? 0 : 1;
+                if (ManagerUpdateAvailable()) {
+                    ++updates;
+                }
+                if (updates > 0) {
+                    return i18n::Format(i18n::StringId::UpdateSummaryAvailable, updates);
+                }
+                if (!m_have_remote_manifest || !m_remote_manifest.manager.present) {
+                    return std::string(Tr(i18n::StringId::UpdateSummaryPartial));
+                }
+                return std::string(Tr(i18n::StringId::UpdateSummaryCurrent));
+            }
         case net::UpdateOutcome::HttpStatus:
             return i18n::Format(
                 i18n::StringId::SubUpdateFailed,
@@ -1151,6 +1201,136 @@ std::string App::UpdateSubtitle() const {
                         Tr(i18n::StringId::UpdateShortOffline));
 }
 
+bool App::ManagerUpdateAvailable() const {
+    if (!m_have_remote_manifest || !m_remote_manifest.manager.present) {
+        return false;
+    }
+    const std::string current =
+        m_manager_installed_version.empty() ? std::string(kAppVersion) : m_manager_installed_version;
+    return net::ManagerReleaseAvailable(m_remote_manifest.manager, current);
+}
+
+void App::EnterUpdateCenter() {
+    m_page = Page::UpdateCenter;
+    m_focus = -1;
+    if (!m_update_have_result && !m_update_running) {
+        StartUpdateCheck(/*silent=*/false);
+    }
+}
+
+void App::MoveUpdateCenterFocus(int direction) {
+    const int ids[] = {kActionUpdateAgent, kActionUpdateManager, kActionUpdateRecheck};
+    const int count = static_cast<int>(sizeof(ids) / sizeof(ids[0]));
+    int current = -1;
+    for (int i = 0; i < count; ++i) {
+        if (ids[i] == m_focus) {
+            current = i;
+            break;
+        }
+    }
+    if (current < 0) {
+        current = direction > 0 ? -1 : 0;
+    }
+    for (int step = 1; step <= count; ++step) {
+        const int raw = current + (direction > 0 ? step : -step);
+        const int index = ((raw % count) + count) % count;
+        for (const Action &action : m_actions) {
+            if (action.id == ids[index] && action.enabled) {
+                m_focus = action.id;
+                return;
+            }
+        }
+    }
+}
+
+void App::StartManagerUpdate() {
+    if (!ManagerUpdateAvailable() || m_update_running || m_manager_update_running ||
+        m_sd == nullptr) {
+        return;
+    }
+    if (!env::IsStandardNroPath(m_startup.current_path)) {
+        m_manager_update_error = "the running NRO is not in the standard location";
+        Trace("manager update: %s", m_manager_update_error.c_str());
+        return;
+    }
+    const manifest::ManagerRelease &release = m_remote_manifest.manager;
+    m_manager_update_error.clear();
+    const std::string start_error =
+        m_manager_task.Start(release.url, static_cast<std::size_t>(release.size), 120);
+    m_manager_update_running = m_manager_task.Running();
+    if (!start_error.empty()) {
+        m_manager_update_running = false;
+        m_manager_update_error = start_error;
+    }
+    Trace("manager update: %s %s", m_manager_update_running ? "started" : "failed",
+          m_manager_update_error.c_str());
+}
+
+void App::PollManagerUpdate() {
+    net::HttpResult result;
+    if (m_manager_task.Take(&result)) {
+        m_manager_update_running = false;
+        ApplyManagerDownload(std::move(result));
+        return;
+    }
+    m_manager_update_running = m_manager_task.Running();
+}
+
+void App::ApplyManagerDownload(net::HttpResult result) {
+    if (result.outcome != net::HttpOutcome::Ok) {
+        m_manager_update_error =
+            result.status != 0 ? "HTTP " + std::to_string(result.status) : result.detail;
+        Trace("manager update: download failed: %s", m_manager_update_error.c_str());
+        return;
+    }
+    if (!m_have_remote_manifest || !m_remote_manifest.manager.present) {
+        m_manager_update_error = "the verified manifest lost its manager entry";
+        return;
+    }
+    const manifest::ManagerRelease &release = m_remote_manifest.manager;
+    if (result.body.size() != release.size) {
+        m_manager_update_error = "downloaded size does not match the manifest";
+        Trace("manager update: size got=%zu expected=%llu", result.body.size(),
+              static_cast<unsigned long long>(release.size));
+        return;
+    }
+    std::string hash = util::Sha256Hex(result.body);
+    for (char &c : hash) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    if (hash != release.sha256) {
+        m_manager_update_error = "downloaded SHA-256 does not match the manifest";
+        Trace("manager update: hash got=%s expected=%s", hash.c_str(), release.sha256.c_str());
+        return;
+    }
+    env::NroMeta meta;
+    std::string nro_error;
+    if (!env::ParseNroMeta(reinterpret_cast<const std::uint8_t *>(result.body.data()),
+                           result.body.size(), &meta, &nro_error) ||
+        !env::NroLooksOurs(meta)) {
+        m_manager_update_error = "downloaded file is not an ACNH-Manager NRO";
+        Trace("manager update: NRO identity failed: %s", nro_error.c_str());
+        return;
+    }
+    if (meta.version != release.version) {
+        m_manager_update_error = "NRO version does not match the manifest";
+        Trace("manager update: version got=%s expected=%s", meta.version.c_str(),
+              release.version.c_str());
+        return;
+    }
+    std::vector<u8> bytes(result.body.begin(), result.body.end());
+    std::string write_error;
+    if (!install::WriteFileVerified(*m_sd, env::kStandardNroPath, bytes, release.sha256,
+                                    &write_error)) {
+        m_manager_update_error = write_error;
+        Trace("manager update: replace failed: %s", write_error.c_str());
+        return;
+    }
+    m_manager_installed_version = release.version;
+    m_manager_update_error.clear();
+    Trace("manager update: %s installed; restart the app to run it", release.version.c_str());
+}
+
 /* Details page: the raw outcome, so "it failed" always comes with what actually happened. */
 std::string App::UpdateDetailText() const {
     if (m_update_running) {
@@ -1160,10 +1340,16 @@ std::string App::UpdateDetailText() const {
         return std::string(Tr(i18n::StringId::ValueNotChecked));
     }
     if (m_update_outcome == net::UpdateOutcome::Ok) {
-        return m_update_newer_unsupported
-                   ? i18n::Format(i18n::StringId::SubUpdateNewerUnsupported,
-                                  m_update_remote_version.c_str())
-                   : i18n::Format(i18n::StringId::UpdateCheckOk, m_update_remote_version.c_str());
+        std::string detail =
+            m_update_newer_unsupported
+                ? i18n::Format(i18n::StringId::SubUpdateNewerUnsupported,
+                               m_update_remote_version.c_str())
+                : i18n::Format(i18n::StringId::UpdateCheckOk,
+                               m_update_remote_version.c_str());
+        if (m_have_remote_manifest && m_remote_manifest.manager.present) {
+            detail += "; ACNH-Manager " + m_remote_manifest.manager.version;
+        }
+        return detail;
     }
     return i18n::Format(i18n::StringId::UpdateCheckFailed, m_update_detail.c_str());
 }
@@ -1371,7 +1557,7 @@ void App::HandleStick(const PadState &pad) {
     constexpr u64 kRepeatMs = 110;
     const HidAnalogStickState stick = padGetStickPos(&pad, 0);
     HomeMoveDirection move = HomeMoveDirection::None;
-    if (m_page == Page::Home) {
+    if (m_page == Page::Home || m_page == Page::UpdateCenter) {
         move = HomeDirectionFromStick(stick.x, stick.y, kDeadZone);
     } else if (m_page == Page::GameInstall && m_install_screen == InstallScreen::Files) {
         if (stick.y > kDeadZone) {
@@ -1392,6 +1578,8 @@ void App::HandleStick(const PadState &pad) {
         m_file_list.MoveFocus(move == HomeMoveDirection::Previous ? -1 : +1);
     } else if (m_page == Page::Home) {
         MoveHomeFocus(move == HomeMoveDirection::Previous ? -1 : +1);
+    } else if (m_page == Page::UpdateCenter) {
+        MoveUpdateCenterFocus(move == HomeMoveDirection::Previous ? -1 : +1);
     } else {
         return;
     }
@@ -1422,6 +1610,9 @@ void App::HandleKeys(u32 down) {
             }
             return;
         }
+        return;
+    }
+    if (m_page == Page::UpdateCenter && m_manager_update_running) {
         return;
     }
     /* L / R move through the pages the player reads, in the order the header draws them, wrapping
@@ -1490,6 +1681,24 @@ void App::HandleKeys(u32 down) {
         return;
     }
     switch (m_page) {
+        case Page::UpdateCenter: {
+            HomeMoveDirection move = HomeMoveDirection::None;
+            if ((down & HidNpadButton_Up) != 0 || (down & HidNpadButton_Left) != 0) {
+                move = HomeMoveDirection::Previous;
+            } else if ((down & HidNpadButton_Down) != 0 || (down & HidNpadButton_Right) != 0) {
+                move = HomeMoveDirection::Next;
+            }
+            if (move != HomeMoveDirection::None) {
+                MoveUpdateCenterFocus(move == HomeMoveDirection::Next ? +1 : -1);
+            } else if ((down & HidNpadButton_A) != 0) {
+                if (m_focus >= 0) {
+                    ActivateAction(m_focus);
+                }
+            } else if ((down & HidNpadButton_X) != 0) {
+                ActivateAction(kActionUpdateRecheck);
+            }
+            break;
+        }
         case Page::Details:
             if ((down & HidNpadButton_A) != 0) {
                 /* The only switchable row today is the language (the same action a tap on the
@@ -1660,6 +1869,23 @@ void App::ActivateAction(int id) {
         case Page::Guide:
         case Page::GameInstall:
             break;
+        case Page::UpdateCenter:
+            if (id == kActionUpdateAgent && !NewerAgentVersion().empty()) {
+                m_page = Page::Install;
+                m_focus = FirstEnabled(m_actions);
+                return;
+            }
+            if (id == kActionUpdateManager) {
+                StartManagerUpdate();
+                return;
+            }
+            if (id == kActionUpdateRecheck) {
+                if (!m_update_running && !m_manager_update_running) {
+                    StartUpdateCheck();
+                }
+                return;
+            }
+            break;
         case Page::Uninstall:
             if (id == kActionPrimary) {
                 RunUninstall();
@@ -1712,7 +1938,7 @@ void App::ActivateAction(int id) {
                     break;
             }
             break;
-        case kActionCheckUpdate: StartUpdateCheck(); break;
+        case kActionCheckUpdate: EnterUpdateCenter(); break;
         case kActionForwarder:
             if (ForwarderActionBlocked(
                     m_report.applet_type == AppletType_Application,
@@ -1820,6 +2046,7 @@ void App::Run() {
     int frames_drawn = 0;
     while (appletMainLoop() && !m_should_exit) {
         PollUpdateCheck();
+        PollManagerUpdate();
         /* The browser page is answered from this loop: a page that cannot be served while the
            console draws is a page that times out every second. */
         PollInstallerServer();
@@ -1919,6 +2146,7 @@ void App::Render() {
     }
     switch (m_page) {
         case Page::Home: RenderHome(surface); break;
+        case Page::UpdateCenter: RenderUpdateCenter(surface); break;
         case Page::StartupCheck: RenderStartupCheck(surface); break;
         case Page::GameInstall: RenderGameInstall(surface); break;
         case Page::Details: RenderDetails(surface); break;
@@ -2002,6 +2230,10 @@ void App::RenderHeader(Surface surface) {
         DrawBrand(surface, surface.width);
         return;
     }
+    if (m_page == Page::UpdateCenter && m_manager_update_running) {
+        DrawBrand(surface, surface.width);
+        return;
+    }
     /* The installer page is the app's one modal page: the four entries are hidden (not greyed
        out) and the room they took shows the two storage bars, so the player sees why the page
        cannot be left with L/R and how much room the install has. */
@@ -2080,6 +2312,9 @@ void App::AddChromeActions(int surface_width, int surface_height) {
     if (m_page == Page::Progress || m_page == Page::StartupCheck) {
         return;
     }
+    if (m_page == Page::UpdateCenter && m_manager_update_running) {
+        return;
+    }
     /* The installer page hides the tabs and shows the two storage blocks instead; those blocks are
        also the control that picks where the run writes (design section 8.1).  Their rectangles come
        from the same layout the drawing uses -- and they are registered here, not while drawing,
@@ -2154,6 +2389,13 @@ void App::RenderFooter(Surface surface) {
     const int y = surface.height - kFooterHeight;
     FillRect(surface, 0, y, surface.width, kFooterHeight, kCard);
     StrokeRect(surface, 0, y, surface.width, 2, 2, kBorder);
+    if (m_page == Page::UpdateCenter && m_manager_update_running) {
+        const char *hint = Tr(i18n::StringId::UpdateDownloading);
+        const int hint_width = m_font.Measure(hint, kFontSmall);
+        m_font.Draw(surface, (surface.width - hint_width) / 2, y + 12, kFontSmall, kWarn,
+                    hint);
+        return;
+    }
     /* The footer keeps one thing the buttons cannot show: how to leave.  B gets the same kind
        of badge the buttons use, so the "one button, one action" rule still holds. */
     /* Two screens of the install flow say something extra here, because the player has to know it
@@ -2865,6 +3107,195 @@ void App::RenderHome(Surface surface) {
         Trace("home: rendered kind=%d actions=%zu focus=%d", static_cast<int>(m_home_kind),
               m_actions.size(), m_focus);
     }
+}
+
+void App::RenderUpdateCenter(Surface surface) {
+    m_actions.clear();
+    const int width = surface.width - kMargin * 2;
+    const int top = kHeaderHeight + 24;
+    const bool checking = m_update_running;
+    const bool check_failed =
+        !checking && m_update_have_result && m_update_outcome != net::UpdateOutcome::Ok;
+    const bool agent_update = !NewerAgentVersion().empty();
+    const bool manager_update = ManagerUpdateAvailable();
+    const bool manager_path_ok = env::IsStandardNroPath(m_startup.current_path);
+    const bool manager_ready = !m_manager_installed_version.empty();
+    const bool manager_known =
+        m_have_remote_manifest && m_remote_manifest.manager.present;
+    const bool agent_action_enabled =
+        agent_update && !checking && !m_manager_update_running;
+    const bool manager_action_enabled =
+        manager_update && manager_path_ok && !checking && !m_manager_update_running;
+    const bool recheck_enabled = !checking && !m_manager_update_running;
+    const bool focus_valid =
+        (m_focus == kActionUpdateAgent && agent_action_enabled) ||
+        (m_focus == kActionUpdateManager && manager_action_enabled) ||
+        (m_focus == kActionUpdateRecheck && recheck_enabled);
+    if (!focus_valid) {
+        m_focus = agent_action_enabled
+                      ? kActionUpdateAgent
+                      : (manager_action_enabled ? kActionUpdateManager
+                                                : (recheck_enabled ? kActionUpdateRecheck : -1));
+    }
+
+    int updates = 0;
+    if (agent_update) {
+        ++updates;
+    }
+    if (manager_update) {
+        ++updates;
+    }
+    const char *summary = Tr(i18n::StringId::SubUpdateChecking);
+    std::string summary_text;
+    if (m_manager_update_running) {
+        summary = Tr(i18n::StringId::UpdateDownloading);
+    } else if (!checking) {
+        if (check_failed) {
+            summary = Tr(i18n::StringId::UpdateStatusFailed);
+        } else if (!m_manager_installed_version.empty()) {
+            summary = Tr(i18n::StringId::UpdateRestartRequired);
+        } else if (updates > 0) {
+            summary_text = i18n::Format(i18n::StringId::UpdateSummaryAvailable, updates);
+            summary = summary_text.c_str();
+        } else if (!manager_known) {
+            summary = Tr(i18n::StringId::UpdateSummaryPartial);
+        } else {
+            summary = Tr(i18n::StringId::UpdateSummaryCurrent);
+        }
+    }
+
+    m_font.DrawBold(surface, kMargin, top, kFontTitle, kText,
+                    Tr(i18n::StringId::UpdateCenterTitle));
+    m_font.Draw(surface, kMargin, top + 52, kFontBody, kSubtle, summary);
+
+    const auto draw_card = [&](int y, i18n::StringId title_id, const std::string &current,
+                               const std::string &available, const std::string &status,
+                               const char *action_label, int action_id, bool enabled) {
+        constexpr int card_height = 132;
+        const int card_x = kMargin;
+        const bool focused = m_focus == action_id;
+        const Color border = focused && enabled ? kHeader : kBorder;
+        FillRoundedRect(surface, card_x, y, width, card_height, 16, border);
+        FillRoundedRect(surface, card_x + 3, y + 3, width - 6, card_height - 6, 14, kCard);
+        m_font.DrawBold(surface, card_x + 24, y + 18, kFontHeading, kText, Tr(title_id));
+        std::string versions = i18n::Format(i18n::StringId::UpdateCurrentVersion, current.c_str());
+        if (!available.empty()) {
+            versions += "  ·  " +
+                        i18n::Format(i18n::StringId::UpdateAvailableVersion,
+                                     available.c_str());
+        }
+        m_font.Draw(surface, card_x + 24, y + 58, kFontBody, kSubtle,
+                    m_font.Fit(versions, kFontBody, width - 310, 1).c_str());
+        const std::string status_text =
+            m_font.Fit(status, kFontSmall, width - 310, 1);
+        m_font.Draw(surface, card_x + 24, y + 94, kFontSmall,
+                    enabled ? kWarn : kSubtle, status_text.c_str());
+
+        const int button_w = 230;
+        const int button_h = 58;
+        const int button_x = card_x + width - 24 - button_w;
+        const int button_y = y + (card_height - button_h) / 2;
+        const Color face = enabled ? kHeader : kCardDisabled;
+        const Color ink = enabled ? kOnHeader : kSubtle;
+        FillRoundedRect(surface, button_x, button_y, button_w, button_h, 14, face);
+        if (focused && enabled) {
+            DrawKeyBadge(surface, m_font, button_x + 28, button_y + button_h / 2, 20, "A",
+                         kOnHeader, kHeader);
+        }
+        const int label_x = button_x + (focused && enabled ? 50 : 18);
+        const int label_w = button_w - (focused && enabled ? 68 : 36);
+        const std::string fitted =
+            m_font.Fit(action_label, kFontBody, label_w, 1);
+        DrawCenteredLabel(surface, m_font,
+                          Rect{label_x, button_y, label_w, button_h}, kFontBody, ink,
+                          fitted);
+        m_actions.push_back(
+            {action_id, Rect{button_x, button_y, button_w, button_h}, enabled});
+    };
+
+    std::string agent_current =
+        m_have_state ? m_state.agent_version : std::string(Tr(i18n::StringId::ValueNotInstalled));
+    std::string agent_available =
+        agent_update && m_have_remote_manifest ? m_remote_manifest.agent.version : std::string();
+    std::string agent_status;
+    if (checking) {
+        agent_status = Tr(i18n::StringId::SubUpdateChecking);
+    } else if (check_failed) {
+        agent_status = Tr(i18n::StringId::UpdateStatusFailed);
+    } else if (agent_update) {
+        agent_status = Tr(i18n::StringId::UpdateStatusAvailable);
+    } else if (!m_have_state) {
+        agent_status = Tr(i18n::StringId::UpdateStatusNotInstalled);
+    } else {
+        agent_status = Tr(i18n::StringId::UpdateStatusCurrent);
+    }
+
+    const std::string manager_current =
+        m_manager_installed_version.empty() ? std::string(kAppVersion)
+                                            : m_manager_installed_version;
+    std::string manager_available =
+        manager_update ? m_remote_manifest.manager.version : std::string();
+    std::string manager_status;
+    const char *manager_action = Tr(i18n::StringId::UpdateUnavailableShort);
+    if (m_manager_update_running) {
+        manager_status = Tr(i18n::StringId::UpdateDownloading);
+        manager_action = Tr(i18n::StringId::UpdateDownloading);
+    } else if (!m_manager_update_error.empty()) {
+        manager_status =
+            i18n::Format(i18n::StringId::UpdateDownloadFailed,
+                         m_manager_update_error.c_str());
+        manager_action = Tr(i18n::StringId::InstallRetry);
+    } else if (manager_ready) {
+        manager_status = Tr(i18n::StringId::UpdateRestartRequired);
+        manager_action = Tr(i18n::StringId::UpdateStatusCurrent);
+    } else if (checking) {
+        manager_status = Tr(i18n::StringId::SubUpdateChecking);
+        manager_action = Tr(i18n::StringId::SubUpdateChecking);
+    } else if (check_failed) {
+        manager_status = Tr(i18n::StringId::UpdateStatusFailed);
+        manager_action = Tr(i18n::StringId::UpdateStatusFailed);
+    } else if (!manager_known) {
+        manager_status = Tr(i18n::StringId::UpdateStatusUnavailable);
+    } else if (!manager_path_ok) {
+        manager_status = Tr(i18n::StringId::UpdatePathUnavailable);
+        manager_action = Tr(i18n::StringId::UpdateUnavailableShort);
+    } else if (manager_update) {
+        manager_status = Tr(i18n::StringId::UpdateStatusAvailable);
+        manager_action = Tr(i18n::StringId::UpdateAction);
+    } else {
+        manager_status = Tr(i18n::StringId::UpdateStatusCurrent);
+        manager_action = Tr(i18n::StringId::UpdateStatusCurrent);
+    }
+
+    draw_card(top + 94, i18n::StringId::UpdateAgentTitle, agent_current, agent_available,
+              agent_status, agent_update ? Tr(i18n::StringId::UpdateAction)
+                                         : Tr(i18n::StringId::UpdateStatusCurrent),
+              kActionUpdateAgent, agent_action_enabled);
+    draw_card(top + 242, i18n::StringId::UpdateManagerTitle, manager_current, manager_available,
+              manager_status, manager_action, kActionUpdateManager, manager_action_enabled);
+
+    const int recheck_y = top + 390;
+    const int recheck_h = 64;
+    const bool recheck_focused = m_focus == kActionUpdateRecheck;
+    FillRoundedRect(surface, kMargin, recheck_y, width, recheck_h, 14,
+                    recheck_focused && recheck_enabled ? kHeader : kBorder);
+    FillRoundedRect(surface, kMargin + 3, recheck_y + 3, width - 6, recheck_h - 6, 12,
+                    recheck_enabled ? (recheck_focused ? kHeader : kCard) : kCardDisabled);
+    if (recheck_focused && recheck_enabled) {
+        DrawKeyBadge(surface, m_font, kMargin + 42, recheck_y + recheck_h / 2, 20, "A",
+                     kOnHeader, kHeader);
+    }
+    const char *recheck_label =
+        checking ? Tr(i18n::StringId::SubUpdateChecking) : Tr(i18n::StringId::UpdateRecheck);
+    const int recheck_label_width = m_font.Measure(recheck_label, kFontBody);
+    if (checking) {
+        DrawSpinner(surface, kMargin + 42, recheck_y + recheck_h / 2, 13, kHeader);
+    }
+    m_font.Draw(surface, (surface.width - recheck_label_width) / 2, recheck_y + 18, kFontBody,
+                recheck_focused && recheck_enabled ? kOnHeader : kText,
+                recheck_label);
+    m_actions.push_back(
+        {kActionUpdateRecheck, Rect{kMargin, recheck_y, width, recheck_h}, recheck_enabled});
 }
 
 void App::RenderDetails(Surface surface) {

@@ -11,6 +11,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 image="devkitpro/devkita64:20260219"
 dev_aids=1
+app_version="${APP_VERSION:-}"
 for arg in "$@"; do
     case "${arg}" in
         # A release build ships with the probes switched off.  Whether it writes log.txt is not a
@@ -50,5 +51,13 @@ echo "build stamp: ${stamp}"
 exec docker run --rm --platform linux/amd64 \
     -v "${repo_dir}:/work" -w /work \
     -e "ACNH_BUILD_STAMP=${stamp}" \
+    -e "ACNH_APP_VERSION_OVERRIDE=${app_version}" \
     "${image}" \
-    bash -lc "source /opt/devkitpro/switchvars.sh && make BUILD_STAMP=\"\$ACNH_BUILD_STAMP\" DEV_AIDS=${dev_aids}"
+    bash -lc "source /opt/devkitpro/switchvars.sh
+        find build -maxdepth 1 -type f -delete
+        rm -f acnh-manager.nro acnh-manager.nacp acnh-manager.elf acnh-manager.lst
+        args=(BUILD_STAMP=\"\$ACNH_BUILD_STAMP\" DEV_AIDS=${dev_aids})
+        if [ -n \"\${ACNH_APP_VERSION_OVERRIDE:-}\" ]; then
+            args+=(\"APP_VERSION=\$ACNH_APP_VERSION_OVERRIDE\")
+        fi
+        make \"\${args[@]}\""
