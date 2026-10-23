@@ -2266,6 +2266,8 @@ void App::RenderFooter(Surface surface) {
     }
     const int stamp_width = m_font.Measure(m_footer_text, kFontSmall);
     const int stamp_x = surface.width - kMargin - stamp_width;
+    int language_hint_x = 0;
+    int language_hint_width = 0;
     if (m_page == Page::Details) {
         const std::string switch_hint = Tr(i18n::StringId::FooterLanguageSwitch);
         const int switch_width = m_font.Measure(switch_hint, kFontSmall);
@@ -2274,6 +2276,8 @@ void App::RenderFooter(Surface surface) {
                      std::min((surface.width - switch_width) / 2,
                               stamp_x - 24 - switch_width));
         m_font.Draw(surface, switch_x, hint.text_y, kFontSmall, kSubtle, switch_hint.c_str());
+        language_hint_x = switch_x;
+        language_hint_width = switch_width;
     }
     m_font.Draw(surface, stamp_x, hint.text_y, kFontSmall, kSubtle, m_footer_text.c_str());
     /* And how to move between the pages the header lists: the tabs themselves show Ⓛ / Ⓡ on the
@@ -2298,7 +2302,9 @@ void App::RenderFooter(Surface surface) {
                own back button and the footer is otherwise empty. */
             x = hint.label_x + m_font.Measure(label, kFontSmall) + 30;
         }
-        if (x + hint_width + stamp_width + 24 < surface.width) {
+        const bool clears_language =
+            language_hint_width == 0 || x + hint_width + 24 <= language_hint_x;
+        if (clears_language && x + hint_width + stamp_width + 24 < surface.width) {
             m_font.Draw(surface, x, hint.text_y, kFontSmall, kSubtle, pages_hint);
         }
     }
