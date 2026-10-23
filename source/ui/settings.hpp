@@ -25,7 +25,7 @@ struct Settings {
 
 /* The app has two interface languages.  On the first launch only, a Chinese system language
    selects Simplified Chinese and every other usable system language selects English.  An
-   unavailable language code keeps the historical Simplified Chinese default.  `language_code`
+   unavailable language code also selects English.  `language_code`
    is the packed ASCII code returned by setGetSystemLanguage(), for example "zhCN" or "enUS". */
 i18n::Language InitialLanguageFromSystemLanguageCode(std::uint64_t language_code, bool known);
 

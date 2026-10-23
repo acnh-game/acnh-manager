@@ -1618,7 +1618,7 @@ not be decoded"**,偶尔随后在 `App::Render()` 的 `framebufferBegin` 处崩�
 ## 首次启动语言跟随系统(2026-10-22)
 
 确认 `settings.json` 不存在时，应用通过 `setGetSystemLanguage()` 读取主机语言代码：`zh-*` 使用简体中文，
-其他可用语言使用 English，并立即写入 `settings.json`。之后语言只跟随玩家在详情页的选择，不再随
+其他可用语言使用 English，系统语言完全不可用时也使用 English，并立即写入 `settings.json`。之后语言只跟随玩家在详情页的选择，不再随
 主机语言变化；文件存在但读取失败时保留默认值，不把它误判成首次启动并覆盖文件。
 
 主机测试覆盖 `zhCN`、`zhTW`、`enUS`、`ja` 与语言代码不可用五种情况。完整开发 NRO 构建通过；

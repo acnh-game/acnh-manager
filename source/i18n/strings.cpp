@@ -66,10 +66,14 @@ constexpr Entry kStrings[] = {
     {"在游戏里打开聊天栏(按 R), 行首输入 /9c9 再发送, 则会在背包第一个槽位生成\"金矿\"", "Open the chat in game (press R) and send a line that starts with /9c9: the first pocket slot gets a \"gold nugget\"."},  /* GuideHow */
     {"一行一次可以写入多个聊天码, 用空格隔开, 最多 10 个, 例如: /9c9 9c6 9c4", "One line can carry several codes, separated by spaces, up to 10, for example: /9c9 9c6 9c4"},  /* GuideHowMore */
     {"编号从《森友物码册》小程序里查:搜到物品就能复制它的聊天码。", "Look the id up in the mini-app: find the item and copy its chat code."},  /* GuideWhere */
-    {"微信扫一扫,打开《森友物码册》", "Scan with WeChat to open the mini-app"},  /* GuideScan */
+    {"微信小程序", "WeChat mini-app"},  /* GuideMiniAppTitle */
+    {"微信扫一扫，打开《森友物码册》", "Scan with WeChat to open the catalogue"},  /* GuideScan */
+    {"聊天码使用指南", "Chat-code guide"},  /* GuideWebTitle */
+    {"扫码打开网页版指南", "Scan to open the web guide"},  /* GuideWebScan */
+    {"指南", "Guide"},  /* GuideWebMark */
     {"功能说明", "Guide"},  /* TabGuide */
-    /* The brand mark from the mini-app's logo; it is an emblem, so it is not translated. */
-    {"物码", "物码"},  /* GuideMark */
+    /* Short marks that fit inside the two QR codes and follow the interface language. */
+    {"物码", "Codes"},  /* GuideMark */
     {"网络不可用", "no network"},  /* UpdateShortOffline */
     {"服务器返回 %ld", "server returned %ld"},  /* UpdateShortHttp */
     {"清单签名校验失败", "manifest signature check failed"},  /* UpdateShortSignature */
@@ -172,7 +176,7 @@ constexpr Entry kStrings[] = {
     {"填写网址,下载安装 —— 边下边装", "Paste an address; it installs as it downloads"},  /* InstallDownloadSub */
     {"上传安装", "Upload and install"},  /* InstallUpload */
     {"通过手机/电脑浏览器上传安装", "Upload from a phone or computer browser"},  /* InstallUploadSub */
-    {"支持 nsp / nsz / xci / xcz", "nsp / nsz / xci / xcz"},  /* InstallFormats */
+    {"支持 nsp / nsz / xci / xcz", "Supports nsp / nsz / xci / xcz"},  /* InstallFormats */
     {"正在等待连接……", "Waiting for a connection..."},  /* InstallWaiting */
     {"用手机或电脑的浏览器打开下面的地址", "Open this address in a phone or computer browser"},  /* InstallOpenAddress */
     {"在网页里粘贴下载网址 —— 不用一个字一个字地敲", "Paste the download address there - no need to type it out"},  /* InstallPagePasteHint */
@@ -233,6 +237,8 @@ constexpr Entry kStrings[] = {
     {"机器上已经有更新的版本,没有改动", "A newer version is already installed; nothing changed"},  /* ResultNewerVersionPlain */
     {"动森 Game Agent 已经装好了", "Game Agent is already installed"},  /* ResultAgentAlreadyInstalled */
     {"L / R 切换页面", "L / R switch pages"},  /* FooterPagesHint */
+    /* Deliberately cross-language: each hint names the language A will switch to. */
+    {"Press A to switch the interface to English", "按 A 将界面切换为中文"},  /* FooterLanguageSwitch */
     {"版本 %s", "version %s"},  /* FooterVersion */
 
     /* The step that follows a game install (the player asked for the game, the agent is what makes

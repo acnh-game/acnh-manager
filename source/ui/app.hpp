@@ -553,6 +553,8 @@ private:
     ui::Bitmap m_cover{};
     /* The mini-app's code, read once from the embedded asset (empty when the build has none). */
     ui::QrMatrix m_guide_qr{};
+    /* The public chat-code guide URL, encoded once at startup. */
+    util::QrCode m_guide_web_qr{};
     i18n::Language m_language{i18n::Language::ZhHans};
     Touch m_touch{};
     /* Touch press tracking: a tap only fires when the finger goes down and comes back up on

@@ -29,7 +29,7 @@ bool ParseLanguage(const std::string &name, i18n::Language *out) {
 
 i18n::Language InitialLanguageFromSystemLanguageCode(std::uint64_t language_code, bool known) {
     if (!known || language_code == 0) {
-        return i18n::Language::ZhHans;
+        return i18n::Language::English;
     }
     /* Language codes are an eight-byte ASCII string stored little-endian in the service's u64.
        Chinese has both legacy and current region variants; every one maps to the app's only

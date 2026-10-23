@@ -1007,6 +1007,11 @@ void TestQrCode() {
     CHECK(!longer.Empty());
     CHECK(longer.size >= code.size);
 
+    /* The built-in chat-code guide URL must fit the same runtime encoder used by the guide page. */
+    const auto guide = EncodeQr("https://lextuo.com/acnh-chat-code/guide/", 3);
+    CHECK(!guide.Empty());
+    CHECK(guide.At(0, 0) && guide.At(0, 6) && guide.At(6, 0));
+
     /* Over-long input fails cleanly (a matrix of size 0), never a half-filled one. */
     const auto too_long = EncodeQr(std::string(5000, 'x'), 3 /* H */);
     CHECK(too_long.Empty());
@@ -3265,7 +3270,8 @@ void TestSettings() {
     CHECK(InitialLanguageFromSystemLanguageCode(language_code("zhTW"), true) == Language::ZhHans);
     CHECK(InitialLanguageFromSystemLanguageCode(language_code("enUS"), true) == Language::English);
     CHECK(InitialLanguageFromSystemLanguageCode(language_code("ja"), true) == Language::English);
-    CHECK(InitialLanguageFromSystemLanguageCode(0, false) == Language::ZhHans);
+    CHECK(InitialLanguageFromSystemLanguageCode(0, true) == Language::English);
+    CHECK(InitialLanguageFromSystemLanguageCode(0, false) == Language::English);
 
     Settings written;
     written.language = Language::English;

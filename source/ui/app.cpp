@@ -336,6 +336,7 @@ constexpr const char *kSettingsPath = "/switch/ACNH-Manager/settings.json";
 /* The install in flight, if any: written by the engine before its first byte, read here to offer
    "continue" (design section 10).  It survives an interrupted run on purpose. */
 constexpr const char *kTaskPath = "/switch/ACNH-Manager/install-task.json";
+constexpr const char *kChatCodeGuideUrl = "https://lextuo.com/acnh-chat-code/guide/";
 
 /* Header tab layout lives in ui/header_tabs.hpp so the host tests can pin it; these two
    constants have to agree with it. */
@@ -481,6 +482,8 @@ bool App::Init(acnh_manager::Log *log, FsFileSystem &sd, std::string *error) {
     m_update_task.SetLog(log);
     /* The chat-code explainer reads its code once; empty when the build carries none. */
     m_guide_qr = ui::QrMatrix::FromEmbedded();
+    /* High error correction leaves room for the small centered brand mark. */
+    m_guide_web_qr = util::EncodeQr(kChatCodeGuideUrl, 3);
     LoadSettings();
     RefreshFooterText();
     Trace("ui: font init ...");
@@ -2262,8 +2265,17 @@ void App::RenderFooter(Surface surface) {
         }
     }
     const int stamp_width = m_font.Measure(m_footer_text, kFontSmall);
-    m_font.Draw(surface, surface.width - kMargin - stamp_width, hint.text_y, kFontSmall, kSubtle,
-                m_footer_text.c_str());
+    const int stamp_x = surface.width - kMargin - stamp_width;
+    if (m_page == Page::Details) {
+        const std::string switch_hint = Tr(i18n::StringId::FooterLanguageSwitch);
+        const int switch_width = m_font.Measure(switch_hint, kFontSmall);
+        const int switch_x =
+            std::max(kMargin,
+                     std::min((surface.width - switch_width) / 2,
+                              stamp_x - 24 - switch_width));
+        m_font.Draw(surface, switch_x, hint.text_y, kFontSmall, kSubtle, switch_hint.c_str());
+    }
+    m_font.Draw(surface, stamp_x, hint.text_y, kFontSmall, kSubtle, m_footer_text.c_str());
     /* And how to move between the pages the header lists: the tabs themselves show Ⓛ / Ⓡ on the
        ends of that group, but only the footer has the room to say it in words.  Plain text, not a
        control -- it names two keys, so there is no single action a tap could mean.  Not on the
@@ -3250,6 +3262,37 @@ void DrawQrCode(Surface surface, const Matrix &qr, int x, int y, int module) {
     }
 }
 
+struct QrPlateLayout {
+    int module{0};
+    int code_x{0};
+    int code_y{0};
+    int code_side{0};
+};
+
+template <typename Matrix>
+QrPlateLayout DrawQrCodePlate(Surface surface, const Matrix &qr, int x, int y, int plate_side) {
+    FillRect(surface, x, y, plate_side, plate_side, Color{0xFF, 0xFF, 0xFF, 0xFF});
+    QrPlateLayout out;
+    if (qr.Empty()) {
+        return out;
+    }
+    constexpr int kQuietModules = 2;
+    out.module = std::max(1, std::min(7, plate_side / (qr.Size() + kQuietModules * 2)));
+    out.code_side = qr.Size() * out.module;
+    out.code_x = x + (plate_side - out.code_side) / 2;
+    out.code_y = y + (plate_side - out.code_side) / 2;
+    for (int row = 0; row < qr.Size(); ++row) {
+        for (int column = 0; column < qr.Size(); ++column) {
+            if (qr.At(row, column)) {
+                FillRect(surface, out.code_x + column * out.module,
+                         out.code_y + row * out.module, out.module, out.module,
+                         Color{0x00, 0x00, 0x00, 0xFF});
+            }
+        }
+    }
+    return out;
+}
+
 /* The chat-code explainer.  Text first (what a code is, how to send one, where the numbers come
    from), then the mini-app's code with its caption and the guide address for people who would
    rather not install WeChat. */
@@ -3276,47 +3319,112 @@ void App::RenderGuide(Surface surface) {
         DrawCard(page, page_top, page_bottom, width, value_width, nullptr, rows, kRowGap, false,
                  kCardPadBottom);
 
-    /* The code sits in its own card under the text, with the caption beside it.  Its module size
-       is derived from the space that is actually left: a fixed 7 px per module overflowed the
-       page once the explanation grew to four lines, and the footer then covered the code's last
-       module rows (measured on hardware: ink down to y=657 against a footer starting at ~648). */
+    /* The two scan routes share one card: mini-app code and copy on the left, web-guide copy and
+       code mirrored on the right.  A fixed plate size keeps both codes visually equal. */
     const int card_top = text_card_bottom; /* DrawCard's return value already skips the gap */
-    const int qr_pad = 12;
-    const int space_for_code = page_bottom - card_top - qr_pad * 2;
-    int module = 7; /* 37 modules -> 259 px, the size that reads best on the console screen */
-    if (!m_guide_qr.Empty()) {
-        const int fits = space_for_code / (m_guide_qr.Size() + 2); /* + the quiet zone */
-        module = std::clamp(fits, 4, 7);
-    }
-    const int qr_side = m_guide_qr.Empty() ? 0 : m_guide_qr.Size() * module;
-    const int card_height = std::max(qr_side + qr_pad * 2 + module * 2, 120);
+    constexpr int kQrCardPad = 12;
+    constexpr int kQrPlateMax = 216;
+    const int available = page_bottom - card_top;
+    const int plate_side = std::clamp(available - kQrCardPad * 2, 160, kQrPlateMax);
+    const int card_height = std::max(plate_side + kQrCardPad * 2, 120);
     FillRoundedRect(page, kMargin, card_top, width, card_height, 14, kCard);
     StrokeRect(page, kMargin, card_top, width, card_height, 3, kBorder);
 
-    if (!m_guide_qr.Empty()) {
-        const int qr_x = kMargin + kCardPadX + qr_pad / 2;
-        const int qr_y = card_top + (card_height - qr_side) / 2 - module;
-        DrawQrCode(page, m_guide_qr, qr_x, qr_y, module);
-        /* The middle of the code is the white plate (the logo it covered is not part of the
-           matrix); put the brand mark there, the way the original code carries its logo.  It
-           stays well inside the plate, so what the decoder sees is unchanged. */
-        const int mark_size = module * 4;
-        const int mark_width = m_font.Measure(Tr(i18n::StringId::GuideMark), mark_size);
-        /* Centre the mark on the plate.  The line box is taller than the glyphs and hangs them a
-           little high: measured on hardware the ink landed 4 px above the code's centre, hence
-           the downward bias. */
-        constexpr int kMarkBiasY = 5;
-        const int qr_centre_x = qr_x + module + qr_side / 2;
-        const int qr_centre_y = qr_y + module + qr_side / 2;
-        m_font.Draw(page, qr_centre_x - mark_width / 2,
-                    qr_centre_y - m_font.LineHeight(mark_size) / 2 + kMarkBiasY, mark_size, kText,
-                    Tr(i18n::StringId::GuideMark));
-        const int text_x = qr_x + qr_side + module * 2 + kCardPadX;
-        const int text_width = kMargin + width - kCardPadX - text_x;
-        const int text_y = card_top + (card_height - m_font.LineHeight(kFontBody)) / 2;
-        m_font.Draw(page, text_x, text_y, kFontBody, kText,
-                    m_font.Fit(Tr(i18n::StringId::GuideScan), kFontBody, text_width, 2),
-                    text_width);
+    const bool has_mini = !m_guide_qr.Empty();
+    const bool has_web = !m_guide_web_qr.Empty();
+    if (has_mini || has_web) {
+        const int plate_y = card_top + (card_height - plate_side) / 2;
+        const int centre_y = card_top + card_height / 2;
+        const int divider_x = kMargin + width / 2;
+        if (has_mini && has_web) {
+            FillRect(page, divider_x, card_top + 20, 2, card_height - 40, kBorder);
+        }
+
+        constexpr int kCopyLineGap = 4;
+        constexpr int kCopyBodyMaxLines = 3;
+        const int mini_text_x = kMargin + kCardPadX + plate_side + 20;
+        const int mini_text_right = has_web ? divider_x - 24 : kMargin + width - kCardPadX;
+        const int web_text_x = has_mini ? divider_x + 24 : kMargin + kCardPadX;
+        const int web_text_right =
+            kMargin + width - kCardPadX - (has_web ? plate_side + 20 : 0);
+        const auto copy_height = [&](bool present, i18n::StringId id, int max_width) {
+            if (!present) {
+                return 0;
+            }
+            const int lines =
+                std::clamp(m_font.LineCount(Tr(id), kFontSmall, max_width), 1,
+                           kCopyBodyMaxLines);
+            return kFontHeading + 8 + lines * m_font.LineHeight(kFontSmall);
+        };
+        const int tallest_copy =
+            std::max(copy_height(has_mini, i18n::StringId::GuideScan,
+                                 std::max(1, mini_text_right - mini_text_x)),
+                     copy_height(has_web, i18n::StringId::GuideWebScan,
+                                 std::max(1, web_text_right - web_text_x)));
+        const int copy_top = centre_y - tallest_copy / 2;
+        const auto copy = [&](int x, int max_width, int top, i18n::StringId title,
+                              std::initializer_list<i18n::StringId> lines, bool align_right) {
+            int y = top;
+            const std::string title_text = m_font.Fit(Tr(title), kFontHeading, max_width, 1);
+            m_font.DrawBold(page,
+                            align_right
+                                ? x + max_width -
+                                      m_font.Measure(title_text, kFontHeading, max_width)
+                                : x,
+                            y, kFontHeading, kText, title_text.c_str(), max_width);
+            y += kFontHeading + 8;
+            for (const i18n::StringId id : lines) {
+                const std::string line =
+                    m_font.Fit(Tr(id), kFontSmall, max_width, kCopyBodyMaxLines);
+                m_font.Draw(page,
+                            align_right
+                                ? x + max_width - m_font.Measure(line, kFontSmall, max_width)
+                                : x,
+                            y, kFontSmall, kSubtle, line.c_str(), max_width);
+                y += m_font.LineHeight(kFontSmall) + kCopyLineGap;
+            }
+        };
+
+        const auto mark = [&](const QrPlateLayout &layout, i18n::StringId id) {
+            constexpr int kMarkPlateW = 80;
+            constexpr int kMarkPlateH = 52;
+            constexpr int kMarkFont = 24;
+            constexpr int kMarkBiasY = 5;
+            const int qr_centre_x = layout.code_x + layout.code_side / 2;
+            const int qr_centre_y = layout.code_y + layout.code_side / 2;
+            FillRoundedRect(page, qr_centre_x - kMarkPlateW / 2,
+                            qr_centre_y - kMarkPlateH / 2, kMarkPlateW, kMarkPlateH, 8,
+                            Color{0xFF, 0xFF, 0xFF, 0xFF});
+            const std::string text = m_font.Fit(Tr(id), kMarkFont, kMarkPlateW, 1);
+            const int text_width = m_font.Measure(text, kMarkFont);
+            m_font.DrawBold(page, qr_centre_x - text_width / 2,
+                            qr_centre_y - m_font.LineHeight(kMarkFont) / 2 + kMarkBiasY,
+                            kMarkFont, kText, text.c_str());
+        };
+
+        if (has_mini) {
+            const int qr_x = kMargin + kCardPadX;
+            const QrPlateLayout layout =
+                DrawQrCodePlate(page, m_guide_qr, qr_x, plate_y, plate_side);
+            if (layout.module > 0) {
+                mark(layout, i18n::StringId::GuideMark);
+            }
+            copy(mini_text_x, mini_text_right - mini_text_x, copy_top,
+                 i18n::StringId::GuideMiniAppTitle,
+                 {i18n::StringId::GuideScan}, true);
+        }
+
+        if (has_web) {
+            const int qr_x = kMargin + width - kCardPadX - plate_side;
+            const QrPlateLayout layout =
+                DrawQrCodePlate(page, m_guide_web_qr, qr_x, plate_y, plate_side);
+            if (layout.module > 0) {
+                mark(layout, i18n::StringId::GuideWebMark);
+            }
+            copy(web_text_x, web_text_right - web_text_x, copy_top,
+                 i18n::StringId::GuideWebTitle,
+                 {i18n::StringId::GuideWebScan}, false);
+        }
     } else {
         /* No code in this build: say where the numbers come from instead of leaving a hole. */
         m_font.Draw(page, kMargin + kCardPadX, card_top + 26, kFontBody, kText,
