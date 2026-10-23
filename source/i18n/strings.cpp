@@ -18,20 +18,20 @@ constexpr Entry kStrings[] = {
     {"安装信息", "Install info"},  /* SectionInstall */
     {"系统版本", "System"},  /* LabelHos */
     {"运行模式", "Mode"},  /* LabelAppletMode */
-    {"游戏是否运行", "Game running"},  /* LabelGameRunning */
-    {"游戏版本号", "Game version"},  /* LabelGameVersion */
+    {"动森是否运行", "Animal Crossing running"},  /* LabelGameRunning */
+    {"动森游戏版本号", "Animal Crossing version"},  /* LabelGameVersion */
     {"更新包标识", "Update id"},  /* LabelContentId */
     {"覆盖键提示", "Override key advice"},  /* LabelOverrideConfig */
     {"旧金手指代码", "Legacy cheat code"},  /* LabelLegacyCheat */
     {"检测结果", "Check result"},  /* LabelGateResult */
-    {"可以使用(游戏 %s)", "Ready (game %s)"},  /* GateResultSupported */
+    {"可以使用(动森游戏 %s)", "Ready (Animal Crossing %s)"},  /* GateResultSupported */
     {"没有可用的安装信息", "No usable installation information"},  /* GateResultNoManifest */
-    {"没有检测到游戏", "The game was not found"},  /* GateResultTitleMissing */
-    {"当前游戏不在兼容列表中", "This game is not in the compatibility list"},  /* GateResultTitleNotSupported */
-    {"当前游戏 %s，本应用支持 %s", "Game %s - this build supports %s"},  /* GateResultVersion */
-    {"无法读取当前游戏的文件标识", "Could not read the installed game's file id"},  /* GateResultContentMissing */
-    {"当前游戏文件与支持的版本不一致", "The installed game files do not match the supported version"},  /* GateResultContentMismatch */
-    {"正在运行的游戏文件与支持的版本不一致", "The running game build does not match the supported version"},  /* GateResultBuildMismatch */
+    {"没有检测到动森游戏", "The Animal Crossing game was not found"},  /* GateResultTitleMissing */
+    {"当前动森游戏不在兼容列表中", "This Animal Crossing game is not in the compatibility list"},  /* GateResultTitleNotSupported */
+    {"当前动森游戏 %s，本应用支持 %s", "Animal Crossing %s - this build supports %s"},  /* GateResultVersion */
+    {"无法读取当前动森游戏的文件标识", "Could not read the installed Animal Crossing game's file id"},  /* GateResultContentMissing */
+    {"当前动森游戏文件与支持的版本不一致", "The installed Animal Crossing files do not match the supported version"},  /* GateResultContentMismatch */
+    {"正在运行的动森游戏文件与支持的版本不一致", "The running Animal Crossing build does not match the supported version"},  /* GateResultBuildMismatch */
     {"检测异常", "Detection problems"},  /* LabelProblems */
     {"界面语言", "Language"},  /* LanguageLabel */
     {"简体中文", "简体中文"},  /* LanguageChinese */
@@ -56,7 +56,7 @@ constexpr Entry kStrings[] = {
     {"发布版本 %s", "published %s"},  /* SubUpdatePublished */
     /* A release host that moved on without this console's game build: nothing to install, and
        the reason is not "you are up to date". */
-    {"新版 %s 不支持当前游戏版本", "new %s does not support this game version"},  /* SubUpdateNewerUnsupported */
+    {"新版 %s 不支持当前安装的动森游戏版本", "new %s does not support the installed Animal Crossing version"},  /* SubUpdateNewerUnsupported */
     {"更新中心", "Update center"},  /* UpdateCenterTitle */
     {"动森 Game Agent", "Game Agent"},  /* UpdateAgentTitle */
     {"ACNH-Manager", "ACNH-Manager"},  /* UpdateManagerTitle */
@@ -121,19 +121,19 @@ constexpr Entry kStrings[] = {
     {"state.json 解析失败: %s", "state.json parse failed: %s"},  /* InstallErrStateParse */
     {"没有安装记录，无需卸载", "nothing to uninstall (no install record)"},  /* UninstallNoRecord */
     {"没有找到《集合啦!动物森友会》", "Animal Crossing: New Horizons was not found"},  /* StateGameMissing */
-    {"不支持当前安装的游戏版本", "The installed game version is not supported"},  /* StateUnsupported */
+    {"不支持当前安装的动森游戏版本", "The installed Animal Crossing version is not supported"},  /* StateUnsupported */
     {"上次安装失败", "The last install failed"},  /* StateFailed */
     {"现在安装的动森 Game Agent 不是当前发布版本", "The installed Game Agent is not the current release"},  /* StateRepair */
     {"已安装的文件不完整", "The installed files are incomplete"},  /* StateIncomplete */
     {"还没有安装动森 Game Agent", "Game Agent is not installed yet"},  /* StateNotInstalled */
     {"动森 Game Agent 已安装 · 有新版本", "Game Agent is installed - a newer version exists"},  /* StateUpdateAvailable */
     {"动森 Game Agent 已安装，可以使用", "Game Agent is installed and ready"},  /* StateInstalled */
-    {"没有检测到游戏本体 · 可用本应用安装一份", "No base game found - this app can install one"},  /* StateGameMissingSub */
-    {"本应用目前无法处理这个版本", "This build cannot handle the installed version"},  /* StateUnsupportedSub */
-    {"游戏 %s · 动森 Game Agent %s", "Game %s - Game Agent %s"},  /* HomeVersions */
-    {"游戏 %s · 本应用支持 %s", "Game %s - this build supports %s"},  /* HomeVersionsUnsupported */
-    {"游戏 %s · 可安装动森 Game Agent %s", "Game %s - Game Agent %s ready to install"},  /* HomeVersionsAvailable */
-    {"游戏 %s · 动森 Game Agent %s → %s", "Game %s - Game Agent %s -> %s"},  /* HomeVersionsUpdate */
+    {"没有检测到动森游戏本体 · 可用本应用安装一份", "No Animal Crossing base game found - this app can install one"},  /* StateGameMissingSub */
+    {"本应用目前无法处理当前安装的动森游戏版本", "This build cannot handle the installed Animal Crossing version"},  /* StateUnsupportedSub */
+    {"动森游戏 %s · 动森 Game Agent %s", "Animal Crossing %s - Game Agent %s"},  /* HomeVersions */
+    {"动森游戏 %s · 本应用支持 %s", "Animal Crossing %s - this build supports %s"},  /* HomeVersionsUnsupported */
+    {"动森游戏 %s · 可安装动森 Game Agent %s", "Animal Crossing %s - Game Agent %s ready to install"},  /* HomeVersionsAvailable */
+    {"动森游戏 %s · 动森 Game Agent %s → %s", "Animal Crossing %s - Game Agent %s -> %s"},  /* HomeVersionsUpdate */
     {"未安装", "not installed"},  /* ValueNotInstalled */
     {"安装动森 Game Agent", "Install Game Agent"},  /* BtnInstall */
     {"更新到 %s", "Update to %s"},  /* BtnUpdate */
@@ -156,7 +156,7 @@ constexpr Entry kStrings[] = {
     {"装好后可从桌面直接启动", "Launch directly from the HOME Menu"},  /* SubForwarderInstall */
     {"删除桌面上的快捷方式", "Remove the HOME Menu shortcut"},  /* SubForwarderRemove */
     {"请先退出，从相册重新打开后再删除", "Exit, then reopen from the album to remove it"},  /* SubForwarderRemoveBlocked */
-    {"请先在主页关闭快捷方式，再重新打开本程序", "Close the HOME Menu shortcut, then reopen this app"},  /* SubForwarderProcessRunning */
+    {"快捷方式正在运行，无法删除；请关闭后从相册重新打开本程序", "The HOME Menu shortcut is running, so it can't be removed. Close it, then reopen this app from the album."},  /* SubForwarderProcessRunning */
     {"动森 Game Agent 管理器", "Game Agent manager"},  /* HeadSubtitle */
     {"暂不可用", "Not available"},  /* BtnUnavailable */
     {"高级", "Advanced"},  /* SectionAdvanced */
@@ -180,7 +180,7 @@ constexpr Entry kStrings[] = {
     {"卸载失败", "Removal failed"},  /* ResultUninstallFailed */
     {"已删除桌面快捷方式", "HOME Menu shortcut removed"},  /* ResultForwarderRemoved */
     {"无法删除桌面快捷方式", "Could not remove the HOME Menu shortcut"},  /* ResultForwarderRemoveFailed */
-    {"快捷方式仍在运行。请先在主页关闭它，再从相册重新打开删除", "The HOME Menu shortcut is still running. Close it on the HOME Menu, then reopen from the album to remove it"},  /* ResultForwarderRemoveRunning */
+    {"快捷方式正在运行，无法删除；请关闭后从相册重新打开本程序再试", "The HOME Menu shortcut is running, so it can't be removed. Close it, then reopen this app from the album and try again."},  /* ResultForwarderRemoveRunning */
     {"系统拒绝删除这个快捷方式，请重启主机后再试", "The system refused to remove the shortcut - restart the console and try again"},  /* ResultForwarderRemoveSystem */
     {"桌面可能需要一点时间刷新", "The HOME Menu may take a moment to refresh"},  /* ResultForwarderRemovedNote */
     {"将要删除的文件", "Files to remove"},  /* LabelPlanRemove */
@@ -248,7 +248,7 @@ constexpr Entry kStrings[] = {
     {"这个目录里没有可安装的文件", "No installable file in this directory"},  /* InstallNoFiles */
     {"这个文件不是可安装的安装包(nsp / nsz / xci / xcz)", "This file is not an install package (nsp / nsz / xci / xcz)"},  /* InstallNotAPackage */
     {"这个包里没有可安装的内容", "This package has no installable content"},  /* InstallNoContent */
-    {"动森 Game Agent 不支持此版本(游戏/更新): 支持版本为: %s", "Game Agent does not support this version (game/update) - supported versions: %s"},  /* InstallAgentUnsupported */
+    {"动森 Game Agent 不支持当前安装的动森游戏版本(游戏/更新): 支持版本为: %s", "Game Agent does not support the installed Animal Crossing version (game/update) - supported versions: %s"},  /* InstallAgentUnsupported */
     {"已写入 %s · %d 个内容 · %s", "Written to %s - %d contents, %s"},  /* ResultWroteLine */
     {"机器上已经有这个版本,没有改动", "This version is already installed; nothing changed"},  /* ResultSameVersionDetail */
     {"机器上已经有更新的版本(%s),没有改动", "A newer version (%s) is already installed; nothing changed"},  /* ResultNewerVersionDetail */
