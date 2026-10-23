@@ -251,7 +251,7 @@ constexpr Entry kStrings[] = {
     {"这个目录里没有可安装的文件", "No installable file in this directory"},  /* InstallNoFiles */
     {"这个文件不是可安装的安装包(nsp / nsz / xci / xcz)", "This file is not an install package (nsp / nsz / xci / xcz)"},  /* InstallNotAPackage */
     {"这个包里没有可安装的内容", "This package has no installable content"},  /* InstallNoContent */
-    {"动森 Game Agent 不支持当前安装的动森游戏版本(游戏/更新): 支持版本为: %s", "Game Agent does not support the installed Animal Crossing version (game/update) - supported versions: %s"},  /* InstallAgentUnsupported */
+    {"提示：动森 Game Agent 不支持当前安装的版本，仅支持 %s", "Note: Game Agent does not support the installed version; it supports %s"},  /* InstallAgentUnsupported */
     {"已写入 %s · %d 个内容 · %s", "Written to %s - %d contents, %s"},  /* ResultWroteLine */
     {"机器上已经有这个版本,没有改动", "This version is already installed; nothing changed"},  /* ResultSameVersionDetail */
     {"机器上已经有更新的版本(%s),没有改动", "A newer version (%s) is already installed; nothing changed"},  /* ResultNewerVersionDetail */
