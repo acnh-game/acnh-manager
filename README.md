@@ -21,7 +21,7 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + 动森 Game Agent 管�
 - 首次启动没有已保存设置时按主机系统语言选择界面:中文系统使用简体中文,其他语言使用 English;
   系统语言读取失败时也使用 English。用户在详情页切换后会持久化，不再跟随系统变化。
 - 页脚构建信息按构建类型显示：Switch 的开发、脏工作树和手工构建保留完整构建串；干净正式发布显示
-  `版本 2.2.0` / `version 2.2.0`。浏览器开发版为窄屏显示紧凑的 `src` 串，点按复制完整值。
+  `版本 2.2.1` / `version 2.2.1`。浏览器开发版为窄屏显示紧凑的 `src` 串，点按复制完整值。
   完整构建串仍写入 `log.txt`。
 
 ## 它做什么
@@ -81,7 +81,7 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + 动森 Game Agent 管�
 ## 安装与使用
 
 1. **官方 Homebrew App Store**:在相册里打开 Sphaira 等商店客户端,搜索 `ACNH-Manager`。
-   商店收录版本可能落后于本文描述的 2.2.0;商店升级 PR 按发布决定单独执行;
+   商店收录版本可能落后于本文描述的 2.2.1;商店升级 PR 按发布决定单独执行;
 2. **直接下载发布 NRO**:发布版本入库并推送后,地址为
    `https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-<版本>.nro`;
    放进 `switch/ACNH-Manager/`,从相册打开。源码用户也可先运行 `./tools/build.sh`;
