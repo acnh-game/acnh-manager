@@ -174,7 +174,8 @@ python3 tools/make-store-package.py       # 产出 build/scratch/store/
 官方商店对"写入 `/atmosphere/contents/<tid>/` 的包"已有先例(`UltimateTrainingModpack`、`SwitchCast`),
 但审核有裁量权;被拒或排队期间,**Gitee raw 的直链兜底**必须可用(见第 6 节)。
 
-当前发布状态:1.0.1 的 PR #852 已提交;2.0.0 商店材料已生成,但升级 PR 按用户决定暂未创建。
+当前发布状态:1.0.1 的初始收录 PR #852 已合并;2.2.1 的升级 PR
+[#975](https://github.com/fortheusers/switch-hbas-repo/pull/975) 已提交并等待商店维护者合并。
 
 ## 6. 托管与直链(Gitee)
 
@@ -237,5 +238,5 @@ raw 请求会 302 到 `raw.giteeusercontent.com` 的带签名地址(2026-09-20 �
 - **发布端的连通性**:托管方的可达性会变(历史上换过一次,当时那家在作者网络上整条链路超时),
   所以每次换托管方或发版都要先核对 raw 地址能匿名取到东西,再谈 App 侧;App 侧对失败的处理是
   如实报错并静默退回内置版本,真机是否稳定以 `docs/device-acceptance.md` 的验收记录为准;
-- **商店收录**:1.0.1 的官方 Homebrew App Store PR #852 已于 2026-09-21 提交;2.0.0 的素材已经
-  生成,但按用户决定暂不创建升级 PR。这里记录的是发布动作状态,不是代码功能缺口。
+- **商店收录**:1.0.1 的官方 Homebrew App Store PR #852 已合并;2.2.1 的升级 PR #975
+  已提交,upstream CI 已通过。这里记录的是发布动作状态,不是代码功能缺口。

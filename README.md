@@ -81,7 +81,7 @@ Switch 上的自制应用(NRO):**通用游戏安装器 + 动森 Game Agent 管�
 ## 安装与使用
 
 1. **官方 Homebrew App Store**:在相册里打开 Sphaira 等商店客户端,搜索 `ACNH-Manager`。
-   商店收录版本可能落后于本文描述的 2.2.1;商店升级 PR 按发布决定单独执行;
+   商店收录版本可能落后于本文描述的 2.2.1;2.2.1 升级 PR 已提交(见下方发布文档);
 2. **直接下载发布 NRO**:发布版本入库并推送后,地址为
    `https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-<版本>.nro`;
    放进 `switch/ACNH-Manager/`,从相册打开。源码用户也可先运行 `./tools/build.sh`;
