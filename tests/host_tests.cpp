@@ -57,6 +57,7 @@
 #include "ui/list_view.hpp"
 #include "ui/settings.hpp"
 #include "ui/storage_bars.hpp"
+#include "ui/update_restart.hpp"
 #include "install/upload_protocol.hpp"
 #include "net/http_page.hpp"
 #include "util/text_wrap.hpp"
@@ -2796,6 +2797,15 @@ void TestHomeState() {
     CHECK(HomeDirectionFromStick(20000, -15000, 14000) == HomeMoveDirection::Previous);
 }
 
+void TestUpdateRestartDecision() {
+    using acnh_manager::ui::DecideUpdateRestart;
+    using acnh_manager::ui::RestartRequest;
+    CHECK(DecideUpdateRestart(false, false) == RestartRequest::None);
+    CHECK(DecideUpdateRestart(false, true) == RestartRequest::ChainLoad);
+    CHECK(DecideUpdateRestart(true, false) == RestartRequest::Application);
+    CHECK(DecideUpdateRestart(true, true) == RestartRequest::Application);
+}
+
 /* The tables inside one compressed content of an NSZ / XCZ (install/ncz.hpp).  The shape and the
    arithmetic come from the reference implementation's NCZ reader and from a real package: 110
    sections, contiguous, covering 0x4000..the end of the NCA, every one of them AES-CTR -- so the
@@ -3582,6 +3592,7 @@ int main() {
     TestCurrentContentNumber();
     TestMetaTypeCarriesGameVersion();
     TestHomeState();
+    TestUpdateRestartDecision();
     TestSettings();
     TestFooterVersion();
     TestTitleNames();

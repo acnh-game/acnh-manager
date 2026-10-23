@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
             if (moved && acnh_manager::env::SetNextLoadToStandard()) {
                 /* Unlike the normal exit (which terminates the applet so its layers are freed),
                    a chained load only happens when the applet returns to hbl.  The repair page
-                   does the same through App::StartupRestartRequested(); this silent path runs
+                   does the same through App::RequestedRestart(); this silent path runs
                    before the UI exists, so it has to do it here (2026-10-21: without this the
                    screen went black and the app exited instead of starting the standard copy). */
                 __nx_applet_exit_mode = 0;
@@ -250,18 +250,28 @@ int main(int argc, char **argv) {
             }
 #endif
             app.Run();
-            const bool startup_restart = app.StartupRestartRequested();
+            const auto restart_request = app.RequestedRestart();
             app.Exit();
             if (R_SUCCEEDED(rc_log)) {
                 log.Line("ui: loop exited");
             }
-            if (startup_restart) {
+            if (restart_request == acnh_manager::ui::RestartRequest::ChainLoad) {
                 /* The loader can only chain-load when the applet returns to it; the app normally
-                   sets this to 1 so leaving ends the applet cleanly.  For this one repair path the
-                   opposite is what makes envSetNextLoad work (2026-10-21). */
+                   sets this to 1 so leaving ends the applet cleanly.  Restart paths need the
+                   opposite value for envSetNextLoad to work (2026-10-21). */
                 __nx_applet_exit_mode = 0;
                 if (R_SUCCEEDED(rc_log)) {
-                    log.Line("startup: returning to the loader for the chained load");
+                    log.Line("restart: returning to the loader for the chained load");
+                }
+            } else if (restart_request == acnh_manager::ui::RestartRequest::Application) {
+                if (R_SUCCEEDED(rc_log)) {
+                    log.Line("restart: asking the applet manager to relaunch the current "
+                             "application");
+                    log.Sync();
+                }
+                const Result rc_restart = appletRestartProgram(nullptr, 0);
+                if (R_FAILED(rc_restart) && R_SUCCEEDED(rc_log)) {
+                    log.Line("restart: appletRestartProgram failed rc=0x%08X", rc_restart);
                 }
             }
         } else {

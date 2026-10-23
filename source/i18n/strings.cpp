@@ -72,7 +72,9 @@ constexpr Entry kStrings[] = {
     {"更新", "Update"},  /* UpdateAction */
     {"正在下载更新…", "Downloading update…"},  /* UpdateDownloading */
     {"更新失败: %s", "Update failed: %s"},  /* UpdateDownloadFailed */
-    {"更新完成,请退出并从相册重新打开", "Updated - exit and reopen from the album"},  /* UpdateRestartRequired */
+    {"更新完成,可立即重启", "Updated - ready to restart"},  /* UpdateRestartRequired */
+    {"更新完成,请退出后重新打开", "Updated - exit and reopen the app"},  /* UpdateRestartManual */
+    {"立即重启", "Restart now"},  /* UpdateRestartNow */
     {"重新检查", "Check again"},  /* UpdateRecheck */
     {"%d 项更新可用", "%d updates available"},  /* UpdateSummaryAvailable */
     {"全部已是最新", "Everything is up to date"},  /* UpdateSummaryCurrent */

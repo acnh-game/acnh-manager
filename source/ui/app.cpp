@@ -323,6 +323,7 @@ constexpr int kActionForwarder = 30;       /* install/remove the desktop tile */
 constexpr int kActionUpdateAgent = 31;     /* Update Center: apply the Game Agent release */
 constexpr int kActionUpdateManager = 32;   /* Update Center: download this app's NRO */
 constexpr int kActionUpdateRecheck = 33;   /* Update Center: check the manifest again */
+constexpr int kActionUpdateRestart = 34;   /* Update Center: relaunch the installed NRO */
 
 constexpr bool IsHomeFocusAction(int id) {
     return id == kActionPrimary || id == kActionCheckUpdate || id == kActionUninstall ||
@@ -1219,8 +1220,11 @@ void App::EnterUpdateCenter() {
 }
 
 void App::MoveUpdateCenterFocus(int direction) {
-    const int ids[] = {kActionUpdateAgent, kActionUpdateManager, kActionUpdateRecheck};
-    const int count = static_cast<int>(sizeof(ids) / sizeof(ids[0]));
+    const int regular_ids[] = {kActionUpdateAgent, kActionUpdateManager, kActionUpdateRecheck};
+    const int restart_ids[] = {kActionUpdateAgent, kActionUpdateManager, kActionUpdateRestart};
+    const bool restart = !m_manager_installed_version.empty() && ManagerRestartSupported();
+    const int *ids = restart ? restart_ids : regular_ids;
+    const int count = 3;
     int current = -1;
     for (int i = 0; i < count; ++i) {
         if (ids[i] == m_focus) {
@@ -1255,6 +1259,7 @@ void App::StartManagerUpdate() {
     }
     const manifest::ManagerRelease &release = m_remote_manifest.manager;
     m_manager_update_error.clear();
+    m_manager_restart_unavailable = false;
     const std::string start_error =
         m_manager_task.Start(release.url, static_cast<std::size_t>(release.size), 120);
     m_manager_update_running = m_manager_task.Running();
@@ -1328,7 +1333,43 @@ void App::ApplyManagerDownload(net::HttpResult result) {
     }
     m_manager_installed_version = release.version;
     m_manager_update_error.clear();
+    m_manager_restart_unavailable = false;
     Trace("manager update: %s installed; restart the app to run it", release.version.c_str());
+}
+
+bool App::ManagerRestartSupported() const {
+    if (m_manager_installed_version.empty() || m_manager_restart_unavailable) {
+        return false;
+    }
+    const bool application_mode =
+        m_report.applet_type == AppletType_Application && hosversionAtLeast(5, 0, 0);
+    return DecideUpdateRestart(application_mode, envHasNextLoad()) != RestartRequest::None;
+}
+
+void App::RequestManagerRestart() {
+    if (!ManagerRestartSupported()) {
+        return;
+    }
+    const bool application_mode =
+        m_report.applet_type == AppletType_Application && hosversionAtLeast(5, 0, 0);
+    const RestartRequest request =
+        DecideUpdateRestart(application_mode, envHasNextLoad());
+    if (request == RestartRequest::Application) {
+        m_restart_request = RestartRequest::Application;
+        m_should_exit = true;
+        Trace("restart: requested through the application relaunch path");
+        return;
+    }
+    if (request == RestartRequest::ChainLoad) {
+        if (env::SetNextLoadToStandard()) {
+            m_restart_request = RestartRequest::ChainLoad;
+            m_should_exit = true;
+            Trace("restart: next load set to the standard NRO");
+        } else {
+            m_manager_restart_unavailable = true;
+            Trace("restart: this hbl host cannot chain-load the standard NRO");
+        }
+    }
 }
 
 /* Details page: the raw outcome, so "it failed" always comes with what actually happened. */
@@ -1695,7 +1736,9 @@ void App::HandleKeys(u32 down) {
                     ActivateAction(m_focus);
                 }
             } else if ((down & HidNpadButton_X) != 0) {
-                ActivateAction(kActionUpdateRecheck);
+                if (m_manager_installed_version.empty()) {
+                    ActivateAction(kActionUpdateRecheck);
+                }
             }
             break;
         }
@@ -1883,6 +1926,10 @@ void App::ActivateAction(int id) {
                 if (!m_update_running && !m_manager_update_running) {
                     StartUpdateCheck();
                 }
+                return;
+            }
+            if (id == kActionUpdateRestart) {
+                RequestManagerRestart();
                 return;
             }
             break;
@@ -3120,6 +3167,7 @@ void App::RenderUpdateCenter(Surface surface) {
     const bool manager_update = ManagerUpdateAvailable();
     const bool manager_path_ok = env::IsStandardNroPath(m_startup.current_path);
     const bool manager_ready = !m_manager_installed_version.empty();
+    const bool restart_supported = manager_ready && ManagerRestartSupported();
     const bool manager_known =
         m_have_remote_manifest && m_remote_manifest.manager.present;
     const bool agent_action_enabled =
@@ -3127,15 +3175,19 @@ void App::RenderUpdateCenter(Surface surface) {
     const bool manager_action_enabled =
         manager_update && manager_path_ok && !checking && !m_manager_update_running;
     const bool recheck_enabled = !checking && !m_manager_update_running;
+    const int bottom_action =
+        restart_supported ? kActionUpdateRestart : kActionUpdateRecheck;
+    const bool bottom_enabled =
+        restart_supported || recheck_enabled;
     const bool focus_valid =
         (m_focus == kActionUpdateAgent && agent_action_enabled) ||
         (m_focus == kActionUpdateManager && manager_action_enabled) ||
-        (m_focus == kActionUpdateRecheck && recheck_enabled);
+        (m_focus == bottom_action && bottom_enabled);
     if (!focus_valid) {
         m_focus = agent_action_enabled
                       ? kActionUpdateAgent
                       : (manager_action_enabled ? kActionUpdateManager
-                                                : (recheck_enabled ? kActionUpdateRecheck : -1));
+                                                : (bottom_enabled ? bottom_action : -1));
     }
 
     int updates = 0;
@@ -3152,8 +3204,9 @@ void App::RenderUpdateCenter(Surface surface) {
     } else if (!checking) {
         if (check_failed) {
             summary = Tr(i18n::StringId::UpdateStatusFailed);
-        } else if (!m_manager_installed_version.empty()) {
-            summary = Tr(i18n::StringId::UpdateRestartRequired);
+        } else if (manager_ready) {
+            summary = Tr(restart_supported ? i18n::StringId::UpdateRestartRequired
+                                          : i18n::StringId::UpdateRestartManual);
         } else if (updates > 0) {
             summary_text = i18n::Format(i18n::StringId::UpdateSummaryAvailable, updates);
             summary = summary_text.c_str();
@@ -3195,8 +3248,8 @@ void App::RenderUpdateCenter(Surface surface) {
         const int button_h = 58;
         const int button_x = card_x + width - 24 - button_w;
         const int button_y = y + (card_height - button_h) / 2;
-        const Color face = enabled ? kHeader : kCardDisabled;
-        const Color ink = enabled ? kOnHeader : kSubtle;
+        const Color face = !enabled ? kCardDisabled : (focused ? kHeader : kHeaderSubtle);
+        const Color ink = !enabled ? kSubtle : (focused ? kOnHeader : kText);
         FillRoundedRect(surface, button_x, button_y, button_w, button_h, 14, face);
         if (focused && enabled) {
             DrawKeyBadge(surface, m_font, button_x + 28, button_y + button_h / 2, 20, "A",
@@ -3246,7 +3299,8 @@ void App::RenderUpdateCenter(Surface surface) {
                          m_manager_update_error.c_str());
         manager_action = Tr(i18n::StringId::InstallRetry);
     } else if (manager_ready) {
-        manager_status = Tr(i18n::StringId::UpdateRestartRequired);
+        manager_status = Tr(restart_supported ? i18n::StringId::UpdateRestartRequired
+                                              : i18n::StringId::UpdateRestartManual);
         manager_action = Tr(i18n::StringId::UpdateStatusCurrent);
     } else if (checking) {
         manager_status = Tr(i18n::StringId::SubUpdateChecking);
@@ -3274,28 +3328,30 @@ void App::RenderUpdateCenter(Surface surface) {
     draw_card(top + 242, i18n::StringId::UpdateManagerTitle, manager_current, manager_available,
               manager_status, manager_action, kActionUpdateManager, manager_action_enabled);
 
-    const int recheck_y = top + 390;
-    const int recheck_h = 64;
-    const bool recheck_focused = m_focus == kActionUpdateRecheck;
-    FillRoundedRect(surface, kMargin, recheck_y, width, recheck_h, 14,
-                    recheck_focused && recheck_enabled ? kHeader : kBorder);
-    FillRoundedRect(surface, kMargin + 3, recheck_y + 3, width - 6, recheck_h - 6, 12,
-                    recheck_enabled ? (recheck_focused ? kHeader : kCard) : kCardDisabled);
-    if (recheck_focused && recheck_enabled) {
-        DrawKeyBadge(surface, m_font, kMargin + 42, recheck_y + recheck_h / 2, 20, "A",
+    const int bottom_y = top + 390;
+    const int bottom_h = 64;
+    const bool bottom_focused = m_focus == bottom_action;
+    FillRoundedRect(surface, kMargin, bottom_y, width, bottom_h, 14,
+                    bottom_focused && bottom_enabled ? kHeader : kBorder);
+    FillRoundedRect(surface, kMargin + 3, bottom_y + 3, width - 6, bottom_h - 6, 12,
+                    bottom_enabled ? (bottom_focused ? kHeader : kHeaderSubtle) : kCardDisabled);
+    if (bottom_focused && bottom_enabled) {
+        DrawKeyBadge(surface, m_font, kMargin + 42, bottom_y + bottom_h / 2, 20, "A",
                      kOnHeader, kHeader);
     }
-    const char *recheck_label =
-        checking ? Tr(i18n::StringId::SubUpdateChecking) : Tr(i18n::StringId::UpdateRecheck);
-    const int recheck_label_width = m_font.Measure(recheck_label, kFontBody);
+    const char *bottom_label =
+        restart_supported ? Tr(i18n::StringId::UpdateRestartNow)
+                          : (checking ? Tr(i18n::StringId::SubUpdateChecking)
+                                      : Tr(i18n::StringId::UpdateRecheck));
+    const int bottom_label_width = m_font.Measure(bottom_label, kFontBody);
     if (checking) {
-        DrawSpinner(surface, kMargin + 42, recheck_y + recheck_h / 2, 13, kHeader);
+        DrawSpinner(surface, kMargin + 42, bottom_y + bottom_h / 2, 13, kHeader);
     }
-    m_font.Draw(surface, (surface.width - recheck_label_width) / 2, recheck_y + 18, kFontBody,
-                recheck_focused && recheck_enabled ? kOnHeader : kText,
-                recheck_label);
+    m_font.Draw(surface, (surface.width - bottom_label_width) / 2, bottom_y + 18, kFontBody,
+                bottom_focused && bottom_enabled ? kOnHeader : kText,
+                bottom_label);
     m_actions.push_back(
-        {kActionUpdateRecheck, Rect{kMargin, recheck_y, width, recheck_h}, recheck_enabled});
+        {bottom_action, Rect{kMargin, bottom_y, width, bottom_h}, bottom_enabled});
 }
 
 void App::RenderDetails(Surface surface) {
@@ -6689,7 +6745,7 @@ void App::RepairStartup() {
     Trace("startup: repaired (%s)", m_startup.decision.reason.c_str());
     if (env::SetNextLoadToStandard()) {
         Trace("startup: next load set to the standard path; exiting");
-        m_startup_restart = true;
+        m_restart_request = RestartRequest::ChainLoad;
         m_should_exit = true;
     } else {
         m_startup_error.clear();

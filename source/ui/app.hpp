@@ -41,6 +41,7 @@
 #include "install/source_http_upload.hpp"
 #include "install/source_memory.hpp"
 #include "ui/touch.hpp"
+#include "ui/update_restart.hpp"
 
 namespace acnh_manager {
 class Log; /* log.hpp */
@@ -63,9 +64,8 @@ public:
     /* The startup check runs in main before the UI initialises; a page is shown only when it has
        something to repair (or a failure to report). */
     void SetStartupPlan(env::StartupPlan plan);
-    /* True when the startup page repaired the layout and set the loader's next NRO; main then
-       returns to hbl instead of terminating the applet so that load can happen. */
-    bool StartupRestartRequested() const { return m_startup_restart; }
+    /* A pending self-restart, executed by main after the UI and services have been closed. */
+    RestartRequest RequestedRestart() const { return m_restart_request; }
 /* Main loop: on the status page, B or + returns. */
     void Run();
 
@@ -136,6 +136,8 @@ private:
     void StartManagerUpdate();
     void PollManagerUpdate();
     void ApplyManagerDownload(net::HttpResult result);
+    bool ManagerRestartSupported() const;
+    void RequestManagerRestart();
     /* Details page: the raw outcome, for when someone needs to know what actually happened. */
     std::string UpdateDetailText() const;
     /* The agent version a press of the primary button would install, when that is newer than
@@ -514,7 +516,7 @@ private:
     env::StartupPlan m_startup;
     bool m_startup_page{false};
     bool m_startup_repaired{false};
-    bool m_startup_restart{false};
+    RestartRequest m_restart_request{RestartRequest::None};
     std::string m_startup_error;
     /* The download source, kept alive for as long as the run in hand needs to read from it (the
        engine holds a reference, not a copy). */
@@ -631,6 +633,7 @@ private:
     bool m_manager_update_running{false};
     std::string m_manager_update_error{};
     std::string m_manager_installed_version{};
+    bool m_manager_restart_unavailable{false};
     /* Log every drawing stage of the first frame, so a crash points at one of them. */
     int m_trace_frames{1};
     /* First-frame stage pauses (when dev-pause exists): wait for + after each stage. */

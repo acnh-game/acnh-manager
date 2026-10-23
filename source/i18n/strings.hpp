@@ -93,6 +93,8 @@ enum class StringId {
     UpdateDownloading,
     UpdateDownloadFailed,
     UpdateRestartRequired,
+    UpdateRestartManual,
+    UpdateRestartNow,
     UpdateRecheck,
     UpdateSummaryAvailable,
     UpdateSummaryCurrent,

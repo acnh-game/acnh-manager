@@ -45,22 +45,22 @@
 `tools/build.sh` 也接受 `APP_VERSION=<版本>`;它会清理编译对象再构建,但保留
 `build/scratch/` 下的日志、截图和本机测试素材。
 
-下面的流程用一台本机发布 `2.2.0` 测试 NRO,让当前 `2.1.0` 开发版走完整的 Manager 自更新:
+下面的流程用一台本机发布 `2.3.0` 测试 NRO,让当前 `2.2.0` 开发版走完整的 Manager 自更新:
 
 ```bash
 # 1. 先构建一份只用于本机测试的更高版本 NRO
-APP_VERSION=2.2.0 ./tools/build.sh
+APP_VERSION=2.3.0 ./tools/build.sh
 mkdir -p build/scratch/update-test
-cp acnh-manager.nro build/scratch/update-test/acnh-manager-2.2.0.nro
+cp acnh-manager.nro build/scratch/update-test/acnh-manager-2.3.0.nro
 
 # 2. 生成本地清单和签名
 cp agent-manifest.json build/scratch/update-test/agent-manifest.json
 MAC_IP="$(ipconfig getifaddr en0)"
 python3 tools/update-manager-manifest.py \
   --manifest build/scratch/update-test/agent-manifest.json \
-  --nro build/scratch/update-test/acnh-manager-2.2.0.nro \
-  --version 2.2.0 \
-  --url "https://${MAC_IP}:9443/acnh-manager-2.2.0.nro"
+  --nro build/scratch/update-test/acnh-manager-2.3.0.nro \
+  --version 2.3.0 \
+  --url "https://${MAC_IP}:9443/acnh-manager-2.3.0.nro"
 python3 tools/sign-manifest.py \
   --manifest build/scratch/update-test/agent-manifest.json \
   --signature build/scratch/update-test/agent-manifest.json.sig
@@ -84,7 +84,7 @@ server.serve_forever()
 PY
 ```
 
-回到仓库根,构建并部署正常的 2.1.0 开发版,再写入本机清单地址:
+回到仓库根,构建并部署正常的 2.2.0 开发版,再写入本机清单地址:
 
 ```bash
 ./tools/build.sh
@@ -95,10 +95,11 @@ python3 tools/deploy-nro.py \
   --push-file build/scratch/dev-update-url --remote dev-update-url
 ```
 
-从相册打开 App → 首页「检查更新」→ 更新中心。Manager 条目应显示可更新到 `2.2.0`;按 `A`
-下载并替换标准 NRO,随后提示退出并从相册重新打开。重新打开后版本应为 `2.2.0`。
+从相册打开 App → 首页「检查更新」→ 更新中心。Manager 条目应显示可更新到 `2.3.0`;按 `A`
+下载并替换标准 NRO。完成后底部出现「Ⓐ 立即重启」,再按 `A` 应自动回到新版本;按 `B` 则稍后手动退出重开。
+相册/hbl 和 HOME 快捷方式/Application 两种启动路径都要分别验证。
 
-测试结束时停止 HTTPS 服务,把空的 `dev-update-url` 推到卡上,再重新构建/部署正常 2.1.0:
+测试结束时停止 HTTPS 服务,把空的 `dev-update-url` 推到卡上,再重新构建/部署正常 2.2.0:
 
 ```bash
 : > build/scratch/dev-update-url

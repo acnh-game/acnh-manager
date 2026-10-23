@@ -605,6 +605,10 @@ DigiCert / ISRG / GlobalSign 等一长串),而镜像里的 libcurl 是 7.69.1,�
 - Game Agent 条目沿用原来的安装确认、门控、校验、回滚路径;ACNH-Manager 条目从同一份已签名
   清单取得新 NRO 的 HTTPS 地址、版本、大小与 SHA-256,下载后再核对 NRO 身份和 NACP 显示的版本,
   只有全部一致才原子替换标准路径 `/switch/ACNH-Manager/acnh-manager.nro`;
+- Manager 替换成功后,更新中心底部提供 `Ⓐ 立即重启`;`B` 仍是稍后手动退出。从 HOME 快捷方式
+  以 Application 模式运行时调用 `appletRestartProgram()`;从相册/hbl 进入 applet 模式时使用
+  `envSetNextLoad()` 返回加载器链式加载新 NRO。宿主不支持重启能力时,页面明确回退到“退出后
+  重新打开”,不会假装重启成功;
 - Manager 下载在独立工作线程运行,替换完成后提示退出并从相册重新打开;界面不因 HTTPS 握手或
   数 MB 下载而冻结;
 - 检查跑在工作线程上,**整个界面在检查期间照常响应**(改之前是同步调用,整个 App 会卡住数秒);
