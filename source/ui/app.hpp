@@ -252,7 +252,7 @@ private:
        without touching anything another tool owns (no CleanupAllPlaceHolder). */
     void AbandonPendingInstall();
     /* Open the game installer, remembering where we came from (it is modal: B returns there). */
-    void OpenGameInstall();
+    void OpenGameInstall(bool from_home_action = false);
     bool TitleIsOurs(const std::string &title_id) const;
     /* "The agent can be installed once this is in" is only true when the version being installed
        (or already on the console) is the one this build's agent supports: the gate wants an exact
@@ -334,6 +334,7 @@ private:
     /* A Home-screen helper started the embedded package directly, without the normal source
        picker.  Its result page returns to Home in one step. */
     bool m_install_returns_to_launcher{false};
+    bool m_install_from_home_action{false};
     /* The address screen offers two ways in (the system keyboard now, the browser page that can
        submit an address once the server exists).  Neither works without a network, so the screen
        asks first and says so instead of letting a download fail a minute later. */

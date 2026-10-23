@@ -215,6 +215,7 @@ enum class StringId {
     InstallUpload,
     InstallUploadSub,
     InstallFormats,
+    InstallNoticeSupport,
     InstallWaiting,
     InstallOpenAddress,
     InstallPagePasteHint,

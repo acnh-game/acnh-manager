@@ -1927,7 +1927,7 @@ void App::ActivateAction(int id) {
                     /* The one useful thing to do here: offer the installer, because a package the
                        player brings is how both of these states stop being true -- and for a
                        console with no game at all, installing one is the only way forward. */
-                    OpenGameInstall();
+                    OpenGameInstall(/*from_home_action=*/true);
                     break;
                 case HomeKind::NeedsInstall:
                 case HomeKind::UpdateAvailable:
@@ -3972,7 +3972,7 @@ bool App::TitleIsOurs(const std::string &title_id) const {
     return false;
 }
 
-void App::OpenGameInstall() {
+void App::OpenGameInstall(bool from_home_action) {
     if (m_page == Page::GameInstall) {
         return;
     }
@@ -3989,6 +3989,7 @@ void App::OpenGameInstall() {
     m_install_screen = m_have_pending_task ? InstallScreen::Pending : InstallScreen::Choose;
     m_install_origin = InstallScreen::Choose;
     m_install_returns_to_launcher = false;
+    m_install_from_home_action = from_home_action;
     m_file_dir = "/";
     m_focus = FirstEnabled(m_actions);
     Trace("install: opened from page %d", static_cast<int>(m_game_install_return));
@@ -4697,6 +4698,7 @@ void App::LeaveGameInstall() {
     StopInstallerServer();
     m_install_page_drives = false; /* a fresh entry into the install page starts from scratch */
     m_install_returns_to_launcher = false;
+    m_install_from_home_action = false;
     LeaveInstallScreen();
     m_page = m_game_install_return;
 }
@@ -6095,6 +6097,7 @@ void App::RenderInstallPending(Surface surface) {
                     i == 1 ? kWarn : kText, Tr(entries[i].label));
         m_actions.push_back({entries[i].action, rect, true});
     }
+
     m_focus = m_actions.empty() ? -1 : 0;
 }
 
@@ -6184,6 +6187,40 @@ void App::RenderGameInstall(Surface surface) {
         m_font.Draw(surface, text_x, block_top + label_height + gap, kFontSmall, kSubtle,
                     sub.c_str(), text_width);
         m_actions.push_back({entries[i].action, rect, true});
+    }
+
+    /* Contextual help from the two Home states that send the player here to obtain a package.
+       A direct `+` entry deliberately has no card: it is already the general installer path. */
+    if (m_install_from_home_action) {
+        constexpr int kNoticeWidth = 560;
+        constexpr int kNoticePad = 20;
+        constexpr int kNoticeBadge = 32;
+        const char *notice_support = Tr(i18n::StringId::InstallNoticeSupport);
+        constexpr int kNoticeTextOffset = 18 + kNoticeBadge + 14;
+        const int text_width = m_font.Measure(notice_support, kFontSmall);
+        const int notice_w =
+            std::min(surface.width - kMargin * 2,
+                     std::max(kNoticeWidth, kNoticeTextOffset + text_width + kNoticePad + 8));
+        const int notice_x = surface.width - kMargin - notice_w;
+        const int notice_text_x = notice_x + kNoticeTextOffset;
+        const int notice_text_w = notice_w - kNoticeTextOffset - kNoticePad;
+        const int notice_h = kNoticePad * 2 + m_font.LineHeight(kFontSmall);
+        const int notice_y = surface.height - kFooterHeight - 18 - notice_h;
+        FillRoundedRect(surface, notice_x, notice_y, notice_w, notice_h, 16, kBorder);
+        FillRoundedRect(surface, notice_x + 3, notice_y + 3, notice_w - 6, notice_h - 6, 13,
+                        kCard);
+        FillRoundedRect(surface, notice_x + 18, notice_y + notice_h / 2 - kNoticeBadge / 2,
+                        kNoticeBadge, kNoticeBadge, kNoticeBadge / 2, kHeader);
+        const int info_w = m_font.Measure("i", kFontSmall);
+        m_font.DrawBold(surface, notice_x + 18 + kNoticeBadge / 2 - info_w / 2,
+                        notice_y + notice_h / 2 - 8, kFontSmall, kOnHeader, "i");
+        const std::string support =
+            m_font.Fit(notice_support, kFontSmall, notice_text_w, 1);
+        /* Centre the glyph ink, not just the taller line box. */
+        constexpr int kNoticeTextBiasY = 4;
+        const int notice_text_y =
+            notice_y + (notice_h - m_font.LineHeight(kFontSmall)) / 2 + kNoticeTextBiasY;
+        m_font.Draw(surface, notice_text_x, notice_text_y, kFontSmall, kSubtle, support);
     }
     m_focus = m_actions.empty() ? -1 : 0;
 }

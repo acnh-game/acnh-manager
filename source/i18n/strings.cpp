@@ -197,6 +197,7 @@ constexpr Entry kStrings[] = {
     {"上传安装", "Upload and install"},  /* InstallUpload */
     {"通过手机/电脑浏览器上传安装", "Upload from a phone or computer browser"},  /* InstallUploadSub */
     {"支持 nsp / nsz / xci / xcz", "Supports nsp / nsz / xci / xcz"},  /* InstallFormats */
+    {"遇到问题请联系微信小程序客服。", "If you need help, contact the WeChat mini-app customer support."},  /* InstallNoticeSupport */
     {"正在等待连接……", "Waiting for a connection..."},  /* InstallWaiting */
     {"用手机或电脑的浏览器打开下面的地址", "Open this address in a phone or computer browser"},  /* InstallOpenAddress */
     {"在网页里粘贴下载网址 —— 不用一个字一个字地敲", "Paste the download address there - no need to type it out"},  /* InstallPagePasteHint */
