@@ -1759,6 +1759,5 @@ host tests 覆盖了当前模式与快捷方式进程的四种组合,当前为 `
 首页入口仍叫「检查更新」;进入后的页面叫「更新中心」。重新检查按钮在请求期间显示 spinner
 并把文字改为「正在检查…」,检查完成后恢复。
 
-主机测试当前为 `3875 checks, 0 failures`,i18n 共 321 条。本轮 release 构建
-`2f8d896ecac24e99…` 的 `verify-release --nro` 66 项检查全过;工作树尚未提交,所以构建戳带
-`-dirty`,不视为正式发布件。
+主机测试当前为 `3875 checks, 0 failures`,i18n 共 321 条。基于功能提交 `193e7bc` 的干净
+release 构建 `6ecd9d7023f402f0…` 已通过 `verify-release --nro` 的 66 项检查。
