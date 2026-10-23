@@ -2490,7 +2490,7 @@ void TestForwarderPackage() {
                                           std::istreambuf_iterator<char>());
     CHECK(!bytes.empty());
     CHECK(acnh_manager::util::Sha256Hex(bytes.data(), bytes.size()) ==
-          "639b609d86f78d994d14221fdd20e318a5f88d6caa8551295ff51f0a10a17da6");
+          "dc041cb6dcb083a52282aae9245d04608c300a4ecf1ec7493f9051fd31de876e");
 
     install::MemorySource source;
     std::string error;

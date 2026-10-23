@@ -1529,11 +1529,12 @@ not be decoded"**,偶尔随后在 `App::Render()` 的 `framebufferBegin` 处崩�
 - forwarder title id 为 `05e67f3a16603000`,由 Sphaira/hbmenu 实际使用的
   `sdmc:/switch/ACNH-Manager/ACNH-Manager.nro` 按参考算法计算;NPDM 的 ACI0/ACID program id、
   NACP 的 presence/save/device/local-communication id 与 CNMT title id 都已对齐。
-- `data/forwarder_nsp.bin` 为 264,408 B,当前 2.0.0 版本的 sha256
-  `639b609d86f78d994d14221fdd20e318a5f88d6caa8551295ff51f0a10a17da6`。它由现场编译的
+- `data/forwarder_nsp.bin` 为 264,408 B,当前 2.2.1 版本的 sha256
+  `dc041cb6dcb083a52282aae9245d04608c300a4ecf1ec7493f9051fd31de876e`。它由现场编译的
   hbmenu loader 和本项目自己的 NCA/CNMT 构造器生成:
   Program `faa5f2beb5e668f0e365bc1afa5512f86028d4b4c0a67ebf23e740332ed7e1f7`、Control
-  `cb249059f1f223ec97c99fe16b758bdc`、Meta `0ad19d60e709b0f2ee42a55f2490dbe6bf5dd2ab95097bfac08fefb29289a6cf`。
+  `eebec56539e02ebb732454293736b41cecec59a48df1abb04cde492c001cc7ea`、Meta
+  `129944716c1cc089193fdd03bbf1ed71d422aa6224cf81d4b8fc7a443cdb03f8`。
 - 从同一 loader 源码、同一 NACP/图标、同一固定镜像重跑生成器,得到的 NSP 与来源 JSON 均逐字节相同。
 - 开发机用 hactool 逐 NCA 开 `--verify`:Program / Control / Meta 三个 NCA 的层级哈希全部通过;
   Program 的 ExeFS 可解出 loader `main`/`main.npdm`,RomFS 的 `nextArgv` 与 `nextNroPath`
@@ -1794,3 +1795,16 @@ Manager NRO 替换成功后,更新中心底部由「重新检查」切换为「�
 
 主机测试当前为 `3894 checks, 0 failures`,i18n 共 324 条。基于功能提交 `fb7cdbc` 的干净
 release 构建 `0add3f2f3f6c4bf7…` 已通过 `verify-release --nro` 的 66 项检查。
+
+## 版本 2.2.1 正式构建(2026-10-23)
+
+`2.2.1` 在第一轮发布链导入并提交发布素材后,从已提交源码重新执行干净的
+`./tools/build.sh --release`,避免把发布链导入产生的临时工作树变化写进最终 NRO。
+最终构建名为 `2026-10-23T13:33:35Z+4ec0c53+src:930d6656+release`,不含 `-dirty` 与
+`+devaids`。NRO 大小为 3,844,237 B,sha256 为
+`4a9db8a307e874652aaa6dfed470880a7e30b0ee87d2c6c42f69740e9501ebd1`;根目录构建产物与
+`packaging/nro/acnh-manager-2.2.1.nro` 逐字节一致。
+
+清单中的 Manager 条目已刷新为同一版本、大小和哈希并重新签名。发布自检的 66 项检查全部通过,
+包括发布记录、内嵌 Game Agent 三件套、桌面 forwarder、NRO 原始字节、第三方源码、构建戳、
+对外清单与签名。
