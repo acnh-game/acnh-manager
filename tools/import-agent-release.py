@@ -33,7 +33,7 @@ whole chain):
         --nso <build output>/acnh-agent.nso \\
         --npdm <derived dir>/main.npdm \\
         --version-json <build output>/version.json \\
-        --original-npdm ../acnh-agent/research/acnh-3.0.3/exefs/*/Program\\ #0/0/main.npdm
+        --original-npdm ../../dump/acnh-3.0.3/exefs/main.npdm
 """
 
 import argparse

@@ -3,12 +3,12 @@
 
 The private key is the project's identity: every ACNH-Manager in the field trusts manifests
 signed with it (the matching public key is compiled into the app as `data/agent_pubkey.bin`).
-It lives outside this repository, in the local secrets directory (`~/.acnh/`), and is backed up:
+It lives outside this repository, in the local secrets directory (`~/.switch/`), and is backed up:
 never regenerate it casually -- a new key means no already-shipped app will accept new releases
 until it is updated itself.
 
-    python3 tools/make-signing-key.py --key ~/.acnh/acnh-manager-signing-key.pem
-    python3 tools/sign-manifest.py --key ~/.acnh/acnh-manager-signing-key.pem
+    python3 tools/make-signing-key.py --key ~/.switch/acnh-manager-signing-key.pem
+    python3 tools/sign-manifest.py --key ~/.switch/acnh-manager-signing-key.pem
 
 The public key is written to `data/agent_pubkey.bin` (committed); the private key is not, and
 this tool refuses to overwrite an existing one unless --force says so.

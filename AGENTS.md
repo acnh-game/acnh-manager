@@ -117,8 +117,8 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   `docs/architecture.md` 第 4.2 节)——**新加的调用点同样必须**(2.0.0 的本机文件来源与"读挂载
   内容里的一个文件"两条都漏了这条,真机上 47 次打开里 5 次 `0xD401`,按同一循环重跑 60 次为 0);
   唯一例外是演示用的 `probe.cpp`,它故意把裸指针交给 `fs*`。
-- **发布清单必须签名**:`tools/sign-manifest.py --key ~/.acnh/acnh-manager-signing-key.pem`
-  (私钥放本地密钥目录 `~/.acnh/`,600,不入库,要备份)把根目录 `agent-manifest.json`
+- **发布清单必须签名**:`tools/sign-manifest.py --key ~/.switch/acnh-manager-signing-key.pem`
+  (私钥放本地密钥目录 `~/.switch/`,600,不入库,要备份)把根目录 `agent-manifest.json`
   签成 `agent-manifest.json.sig`(名字就是"清单文件名 + `.sig`",App 按这个规则去取),两个文件一起提交。
   私钥不入库,公钥 `data/agent_pubkey.bin` 入库并编进 NRO;漏签或换钥的后果见
   `docs/architecture.md` 第 9.2 节。

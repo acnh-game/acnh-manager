@@ -28,8 +28,8 @@
 | 9 | 打商店包 | `tools/make-store-package.py` |
 
 前置:acnh-agent 工作树干净、`research/` 里有原始 `main.npdm`、docker 可用、**发布签名私钥在**
-(`--key` 或 `ACNH_MANAGER_SIGNING_KEY`,默认 `~/.acnh/acnh-manager-signing-key.pem`,与其它本地
-密钥一起放在 `~/.acnh/`,权限 600);改完代码后先跑
+(`--key` 或 `ACNH_MANAGER_SIGNING_KEY`,默认 `~/.switch/acnh-manager-signing-key.pem`,与其它本地
+密钥一起放在 `~/.switch/`,权限 600);改完代码后先跑
 `make -C tests`。
 
 `--allow-dirty` 是开发期开关(例如只想验证链本身能否跑通):它只把"本仓库干净"这一条降级成警告,
@@ -203,7 +203,7 @@ raw 请求会 302 到 `raw.giteeusercontent.com` 的带签名地址(2026-09-20 �
 - `packaging/agent/<agentVersion>/manifest.json` 是发布记录,**仓库根目录的 `agent-manifest.json`
   是它的副本**,由 `tools/import-agent-release.py` 在导入时一起写 —— App 的联网检查读后者的
   raw URL(见 `docs/architecture.md` 第 9 节),所以"最新版本"和"发布记录"永远同源;
-- **清单必须签名后再推**:`python3 tools/sign-manifest.py --key ~/.acnh/acnh-manager-signing-key.pem`,
+- **清单必须签名后再推**:`python3 tools/sign-manifest.py --key ~/.switch/acnh-manager-signing-key.pem`,
   然后把 `agent-manifest.json` 与 `agent-manifest.json.sig` 一起提交。签名文件的名字是
   **清单文件名 + `.sig`**,因为 App 就是把它读清单的 URL 直接加后缀去取的;名字对不上,线上表现是
   "检查失败: 清单签名校验失败"。工具会先核对私钥与编进 App 的公钥 `data/agent_pubkey.bin` 是否配套

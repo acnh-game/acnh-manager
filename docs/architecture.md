@@ -585,7 +585,7 @@ DigiCert / ISRG / GlobalSign 等一长串),而镜像里的 libcurl 是 7.69.1,�
 
 ### 9.2 清单签名(内容可信的根)
 
-- 私钥只存在发布机上,放在本地密钥目录 `~/.acnh/acnh-manager-signing-key.pem`(权限 600,不入库,
+- 私钥只存在发布机上,放在本地密钥目录 `~/.switch/acnh-manager-signing-key.pem`(权限 600,不入库,
   要备份);公钥 `data/agent_pubkey.bin` 编进 NRO,随 NRO 一起发给玩家;
 - 这把公钥同时在两处留痕:发布锁的 `signingPublicKeySha256`(自检比对,让换钥匙在 diff 里显式
   出现)与 NRO 的 `.rodata`(自检核对 NRO 里编的确实是当前那把);

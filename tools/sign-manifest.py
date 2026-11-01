@@ -6,7 +6,7 @@ libcurl + mbedTLS), so the manifest -- and with it the hashes of every file the 
 would otherwise be whatever the network hands over.  The app therefore carries a public key and
 refuses any manifest whose signature does not match.
 
-    python3 tools/sign-manifest.py                 # uses ~/.acnh/acnh-manager-signing-key.pem
+    python3 tools/sign-manifest.py                 # uses ~/.switch/acnh-manager-signing-key.pem
     python3 tools/sign-manifest.py --key <other key>
 
 It signs `agent-manifest.json` (the copy at the repository root, which is what the app fetches)
@@ -29,7 +29,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_MANIFEST = REPO_ROOT / "agent-manifest.json"
 DEFAULT_SIGNATURE = REPO_ROOT / "agent-manifest.json.sig"
 DEFAULT_PUBKEY = REPO_ROOT / "data" / "agent_pubkey.bin"
-DEFAULT_KEY = pathlib.Path.home() / ".acnh" / "acnh-manager-signing-key.pem"
+DEFAULT_KEY = pathlib.Path.home() / ".switch" / "acnh-manager-signing-key.pem"
 
 
 def run(args: list[str], check_output: bool = True) -> subprocess.CompletedProcess:

@@ -1022,7 +1022,7 @@ contents=3`、`e0s=5679267840`、`control content: ok`,只有解码那一步失�
 (sphaira)就在本工作区里。这一轮把四种格式的路径逐段对照它的安装/收尾序列(`yati.cpp`、
 `container/nsp.cpp`、`container/xci.cpp`、`nx/nca.hpp`、`nx/ncz.*`),并把可疑处拿到真实样本上核实。
 
-**样本实测(读每个内容的 NCA 头:取该内容的 0xC00 字节,用 `SDcard/switch/prod.keys` 的 header key
+**样本实测(读每个内容的 NCA 头:取该内容的 0xC00 字节,用 `~/.switch/prod.keys` 的 header key
 按 NCA 头的 XTS 布局解密——`tools/parse-nsp.py` 的 `aes_xts_decrypt` 就是这段——再看 0x204 的分布位、
 0x208 的 size、0x230 的 rights id;容器条目清单可用 `tools/ncz-blocks.py` 列出)**:
 四种格式的**每个内容**都满足

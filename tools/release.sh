@@ -19,7 +19,7 @@
 #   ./tools/release.sh --skip-agent-build  # reuse the stage in build/scratch/agent-release
 #   ./tools/release.sh --skip-nro --skip-store
 #   ./tools/release.sh --allow-dirty       # development only: validate the chain itself
-#   ./tools/release.sh --key ~/.acnh/acnh-manager-signing-key.pem
+#   ./tools/release.sh --key ~/.switch/acnh-manager-signing-key.pem
 #
 # Needs docker (pinned image devkitpro/devkita64:20260219); inside the sandbox docker needs
 # escalation.  The signing key (private half of the key compiled into the app, see
@@ -28,11 +28,12 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 agent_dir="${ACNH_AGENT_DIR:-$(cd "${repo_dir}/../acnh-agent" && pwd)}"
+workspace_dir="$(cd "${repo_dir}/../.." && pwd)"
 image="devkitpro/devkita64:20260219"
 stage="${repo_dir}/build/scratch/agent-release"
 # Original ACNH main.npdm -- the only input of the NPDM derivation; acnh-agent keeps it
-# under research/.
-original_npdm="${agent_dir}/research/acnh-3.0.3/exefs/_ 3.0.3 [01006F8002326800][v2228224][UPD]/Program #0/0/main.npdm"
+# in the canonical workspace dump.
+original_npdm="${workspace_dir}/dump/acnh-3.0.3/exefs/main.npdm"
 
 skip_agent_build=0
 skip_nro=0
@@ -40,7 +41,7 @@ skip_store=0
 allow_dirty=0
 # The private half of the key compiled into the app.  Kept outside this repository, next to
 # the other local secrets.
-signing_key="${ACNH_MANAGER_SIGNING_KEY:-${HOME}/.acnh/acnh-manager-signing-key.pem}"
+signing_key="${ACNH_MANAGER_SIGNING_KEY:-${HOME}/.switch/acnh-manager-signing-key.pem}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --skip-agent-build) skip_agent_build=1 ;;

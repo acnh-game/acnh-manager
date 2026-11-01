@@ -573,7 +573,7 @@ def main() -> int:
     parser.add_argument("--loader-npdm", type=pathlib.Path, required=True)
     parser.add_argument(
         "--keys", type=pathlib.Path,
-        default=pathlib.Path("../../SDcard/switch/prod.keys")
+        default=pathlib.Path.home() / ".switch" / "prod.keys"
     )
     parser.add_argument(
         "--source-record", type=pathlib.Path,

@@ -22,7 +22,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 LOADER_DIR = REPO_ROOT / "packaging" / "forwarder" / "hbl-3.0.0"
 BUILD_DIR = REPO_ROOT / "build" / "forwarder-loader"
 IMAGE = "devkitpro/devkita64:20260219"
-DEFAULT_KEYS = REPO_ROOT / "../../SDcard/switch/prod.keys"
+DEFAULT_KEYS = pathlib.Path.home() / ".switch" / "prod.keys"
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "forwarder_nsp.bin"
 DEFAULT_METADATA = REPO_ROOT / "data" / "forwarder_nsp_meta.bin"
 
