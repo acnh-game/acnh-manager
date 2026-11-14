@@ -60,8 +60,9 @@ fail-closed 也不用"最接近的匹配",理由见第 6.2 节里每种状态的
 ```text
 ① ns   nsListApplicationContentMetaStatus(01006F8002326000)
         → 是否有 Application(基础游戏)/Patch 条目;Patch 的 version(期望 2228224)与所在
-          storage(期望 SD=5)
-② ncm  ncmOpenContentMetaDatabase(SD) + GetLatestContentMetaKey(01006F8002326800) + ListContentInfo
+          storage(内置用户存储=4 或 SD=5;精确值驱动 ②)
+② ncm  ncmOpenContentMetaDatabase(① 给出的 Patch 存储) +
+        GetLatestContentMetaKey(01006F8002326800) + ListContentInfo
         → 更新标题的 content meta:version 必须 == 2228224、type == Patch(0x81);
           其内容表中 type=1(Program)的 content id 必须 == E10617820DB06889E1638499478DA0DE
           (NCA 内容哈希,内容级指纹:与构建一一对应,与主机无关)
@@ -128,6 +129,14 @@ Patch 条目 —— 先把"没有更新包"写进 `problems`,详情页就会给�
 现在只有一种情况才算异常:`ns` 的内容表确实列出了 Patch 条目、`ncm` 却仍然读不到更新标题。
 那个失败本身不需要丢证据:同一份 `log.txt` 里的 `meta type=…` 列表与
 `detected build: … contentId=(unavailable)` 仍然逐行写着实际读到了什么。
+
+Patch 的元数据库位置必须跟 ① 返回的 `storageID` 走,不能固定查 SD。正版系统上购买并安装的
+更新可能位于内置用户存储(`storage=4`),而 `ns` 仍能从全局应用信息中读到最新 NACP 和 `3.0.3`;
+固定打开 SD(`storage=5`)的 `ncm` 数据库会返回 `0x00000E05`,随后门控拿着未读到的数字版本 `0`
+拒绝安装,详情页就会出现"当前 3.0.3、本应用支持 3.0.3"却仍判定不支持。找到 Patch 时使用它的
+`storageID`;只有 `ns` 没有给出可用位置时才依次查询内置用户存储与 SD。任何一次查询成功都必须
+优先采用该成功结果。`ns` 已确认没有 Patch 时,两次查询都返回 `0x00000E05` 仍属正常;数据库
+打开失败、返回其它错误,或 `ns` 本身无法回答而两次查询都失败时,才计入 `problems`。
 
 ## 4. SD 写入约定(实现约束)
 

@@ -28,6 +28,7 @@
 #include "env/cheat_file.hpp"
 #include "env/config_ini.hpp"
 #include "env/forwarder.hpp"
+#include "env/ncm_lookup.hpp"
 #include "env/startup_check.hpp"
 #include "i18n/strings.hpp"
 #include "install/gate.hpp"
@@ -310,6 +311,54 @@ void TestJsonBasics() {
     CHECK(c != nullptr && c->Find("d")->NumberOr(0.0) == -2500.0);
     /* \u00e9 = e-acute (2 bytes) and a surrogate pair (4 bytes), 6 bytes together. */
     CHECK(c->Find("e")->StringOr(std::string()).size() == 6);
+}
+
+void TestNcmMetaLookup() {
+    using acnh_manager::env::IsExpectedNcmMiss;
+    using acnh_manager::env::PlanNcmMetaLookup;
+    using acnh_manager::env::ShouldReportNcmLookupFailure;
+
+    const auto built_in = PlanNcmMetaLookup(true, true, 4);
+    CHECK(built_in.count == 1);
+    CHECK(built_in.storages[0] == 4);
+    CHECK(!built_in.update_absent);
+
+    const auto sd = PlanNcmMetaLookup(true, true, 5);
+    CHECK(sd.count == 1);
+    CHECK(sd.storages[0] == 5);
+    CHECK(!sd.update_absent);
+
+    /* A successful ns list with no Patch is the only case where ContentMetaNotFound is an
+       expected answer.  The ncm lookup still checks both user-storage databases in case ns
+       omitted a record, but its failures are suppressed only after that check. */
+    const auto absent = PlanNcmMetaLookup(true, false, 0);
+    CHECK(absent.count == 2);
+    CHECK(absent.storages[0] == 4);
+    CHECK(absent.storages[1] == 5);
+    CHECK(absent.update_absent);
+
+    /* If ns could not answer, or found a Patch without a usable storage id, both databases
+       have to be queried and a double failure remains a real detection problem. */
+    const auto unknown = PlanNcmMetaLookup(false, false, 0);
+    CHECK(unknown.count == 2);
+    CHECK(unknown.storages[0] == 4);
+    CHECK(unknown.storages[1] == 5);
+    CHECK(!unknown.update_absent);
+
+    const auto invalid_patch_storage = PlanNcmMetaLookup(true, true, 0);
+    CHECK(invalid_patch_storage.count == 2);
+    CHECK(invalid_patch_storage.storages[0] == 4);
+    CHECK(invalid_patch_storage.storages[1] == 5);
+    CHECK(!invalid_patch_storage.update_absent);
+
+    /* E05 is expected only after ns successfully proved there is no Patch.  A different
+       service result, or E05 after ns failed to answer, remains a visible detection problem. */
+    CHECK(IsExpectedNcmMiss(true, 0x00000E05));
+    CHECK(!IsExpectedNcmMiss(true, 0x00000BAD));
+    CHECK(!IsExpectedNcmMiss(false, 0x00000E05));
+    CHECK(!ShouldReportNcmLookupFailure(true, false));
+    CHECK(ShouldReportNcmLookupFailure(true, true));
+    CHECK(ShouldReportNcmLookupFailure(false, false));
 }
 
 void TestJsonRejects() {
@@ -3562,6 +3611,7 @@ int main() {
     TestInstallOptions();
     TestDecideSkip();
     TestJsonBasics();
+    TestNcmMetaLookup();
     TestJsonRejects();
     TestJsonDumpRoundTrip();
     TestManifestOk();

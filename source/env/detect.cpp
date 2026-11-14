@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "env/cheat_file.hpp"
+#include "env/ncm_lookup.hpp"
 #include "install/nca.hpp"
 #include "util/fs_path.hpp"
 
@@ -17,6 +18,9 @@ constexpr const char *kExefsDir = kAcnhExefsDir;
 constexpr const char *kCheatsDir = kAcnhCheatsDir;
 constexpr const char *kOverrideConfig = kAcnhOverrideConfig;
 constexpr const char *kTitleConfig = kAcnhTitleConfig;
+
+static_assert(kUserStorageBuiltIn == static_cast<std::uint8_t>(NcmStorageId_BuiltInUser));
+static_assert(kUserStorageSdCard == static_cast<std::uint8_t>(NcmStorageId_SdCard));
 
 /* A cheat file is a list of `[entry]` blocks; the cap only exists so a corrupt size cannot make
    the read unbounded.  The known pack is about 6 KB, so 256 KB is generous. */
@@ -215,27 +219,57 @@ void LogMetaBlob(NcmContentMetaDatabase &db, const NcmContentMetaKey &key, const
     }
 }
 
-void CollectNcm(EnvironmentReport *report, bool update_absent) {
+void CollectNcm(EnvironmentReport *report, const NcmMetaLookupPlan &lookup) {
     if (R_FAILED(ncmInitialize())) {
         report->problems += "ncmInitialize failed";
         return;
     }
+
     NcmContentMetaDatabase db{};
-    const Result rc_db = ncmOpenContentMetaDatabase(&db, NcmStorageId_SdCard);
-    if (R_FAILED(rc_db)) {
-        Note(report, "ncm open meta db", rc_db);
-        return;
-    }
     NcmContentMetaKey key{};
-    const Result rc_key =
-        ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &key, kAcnhUpdateTitleId);
-    if (R_FAILED(rc_key)) {
-        if (!update_absent) {
-            Note(report, "ncm latest key", rc_key);
+    std::string failure;
+    bool found = false;
+    bool unexpected_failure = false;
+    for (std::uint8_t i = 0; i < lookup.count; ++i) {
+        const std::uint8_t storage = lookup.storages[i];
+        const Result rc_db =
+            ncmOpenContentMetaDatabase(&db, static_cast<NcmStorageId>(storage));
+        if (R_FAILED(rc_db)) {
+            unexpected_failure = true;
+            char line[96];
+            std::snprintf(line, sizeof(line), "ncm open meta db storage=%u rc=0x%08X", storage,
+                          rc_db);
+            if (!failure.empty()) {
+                failure += "; ";
+            }
+            failure += line;
+            continue;
         }
+        const Result rc_key =
+            ncmContentMetaDatabaseGetLatestContentMetaKey(&db, &key, kAcnhUpdateTitleId);
+        if (R_SUCCEEDED(rc_key)) {
+            found = true;
+            break;
+        }
+        if (!IsExpectedNcmMiss(lookup.update_absent, static_cast<std::uint32_t>(rc_key))) {
+            unexpected_failure = true;
+        }
+        char line[96];
+        std::snprintf(line, sizeof(line), "ncm latest key storage=%u rc=0x%08X", storage, rc_key);
+        if (!failure.empty()) {
+            failure += "; ";
+        }
+        failure += line;
         serviceClose(&db.s);
+    }
+    if (!found) {
+        if (ShouldReportNcmLookupFailure(lookup.update_absent, unexpected_failure) &&
+            !failure.empty()) {
+            NoteText(report, failure.c_str());
+        }
         return;
     }
+
     report->build.version = key.version;
     NcmContentInfo infos[8]{};
     s32 written = 0;
@@ -455,7 +489,7 @@ EnvironmentReport Collect(FsFileSystem &sd) {
     }
 
     /* 2. ncm: the update title's Program content id (the gate's primary input) */
-    CollectNcm(&report, meta_list_ok && !report.patch_found);
+    CollectNcm(&report, PlanNcmMetaLookup(meta_list_ok, report.patch_found, report.patch_storage));
 
     /* 3. dmnt:cht: main ModuleId while the game runs (the strengthened input) */
     if (report.application_running) {
