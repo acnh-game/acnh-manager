@@ -37,7 +37,7 @@
 
 - [ ] `packaging/listing.json` 的中英文案与当前功能一致(尤其"当前支持范围");
 - [x] `assets/icon.png` 与 `assets/screen.png`(横幅)都是最新设计稿;
-- [x] 截图已更新为 2.0.0 英文界面(`assets/screenshots/`,真机四张);
+- [x] 截图已更新为 2.2.1 英文界面(`assets/screenshots/`,真机四张;2.2.2 沿用);
 - [ ] 仓库里的 `packaging/nro/acnh-manager-<版本>.nro` 与本次构建的产物哈希一致,且位在
       `https://gitee.com/acnh-game/acnh-manager/raw/main/packaging/nro/acnh-manager-<版本>.nro`
       —— `pkgbuild.json` 的 update 资产就指向这个 permalink(见 `tools/make-store-package.py`)。
@@ -46,10 +46,10 @@
 - [ ] 本地测试仓库(`repo.json` + Sphaira 自定义商店源)能完成搜索→安装→更新→卸载;
 - [ ] PR 里带上 `icon.png`(必需)与 `screen.png`/截图(推荐)。
 
-当前发布动作:2.2.1 的升级 PR
-[#975](https://github.com/fortheusers/switch-hbas-repo/pull/975) 已提交,目标为 upstream `main`;
-1.0.1 的初始收录 PR #852 已合并。
-下表的未勾选项表示本次 2.0.0 上架尚未执行,不代表功能未实现。
+当前发布动作:2.2.2 的升级 PR
+[#1080](https://github.com/fortheusers/switch-hbas-repo/pull/1080) 已提交并通过 CI,目标为 upstream `main`;
+1.0.1 的初始收录 PR #852 与 2.2.1 的升级 PR #975 已合并。
+下表的未勾选项表示本次 2.2.2 上架前仍有本地测试项未完成,不代表功能未实现。
 
 PR 里该带的文件(其余都是构建期产物,按上游 README 排除):
 
@@ -109,11 +109,11 @@ cd build/scratch/spinarak-check/packages && python3 ../spinarak.py
 3. 键盘输入名称(随意,例如 `ACNH-Test`),再输入 URL:**`http://<Mac 的局域网 IP>:8080`**
    —— Sphaira 会自己补上 `/repo.json`(`ui/menus/appstore.cpp` 里 `suffix{"/repo.json"}`),
    所以你写不写 `/repo.json` 都行;
-4. 它会切到这个商店并加载:应能看到 `ACNH-Manager`(Tools,2.0.0),详情页顶部是横幅、
+4. 它会切到这个商店并加载:应能看到 `ACNH-Manager`(Tools,2.2.2),详情页顶部是横幅、
    下方是四张截图 —— 这一眼就把 `screen.png` 的尺寸/比例与截图顺序一起验了;
 5. **安装**:按 `A` → 完成后卡上应出现 `/switch/ACNH-Manager/acnh-manager.nro`
    (商店包只包含这一个文件;动森 Game Agent 的三件套是 App 自己装的,不受影响);
-6. **更新**:把本地包换成更高版本(`python3 tools/make-store-package.py --version 2.0.1`),
+6. **更新**:把本地包换成更高版本(`python3 tools/make-store-package.py --version 2.2.3`),
    回商店刷新 → 应显示可更新 → 更新后版本号变化、卡上文件被替换;
 7. **卸载**:在商店里卸载 → `acnh-manager.nro` 从卡上消失(其余目录与 `state.json` 不动);
 8. 测完清掉:切到该商店 → `X` → **删除当前商店**。
