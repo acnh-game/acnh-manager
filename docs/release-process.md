@@ -32,17 +32,24 @@
 `~/.switch/acnh-signing-key.pem`,均位于 `~/.switch/`,权限 600);改完代码后先跑
 `make -C tests`。
 
-只更新 Manager、继续沿用已锁定的 agent 发布时使用:
+只更新 Manager、继续沿用已锁定的 agent 发布时使用两阶段流程:
 
 ```bash
+./tools/release.sh --prepare-forwarder
+git add data/forwarder_nsp.bin data/forwarder_nsp_meta.bin
+git commit -m "release: prepare forwarder for <版本>"
 ./tools/release.sh --manager-only
 ```
 
-这条路径从 `packaging/agent-lock.json` 读取现有 agent 版本,不要求 agent 当前 HEAD、工作树状态或
-原始 NPDM 与发布锁一致,也不会重跑 agent 构建或导入 agent payload。它仍会按当前 `APP_VERSION`
-重建 forwarder、从当前 Manager 源码构建 NRO、刷新根清单的 `manager` 对象、双签并执行完整发布
-自检。适用于 agent 仓库已有开发提交、但这些提交尚未形成新的正式发布的情况。forwarder 不能复用:
-桌面快捷方式显示的 NACP 版本来自它,复用旧件会让新 Manager 继续显示旧版本。
+第一阶段按当前 `APP_VERSION` 重建 forwarder 并立即提交。第二阶段从干净树读取
+`packaging/agent-lock.json` 中的现有 agent 版本,不要求 agent 当前 HEAD、工作树状态或原始 NPDM
+与发布锁一致,不重跑 agent 构建,也不导入 agent payload;它只构建 Manager NRO、刷新根清单的
+`manager` 对象、双签并执行完整发布自检。
+
+`--manager-only` 不重建 forwarder,并在构建前用 `jq` 强制检查
+`forwarder_nsp_meta.displayVersion == APP_VERSION`;发布自检还会再次检查。forwarder 必须在
+前一提交里,否则 Manager NRO 的构建戳会带 `-dirty`,自检通过也不能作为正式发布件。这套流程适用于
+agent 仓库已有开发提交、但这些提交尚未形成新的正式发布的情况。
 
 `--allow-dirty` 是开发期开关(例如只想验证链本身能否跑通):它只把"本仓库干净"这一条降级成警告,
 打出的 NRO 构建戳会带 `-dirty` —— 看到那个标志就说明这份产物不是发布件。

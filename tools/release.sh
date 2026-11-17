@@ -18,7 +18,8 @@
 #   ./tools/release.sh --skip-agent-build  # reuse the stage in build/scratch/agent-release
 #   ./tools/release.sh --skip-nro --skip-store
 #   ./tools/release.sh --allow-dirty       # development only: validate the chain itself
-#   ./tools/release.sh --manager-only      # reuse the locked agent; rebuild Manager + forwarder
+#   ./tools/release.sh --prepare-forwarder # regenerate data/forwarder_* for the next release
+#   ./tools/release.sh --manager-only      # clean build: reuse locked agent + committed forwarder
 #   ./tools/release.sh --key ~/.switch/acnh-manager-signing-key.pem \
 #       --ed25519-key ~/.switch/acnh-signing-key.pem
 #
@@ -48,6 +49,7 @@ skip_nro=0
 skip_store=0
 allow_dirty=0
 manager_only=0
+prepare_forwarder=0
 # The two private halves of the keys compiled into the app.  Both stay outside this repository.
 signing_key="${ACNH_MANAGER_SIGNING_KEY:-${HOME}/.switch/acnh-manager-signing-key.pem}"
 ed25519_signing_key="${ACNH_SIGNING_KEY:-${HOME}/.switch/acnh-signing-key.pem}"
@@ -58,6 +60,7 @@ while [ $# -gt 0 ]; do
         --skip-store)       skip_store=1 ;;
         --allow-dirty)      allow_dirty=1 ;;
         --manager-only)     manager_only=1; skip_agent_build=1 ;;
+        --prepare-forwarder) prepare_forwarder=1 ;;
         --key)              signing_key="$2"; shift ;;
         --ed25519-key)      ed25519_signing_key="$2"; shift ;;
         -h|--help)          sed -n "2,29p" "$0"; exit 0 ;;
@@ -67,6 +70,14 @@ while [ $# -gt 0 ]; do
 done
 
 step() { echo; echo "=== $* ==="; }
+
+if [ "${prepare_forwarder}" -eq 1 ]; then
+    step "prepare forwarder"
+    python3 "${repo_dir}/tools/build-forwarder.py"
+    echo "forwarder is ready; commit data/forwarder_nsp.bin and data/forwarder_nsp_meta.bin"
+    echo "before running tools/release.sh --manager-only from a clean tree"
+    exit 0
+fi
 
 step "0/9 preflight"
 if [ "${manager_only}" -eq 0 ]; then
@@ -184,8 +195,20 @@ if [ "${manager_only}" -eq 0 ]; then
 fi
 
 if [ "${skip_nro}" -eq 0 ]; then
-    step "4/9 compile hbl from source and generate the forwarder NSP"
-    python3 "${repo_dir}/tools/build-forwarder.py"
+    if [ "${manager_only}" -eq 0 ]; then
+        step "4/9 compile hbl from source and generate the forwarder NSP"
+        python3 "${repo_dir}/tools/build-forwarder.py"
+    else
+        step "4/9 manager-only: verify the committed forwarder version"
+        jq -e --arg version "${app_version}" \
+            '.displayVersion == $version' \
+            "${repo_dir}/data/forwarder_nsp_meta.bin" >/dev/null || {
+            echo "error: forwarder displayVersion does not match APP_VERSION ${app_version}" >&2
+            echo "       run tools/release.sh --prepare-forwarder, commit data/forwarder_*," >&2
+            echo "       then rerun --manager-only from a clean tree" >&2
+            exit 2
+        }
+    fi
     step "5/9 build the NRO (embeds data/)"
     # --release: development aids (probes, text UI) are left out of this build.
     "${repo_dir}/tools/build.sh" --release

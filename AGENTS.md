@@ -123,10 +123,12 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   `agent-manifest.json.ed25519.sig`(Ed25519)。私钥都在 `~/.switch/`、600、不入库、要备份；
   公钥 `data/agent_pubkey.bin` 与 `data/agent_ed25519_pubkey.bin` 入库并编进 NRO。漏签、
   换钥或两边公钥不配套的后果见 `docs/architecture.md` 第 9.2 节。
-- **只发布 Manager 时用 `tools/release.sh --manager-only`**：它从 `packaging/agent-lock.json`
-  复用已发布 agent，不要求 agent 当前 HEAD 与发布锁一致，也不重建 agent；但仍按当前
-  `APP_VERSION` 重建 forwarder，保证桌面快捷方式 NACP 版本跟随 Manager。不能用
-  `--skip-agent-build` 代替，因为那条路径仍要求暂存 agent 产物属于当前 HEAD。
+- **只发布 Manager 必须走两阶段标准流程**：先运行 `tools/release.sh --prepare-forwarder`，
+  提交 `data/forwarder_nsp.bin` 与 `data/forwarder_nsp_meta.bin`；再从干净树运行
+  `tools/release.sh --manager-only`。后者从 `packaging/agent-lock.json` 复用已发布 agent，
+  不要求 agent 当前 HEAD 与发布锁一致，也不重建 agent；它只允许使用已提交且
+  `displayVersion == APP_VERSION` 的 forwarder。若直接在同一次构建里改 forwarder，最终 NRO
+  会带 `-dirty`，两种命令都不能替代这个两阶段步骤。
 - **工作线程的栈必须页对齐**:`threadCreate` 对调用方给的栈要求 `0x1000` 对齐,否则直接返回
   `LibnxError_BadInput`(`0x1759`),而且只在真机显现(`source/net/update_task.cpp`)。
 
