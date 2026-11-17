@@ -18,7 +18,7 @@
 #   ./tools/release.sh --skip-agent-build  # reuse the stage in build/scratch/agent-release
 #   ./tools/release.sh --skip-nro --skip-store
 #   ./tools/release.sh --allow-dirty       # development only: validate the chain itself
-#   ./tools/release.sh --manager-only      # reuse the locked agent release; build only Manager
+#   ./tools/release.sh --manager-only      # reuse the locked agent; rebuild Manager + forwarder
 #   ./tools/release.sh --key ~/.switch/acnh-manager-signing-key.pem \
 #       --ed25519-key ~/.switch/acnh-signing-key.pem
 #
@@ -184,12 +184,8 @@ if [ "${manager_only}" -eq 0 ]; then
 fi
 
 if [ "${skip_nro}" -eq 0 ]; then
-    if [ "${manager_only}" -eq 0 ]; then
-        step "4/9 compile hbl from source and generate the forwarder NSP"
-        python3 "${repo_dir}/tools/build-forwarder.py"
-    else
-        step "4/9 manager-only: reuse the existing forwarder NSP"
-    fi
+    step "4/9 compile hbl from source and generate the forwarder NSP"
+    python3 "${repo_dir}/tools/build-forwarder.py"
     step "5/9 build the NRO (embeds data/)"
     # --release: development aids (probes, text UI) are left out of this build.
     "${repo_dir}/tools/build.sh" --release

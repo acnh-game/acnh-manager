@@ -319,6 +319,10 @@ def main(argv: list[str] | None = None) -> int:
                          "the forwarder NSP size matches its source record")
             report.check(sha256_of(forwarder) == metadata.get("nspSha256"),
                          "the forwarder NSP hash matches its source record")
+            expected = app_version()
+            report.check(metadata.get("displayVersion") == expected,
+                         f"the forwarder display version matches APP_VERSION ({expected})",
+                         f"forwarder {metadata.get('displayVersion')} != app {expected}")
             source_dir = REPO_ROOT / "packaging" / "forwarder" / "hbl-3.0.0"
             source_record = source_dir / "SOURCE.json"
             if report.check(source_record.is_file(), "the hbl source record exists"):
