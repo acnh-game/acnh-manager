@@ -619,6 +619,10 @@ DigiCert / ISRG / GlobalSign 等一长串),而镜像里的 libcurl 是 7.69.1,�
   都必须以显式 diff 出现。
 - Ed25519 验签使用 devkitPro 固定镜像自带的 libsodium 1.0.20;镜像内的 mbedTLS 2.28 没有
   Ed25519 验签 API,不能把 P-256 路径替换成未经验证的手写实现。
+- Switch applet/hbl 环境没有 libsodium 默认 sysrandom 所需的常规系统随机设备。Switch 构建在
+  首次 `sodium_init()` 前注册由 libnx `randomGet()` 支持的 `randombytes_implementation`;它使用
+  内核种子 ChaCha20,不依赖 devoptab 或文件系统。不能省略这层替换,否则后台更新检查线程会在
+  `randombytes_sysrandom_stir` 中 `abort()`。
 
 换私钥等于换身份。旧 P-256 公钥删除前,必须先确认最低支持的 Manager 版本已经包含 Ed25519
 验证器,再完成版本覆盖审计;这段兼容窗口不能只凭“新版本已经发布”就提前结束。

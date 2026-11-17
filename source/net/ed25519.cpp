@@ -1,8 +1,46 @@
 #include "net/ed25519.hpp"
 
 #include <sodium.h>
+#include <sodium/randombytes.h>
+
+#ifdef __SWITCH__
+extern "C" {
+#include <switch/kernel/random.h>
+}
+#endif
 
 namespace acnh_manager::net {
+namespace {
+
+bool SodiumReady() {
+    static const bool ready = [] {
+#ifdef __SWITCH__
+        /* libsodium's default sysrandom backend expects the host to provide an OS random
+           device.  The applet/hbl environment cannot do that, and sodium_init() otherwise
+           aborts from its background worker.  libnx's randomGet() is the console's
+           kernel-seeded ChaCha20 source and needs no devoptab or filesystem. */
+        static const randombytes_implementation kSwitchRandom = {
+            [] { return "libnx-random"; },
+            [] {
+                std::uint32_t value = 0;
+                randomGet(&value, sizeof(value));
+                return value;
+            },
+            [] {},
+            nullptr,
+            [](void *const buffer, const std::size_t size) { randomGet(buffer, size); },
+            nullptr,
+        };
+        if (randombytes_set_implementation(&kSwitchRandom) != 0) {
+            return false;
+        }
+#endif
+        return sodium_init() >= 0;
+    }();
+    return ready;
+}
+
+}  // namespace
 
 std::string ManifestEd25519SigningInput(std::string_view manifest) {
     std::string input;
@@ -28,7 +66,7 @@ bool VerifyEd25519(std::string_view data, std::string_view signature,
         }
         return false;
     }
-    if (sodium_init() < 0) {
+    if (!SodiumReady()) {
         if (error != nullptr) {
             *error = "libsodium initialization failed";
         }

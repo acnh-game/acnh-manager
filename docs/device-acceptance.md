@@ -1809,3 +1809,26 @@ release 构建 `0add3f2f3f6c4bf7…` 已通过 `verify-release --nro` 的 66 项
 清单中的 Manager 条目已刷新为同一版本、大小和哈希并重新签名。发布自检的 66 项检查全部通过,
 包括发布记录、内嵌 Game Agent 三件套、桌面 forwarder、NRO 原始字节、第三方源码、构建戳、
 对外清单与签名。
+
+## 2.3.1:Switch 上 Ed25519 更新检查崩溃修复(2026-11-17)
+
+`2.3.0` 在真机启动后短暂显示首页,随后因为后台更新检查而退出。Atmosphère crash report 的
+User Break 为 `0x2959`;符号化后的后台线程链为:
+
+```text
+VerifyEd25519 -> sodium_init -> randombytes_sysrandom_stir -> abort
+```
+
+根因是 libsodium 默认随机后端要求常规 OS 随机设备,而相册 hbl/applet 的最小环境没有该设备。
+签名比较尚未开始,所以不是 Ed25519 公钥或清单签名错误。主机测试在 macOS 上能正常初始化
+libsodium,因此构建和单元测试没有暴露这个环境差异。
+
+`2.3.1` 在 Switch 构建的首次 `sodium_init()` 前注册 libnx `randomGet()` 后端。该后端由内核种子
+ChaCha20 提供随机字节,不依赖 devoptab 或文件系统。真机验收使用 `ACNH-Manager 2.3.1`
+release 构建,从相册启动后保持首页运行超过 9 秒,更新检查完成并显示“全部已是最新”;日志记录:
+
+```text
+update check: manifest ok (Ed25519), agent 0.11.0
+```
+
+同一轮还核对了 `0.11.0` 的三件套、内嵌清单和更新检查路径未被改动。测试结束后按 `B` 返回 HOME。
