@@ -17,10 +17,11 @@ Checks:
   6. the vendored third-party sources (picohttpparser, qrcodegen) are still the exact upstream
      bytes `source/third_party/README.md` pins -- they run on input from the local network, so
      a quiet local edit is exactly the thing that must not reach a release;
-  7. the manifest the update check serves is signed by the key this app trusts: a manifest
-     committed without (re-)signing would be rejected by every shipped App, which is exactly
-     the kind of silent release breakage this tool exists to catch.  Uses openssl when it is
-     on PATH; without it the check is reported as skipped, never as passed.
+  7. the manifest the update check serves carries both transition signatures: the legacy P-256
+     `.sig` for already-shipped Managers and the preferred Ed25519 `.ed25519.sig`.  A manifest
+     committed without (re-)signing would be rejected by one or both client generations, which
+     is exactly the kind of silent release breakage this tool exists to catch.  A missing
+     openssl is a release failure because the signatures cannot be proven.
 
 Usage:
     python3 tools/verify-release.py                          # repo assets only
@@ -37,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_LOCK = REPO_ROOT / "packaging" / "agent-lock.json"
@@ -49,6 +51,9 @@ PAYLOAD_MAP = {
     "main.npdm": "main_npdm.bin",
     "acnh-agent.version": "acnh_agent_version.bin",
 }
+
+ED25519_DOMAIN = b"ACNH-MANAGER-MANIFEST-v1\0"
+ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 
 # The NRO build stamp looks like "2026-09-17T05:17:20Z+68b71a2-dirty+src:445e4876"
 # (see tools/build.sh): UTC time + this repo's commit + [-dirty] + 8 hex chars of the
@@ -113,30 +118,61 @@ class Report:
 
 
 def check_manifest_signature(report: Report) -> None:
-    """The manifest served to the app must carry a signature this app's key accepts: a manifest
-    committed without (re-)signing is rejected by every shipped App, so "the release is live but
-    nobody can see it" would otherwise only show up on a console."""
-    print("\n[7] served manifest signature")
+    """Both transition signatures must be present and valid.  The legacy `.sig` is what an
+    already-shipped P-256-only Manager reads to upgrade; the Ed25519 sidecar is what the
+    transition build prefers from then on."""
+    print("\n[7] served manifest signatures")
     manifest = REPO_ROOT / "agent-manifest.json"
-    signature = manifest.with_name(manifest.name + ".sig")  # the name the app asks for
-    pubkey = REPO_ROOT / "data" / "agent_pubkey.bin"
-    if not report.check(pubkey.is_file(),
-                        f"{show(pubkey)} (the key compiled into the app) exists",
+    p256_signature = manifest.with_name(manifest.name + ".sig")
+    ed25519_signature = manifest.with_name(manifest.name + ".ed25519.sig")
+    p256_pubkey = REPO_ROOT / "data" / "agent_pubkey.bin"
+    ed25519_pubkey = REPO_ROOT / "data" / "agent_ed25519_pubkey.bin"
+    if not report.check(p256_pubkey.is_file(),
+                        f"{show(p256_pubkey)} (legacy P-256 key) exists",
                         "generate it once with tools/make-signing-key.py"):
         return
-    if not report.check(signature.is_file(),
-                        f"{signature.name} exists next to the manifest it signs",
-                        "run tools/sign-manifest.py --key <private key>"):
+    if not report.check(ed25519_pubkey.is_file(),
+                        f"{show(ed25519_pubkey)} (Ed25519 key) exists",
+                        "generate it once with tools/make-ed25519-signing-key.py"):
+        return
+    ed25519_key_bytes = ed25519_pubkey.read_bytes()
+    if not report.check(len(ed25519_key_bytes) == 32,
+                        "the embedded Ed25519 public key is exactly 32 raw bytes"):
+        return
+    if not report.check(p256_signature.is_file(),
+                        f"{p256_signature.name} exists next to the manifest it signs",
+                        "run tools/sign-manifest.py"):
+        return
+    if not report.check(ed25519_signature.is_file(),
+                        f"{ed25519_signature.name} exists next to the manifest it signs",
+                        "run tools/sign-manifest.py"):
         return
     if shutil.which("openssl") is None:
-        print("  skip openssl is not on PATH, so the signature was not actually verified")
+        report.check(False, "openssl is on PATH so the manifest signatures can be verified",
+                     "install openssl; a release cannot pass without cryptographic verification")
         return
-    result = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(pubkey),
-                             "-signature", str(signature), str(manifest)],
+    result = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(p256_pubkey),
+                             "-signature", str(p256_signature), str(manifest)],
                             capture_output=True)
     detail = (result.stdout + result.stderr).decode("utf-8", "replace").strip()
-    report.check(result.returncode == 0, "the signature verifies with the embedded public key",
+    report.check(result.returncode == 0, "the legacy P-256 signature verifies",
                  detail)
+
+    report.check(ed25519_signature.stat().st_size == 64,
+                 "the Ed25519 signature is exactly 64 bytes")
+    with tempfile.TemporaryDirectory(prefix="acnh-verify-ed25519-") as temporary_dir:
+        temporary_root = pathlib.Path(temporary_dir)
+        public_der = temporary_root / "ed25519-public.der"
+        signing_input = temporary_root / "manifest.ed25519.input"
+        public_der.write_bytes(ED25519_SPKI_PREFIX + ed25519_key_bytes)
+        signing_input.write_bytes(ED25519_DOMAIN + manifest.read_bytes())
+        result = subprocess.run([
+            "openssl", "pkeyutl", "-verify", "-pubin", "-keyform", "DER",
+            "-inkey", str(public_der), "-rawin", "-in", str(signing_input),
+            "-sigfile", str(ed25519_signature)
+        ], capture_output=True)
+        detail = (result.stdout + result.stderr).decode("utf-8", "replace").strip()
+        report.check(result.returncode == 0, "the Ed25519 signature verifies", detail)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,6 +215,18 @@ def main(argv: list[str] | None = None) -> int:
                      "the lock records this build's signing public key",
                      f"lock {lock.get('signingPublicKeySha256')} != data {sha256_of(embedded_pubkey)}"
                      " -- a key change breaks every shipped app, so it must be deliberate")
+    embedded_ed25519_pubkey = args.data / "agent_ed25519_pubkey.bin"
+    if report.check(embedded_ed25519_pubkey.is_file(),
+                    f"{show(embedded_ed25519_pubkey)} exists (the Ed25519 key the app embeds)",
+                    "generate it once with tools/make-ed25519-signing-key.py"):
+        report.check(len(embedded_ed25519_pubkey.read_bytes()) == 32,
+                     "the Ed25519 public key is 32 raw bytes")
+        report.check(
+            lock.get("ed25519SigningPublicKeySha256") ==
+            sha256_of(embedded_ed25519_pubkey).lower(),
+            "the lock records this build's Ed25519 signing public key",
+            f"lock {lock.get('ed25519SigningPublicKeySha256')} != "
+            f"data {sha256_of(embedded_ed25519_pubkey)} -- a key change must be deliberate")
 
     print(f"\n[2] release record packaging/agent/{version}/")
     if not report.check(record_dir.is_dir(), f"{show(record_dir)} exists"):
@@ -305,7 +353,11 @@ def main(argv: list[str] | None = None) -> int:
         # the NRO passes every local check while every player's app rejects the new signature.
         pubkey_bytes = (args.data / "agent_pubkey.bin").read_bytes()
         report.check(pubkey_bytes in blob,
-                     f"the NRO embeds the current public key ({len(pubkey_bytes)} B)")
+                     f"the NRO embeds the current legacy public key ({len(pubkey_bytes)} B)")
+        ed25519_pubkey_bytes = (args.data / "agent_ed25519_pubkey.bin").read_bytes()
+        report.check(ed25519_pubkey_bytes in blob,
+                     f"the NRO embeds the current Ed25519 public key "
+                     f"({len(ed25519_pubkey_bytes)} B)")
         if forwarder.is_file():
             report.check(forwarder.read_bytes() in blob,
                          f"the NRO embeds the forwarder NSP ({forwarder.stat().st_size} B)")

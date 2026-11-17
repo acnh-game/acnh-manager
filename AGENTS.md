@@ -117,11 +117,15 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   `docs/architecture.md` 第 4.2 节)——**新加的调用点同样必须**(2.0.0 的本机文件来源与"读挂载
   内容里的一个文件"两条都漏了这条,真机上 47 次打开里 5 次 `0xD401`,按同一循环重跑 60 次为 0);
   唯一例外是演示用的 `probe.cpp`,它故意把裸指针交给 `fs*`。
-- **发布清单必须签名**:`tools/sign-manifest.py --key ~/.switch/acnh-manager-signing-key.pem`
-  (私钥放本地密钥目录 `~/.switch/`,600,不入库,要备份)把根目录 `agent-manifest.json`
-  签成 `agent-manifest.json.sig`(名字就是"清单文件名 + `.sig`",App 按这个规则去取),两个文件一起提交。
-  私钥不入库,公钥 `data/agent_pubkey.bin` 入库并编进 NRO;漏签或换钥的后果见
-  `docs/architecture.md` 第 9.2 节。
+- **发布清单必须双签**:`tools/sign-manifest.py --key ~/.switch/acnh-manager-signing-key.pem
+  --ed25519-key ~/.switch/acnh-signing-key.pem` 同时生成旧客户端读取的
+  `agent-manifest.json.sig`(P-256)和过渡版优先读取的
+  `agent-manifest.json.ed25519.sig`(Ed25519)。私钥都在 `~/.switch/`、600、不入库、要备份；
+  公钥 `data/agent_pubkey.bin` 与 `data/agent_ed25519_pubkey.bin` 入库并编进 NRO。漏签、
+  换钥或两边公钥不配套的后果见 `docs/architecture.md` 第 9.2 节。
+- **只发布 Manager 时用 `tools/release.sh --manager-only`**：它从 `packaging/agent-lock.json`
+  复用已发布 agent，不要求 agent 当前 HEAD 与发布锁一致，也不重建 agent 或 forwarder；不能用
+  `--skip-agent-build` 代替，因为那条路径仍要求暂存 agent 产物属于当前 HEAD。
 - **工作线程的栈必须页对齐**:`threadCreate` 对调用方给的栈要求 `0x1000` 对齐,否则直接返回
   `LibnxError_BadInput`(`0x1759`),而且只在真机显现(`source/net/update_task.cpp`)。
 
@@ -222,7 +226,9 @@ Docker socket 受沙盒限制,需 escalation;构建成功不等于授权部署,�
   只保留媒体与精简包装(MIT,许可证见 `nosleep-media-LICENSE`)。细节见
   `docs/game_installer_design.md` 第 3、8 节。
 - `data/`:内嵌发布清单与 payload 的 bin2s 构建输入(由导入工具生成,入库),外加
-  `data/agent_pubkey.bin`(验签公钥,由 `tools/make-signing-key.py` 生成)、`data/qr_miniapp.bin`
+  `data/agent_pubkey.bin`(旧 P-256 验签公钥,由 `tools/make-signing-key.py` 生成)、
+  `data/agent_ed25519_pubkey.bin`(32 字节 Ed25519 公钥,由
+  `tools/make-ed25519-signing-key.py` 生成)、`data/qr_miniapp.bin`
   (《森友物码册》小程序码的模块矩阵,由 `tools/make-qr.py` 从 miniapp 仓库的 `resources/小程序码.jpg`
   采样而来),以及一个额外子项:桌面入口 `data/forwarder_nsp.bin` 由
   `tools/build-forwarder.py` 从 `packaging/forwarder/hbl-3.0.0/` 的固定源码在 devkitPro 容器中

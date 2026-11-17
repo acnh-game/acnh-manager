@@ -46,6 +46,7 @@
 #include "install/title_name.hpp"
 #include "install/transfer_queue.hpp"
 #include "net/update_policy.hpp"
+#include "net/ed25519.hpp"
 #include "util/json.hpp"
 #include "util/size_text.hpp"
 #include "util/qr_code.hpp"
@@ -714,6 +715,66 @@ void TestUpdateAdoption() {
        nothing installed, the gate still refuses to install that manifest's files. */
     const auto gate = Evaluate(&for_4_0_0, build);
     CHECK(Plan(gate, nullptr, for_4_0_0.agent).action == PlanAction::Blocked);
+}
+
+void TestEd25519() {
+    using acnh_manager::net::ManifestEd25519SigningInput;
+    using acnh_manager::net::VerifyEd25519;
+
+    const auto hex = [](std::string_view text) {
+        std::vector<std::uint8_t> bytes;
+        bytes.reserve(text.size() / 2);
+        for (std::size_t i = 0; i < text.size(); i += 2) {
+            bytes.push_back(static_cast<std::uint8_t>(
+                std::stoul(std::string(text.substr(i, 2)), nullptr, 16)));
+        }
+        return bytes;
+    };
+
+    /* RFC 8032 section 7.1, TEST 1 (empty message). */
+    const auto public_key_bytes =
+        hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+    const auto signature_bytes = hex(
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+        "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b");
+    CHECK(public_key_bytes.size() == 32);
+    CHECK(signature_bytes.size() == 64);
+
+    std::array<std::uint8_t, 32> public_key{};
+    std::copy(public_key_bytes.begin(), public_key_bytes.end(), public_key.begin());
+    const std::string signature(signature_bytes.begin(), signature_bytes.end());
+    std::string error;
+    CHECK(VerifyEd25519("", signature, public_key.data(), &error));
+
+    std::string tampered = signature;
+    tampered[0] ^= 0x01;
+    CHECK(!VerifyEd25519("", tampered, public_key.data(), &error));
+    CHECK(!error.empty());
+
+    const std::string manifest = "{}";
+    const std::string signing_input = ManifestEd25519SigningInput(manifest);
+    const std::string expected =
+        std::string(acnh_manager::net::kManifestEd25519Domain) + '\0' + manifest;
+    CHECK(signing_input == expected);
+
+    /* The signing tool and the console verifier must agree on the exact domain and bytes, not
+       merely each pass their own tests.  These three files are the checked-in transition
+       artifacts; an unsigned manifest change makes this fail before release. */
+    const auto load = [](const char *path) {
+        std::ifstream file(path, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+    };
+    const std::string published_manifest = load("../agent-manifest.json");
+    const std::string published_signature = load("../agent-manifest.json.ed25519.sig");
+    const std::string published_key_bytes = load("../data/agent_ed25519_pubkey.bin");
+    CHECK(!published_manifest.empty());
+    CHECK(published_signature.size() == 64);
+    CHECK(published_key_bytes.size() == 32);
+    std::array<std::uint8_t, 32> published_key{};
+    std::copy(published_key_bytes.begin(), published_key_bytes.end(), published_key.begin());
+    CHECK(VerifyEd25519(ManifestEd25519SigningInput(published_manifest),
+                        published_signature, published_key.data(), &error));
 }
 
 void TestPlan() {
@@ -2539,7 +2600,7 @@ void TestForwarderPackage() {
                                           std::istreambuf_iterator<char>());
     CHECK(!bytes.empty());
     CHECK(acnh_manager::util::Sha256Hex(bytes.data(), bytes.size()) ==
-          "dc041cb6dcb083a52282aae9245d04608c300a4ecf1ec7493f9051fd31de876e");
+          "737c360d5ae9c75958a2178b4cc947ce46e1eedcbb5294ba2019c0610d885886");
 
     install::MemorySource source;
     std::string error;
@@ -3620,6 +3681,7 @@ int main() {
     TestCheatFile();
     TestGate();
     TestUpdateAdoption();
+    TestEd25519();
     TestPlan();
     TestOverrideConfig();
     TestListView();

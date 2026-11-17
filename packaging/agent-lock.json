@@ -6,6 +6,7 @@
   "nsoSha256": "20e380d534243f4f047721d58c01acf44ccab25b1d94ff1c593f9772c69ffa01",
   "npdmSha256": "23eea4eda50c345ee97c971708dcb16efdf091c5bc852fa57c152669104d05ba",
   "signingPublicKeySha256": "386769f0bf9ad7fddf5fc1e812ee079f2c53caa509aae00887c8da207e73277d",
+  "ed25519SigningPublicKeySha256": "4eea7a34230f29f9fb1ad0f5a89271388be8b9e2141a4f337ff9d1dd40ad6c47",
   "game": {
     "profile": "v3_0_3",
     "titleId": "01006F8002326000",

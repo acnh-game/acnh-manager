@@ -21,10 +21,13 @@ namespace acnh_manager::payload {
 /* JSON text of the embedded release manifest; length 0 when no release was imported. */
 std::string_view EmbeddedManifestJson();
 
-/* PEM public key of the release-signing key (`data/agent_pubkey.bin`), which is what makes the
-   downloaded manifest trustworthy even though TLS verification is off.  Empty when the build
-   carries no key -- the update check then refuses to trust anything from the network. */
+/* PEM public key of the legacy P-256 release-signing key (`data/agent_pubkey.bin`).  It exists
+   only for the migration overlap; new manifests are preferred through Ed25519 below. */
 std::string_view EmbeddedAgentPublicKeyPem();
+
+/* Raw 32-byte Ed25519 public key (`data/agent_ed25519_pubkey.bin`).  Empty when the build did
+   not embed one. */
+std::string_view EmbeddedAgentEd25519PublicKey();
 
 /* Whether the manifest and all three payload files are present. */
 bool EmbeddedAvailable();

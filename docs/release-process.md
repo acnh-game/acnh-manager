@@ -23,14 +23,25 @@
 | 4 | 用固定容器从 hbl 源码编译 loader 并生成 forwarder NSP | 仓库不保存编译后的 loader 二进制;源码与产物哈希进入 provenance |
 | 5 | 构建 NRO(`data/` 经 bin2s 进 `.rodata`) | 与普通构建同一条命令 |
 | 6 | 把 NRO 拷进 `packaging/nro/acnh-manager-<APP_VERSION>.nro`,并把其版本/大小/SHA-256 写入根清单的 `manager` 自更新对象 | 这个 raw 地址就是对外的下载直链(商店 update 资产、指南页和更新中心都指它);文件名的版本号取自 Makefile 的 `APP_VERSION`,不另设一处 |
-| 7 | **给根目录的 `agent-manifest.json` 签名**(`tools/sign-manifest.py`) | 漏签 = 线上每个 App 都把清单当垃圾丢掉(见第 6 节);私钥路径用 `--key` 或 `ACNH_MANAGER_SIGNING_KEY` 指,缺了前置检查直接拒绝 |
+| 7 | **给根目录的 `agent-manifest.json` 双签**(`tools/sign-manifest.py`) | 同时生成旧 P-256 `.sig` 和 Ed25519 `.ed25519.sig`;漏任一份 = 一类客户端把清单当垃圾丢掉。P-256 路径用 `--key` / `ACNH_MANAGER_SIGNING_KEY`,Ed25519 路径用 `--ed25519-key` / `ACNH_SIGNING_KEY`,缺任一把都直接拒绝 |
 | 8 | 自检 `tools/verify-release.py` | 见第 3 节;自检同时验签,抓"清单改了没重签" |
 | 9 | 打商店包 | `tools/make-store-package.py` |
 
-前置:acnh-agent 工作树干净、`research/` 里有原始 `main.npdm`、docker 可用、**发布签名私钥在**
-(`--key` 或 `ACNH_MANAGER_SIGNING_KEY`,默认 `~/.switch/acnh-manager-signing-key.pem`,与其它本地
-密钥一起放在 `~/.switch/`,权限 600);改完代码后先跑
+前置:acnh-agent 工作树干净、`research/` 里有原始 `main.npdm`、docker 可用、**两把发布签名私钥
+都在**(旧 `~/.switch/acnh-manager-signing-key.pem` 与新
+`~/.switch/acnh-signing-key.pem`,均位于 `~/.switch/`,权限 600);改完代码后先跑
 `make -C tests`。
+
+只更新 Manager、继续沿用已锁定的 agent 发布时使用:
+
+```bash
+./tools/release.sh --manager-only
+```
+
+这条路径从 `packaging/agent-lock.json` 读取现有 agent 版本,不要求 agent 当前 HEAD、工作树状态或
+原始 NPDM 与发布锁一致,也不会重跑 agent 构建、导入 agent payload 或重建 forwarder。它仍会从当前
+Manager 源码构建 NRO、刷新根清单的 `manager` 对象、双签并执行完整发布自检。适用于 agent 仓库已有
+开发提交、但这些提交尚未形成新的正式发布的情况。
 
 `--allow-dirty` 是开发期开关(例如只想验证链本身能否跑通):它只把"本仓库干净"这一条降级成警告,
 打出的 NRO 构建戳会带 `-dirty` —— 看到那个标志就说明这份产物不是发布件。
@@ -39,8 +50,8 @@
 
 1. 提交这一轮的产物:内嵌清单/payload、forwarder 的 `data/forwarder_nsp.bin` 与
    `data/forwarder_nsp_meta.bin`、`packaging/agent/<版本>/`、`packaging/agent-lock.json`、
-   `packaging/nro/acnh-manager-<版本>.nro`、带 `manager` 对象的 `agent-manifest.json` 与
-   `agent-manifest.json.sig`;
+   `packaging/nro/acnh-manager-<版本>.nro`、带 `manager` 对象的 `agent-manifest.json`、
+   `agent-manifest.json.sig` 与 `agent-manifest.json.ed25519.sig`;
 2. 分支与 tag 都要同时推到两个远端:
 
    ```bash
@@ -84,7 +95,7 @@ python3 tools/import-agent-release.py --dry-run \
 
 ```
 packaging/agent-lock.json          发布锁(版本/commit/开关/文件哈希/构建指纹/
-                                   签名公钥指纹 signingPublicKeySha256)
+                                   P-256 公钥指纹 + Ed25519 公钥指纹)
 packaging/agent/<agentVersion>/    发布记录,保留原始文件名(对外托管的就是这四个):
                                      subsdk9 / main.npdm / acnh-agent.version / manifest.json
 data/manifest.bin                  内嵌发布清单(json 文本)
@@ -94,8 +105,8 @@ data/acnh_agent_version.bin        内嵌 payload 文件(source=acnh-agent.versi
 agent-manifest.json                仓库根目录的"当前版本"清单(agent/game 字段来自
                                      发布记录,另带 Manager 自更新对象;更新中心按 raw
                                      地址读它)
-agent-manifest.json.sig            上面那份清单的签名(第 7 步生成,两个文件一起提交;
-                                    App 先验它再决定要不要信清单的内容)
+agent-manifest.json.sig            旧 P-256 签名(供已发布 Manager 升级)
+agent-manifest.json.ed25519.sig    Ed25519 签名(过渡版优先验证)
 ```
 
 发布记录与 `data/` 由同一次导入写出,内容逐字节对应;`data/` 只是改名后的构建输入。
@@ -180,7 +191,7 @@ python3 tools/make-store-package.py       # 产出 build/scratch/store/
 
 ## 6. 托管与直链(Gitee)
 
-项目全部托管在 Gitee,不依赖自建服务器;**四个对外地址都是同一个 raw 前缀**:
+项目全部托管在 Gitee,不依赖自建服务器;**五类对外地址都是同一个 raw 前缀**:
 
 ```
 # 前缀
@@ -190,8 +201,10 @@ https://gitee.com/acnh-game/acnh-manager/raw/main/
 …/raw/main/packaging/agent/<agentVersion>/{subsdk9,main.npdm,acnh-agent.version}
 # 更新检查读的"当前版本"清单:导入工具每次都会刷新仓库根目录这份
 …/raw/main/agent-manifest.json
-# 清单签名(与清单同址,URL 加 .sig):App 先验它,再决定要不要信清单
+# 旧 P-256 清单签名(已发布 Manager 用它完成升级)
 …/raw/main/agent-manifest.json.sig
+# 过渡版优先读取的 Ed25519 清单签名
+…/raw/main/agent-manifest.json.ed25519.sig
 # App 自身的下载(商店 update 资产与指南页入口)
 …/raw/main/packaging/nro/acnh-manager-<appVersion>.nro
 ```
@@ -204,17 +217,18 @@ raw 请求会 302 到 `raw.giteeusercontent.com` 的带签名地址(2026-09-20 �
 - `packaging/agent/<agentVersion>/manifest.json` 是发布记录,**仓库根目录的 `agent-manifest.json`
   是它的副本**,由 `tools/import-agent-release.py` 在导入时一起写 —— App 的联网检查读后者的
   raw URL(见 `docs/architecture.md` 第 9 节),所以"最新版本"和"发布记录"永远同源;
-- **清单必须签名后再推**:`python3 tools/sign-manifest.py --key ~/.switch/acnh-manager-signing-key.pem`,
-  然后把 `agent-manifest.json` 与 `agent-manifest.json.sig` 一起提交。签名文件的名字是
-  **清单文件名 + `.sig`**,因为 App 就是把它读清单的 URL 直接加后缀去取的;名字对不上,线上表现是
-  "检查失败: 清单签名校验失败"。工具会先核对私钥与编进 App 的公钥 `data/agent_pubkey.bin` 是否配套
-  (不配套就直接拒绝:那种情况下每个玩家都会验签失败),签完还会用 openssl 复验一次。
-  私钥**不入库**;丢失或更换的后果见 `docs/architecture.md` 第 9.2 节。签名不是确定性的
-  (openssl 每次用新的随机 k),同一份清单重签会得到不同的 `.sig` 字节 —— 只要
-  `tools/verify-release.py` 能验过就是正常的;
-- **发布锁里记着签名公钥指纹**(`signingPublicKeySha256`):自检会拿它和 `data/agent_pubkey.bin`
-  比对,所以"换钥匙"这件事一定会在发布 diff 里出现(已经发出去的 App 只认它自己被编进去的那把,
-  换钥匙 = 换身份,后果见 `docs/architecture.md` 第 9.2 节);
+- **清单必须双签后再推**:`python3 tools/sign-manifest.py --key
+  ~/.switch/acnh-manager-signing-key.pem --ed25519-key ~/.switch/acnh-signing-key.pem`,
+  然后把 `agent-manifest.json`、`agent-manifest.json.sig` 与
+  `agent-manifest.json.ed25519.sig` 一起提交。旧 `.sig` 是已发布 Manager 的升级路径;
+  `.ed25519.sig` 是过渡版的首选签名,签名输入为 `"ACNH-MANAGER-MANIFEST-v1" NUL ||`
+  清单原始字节。工具会先核对两把私钥分别与 `data/agent_pubkey.bin`、
+  `data/agent_ed25519_pubkey.bin` 配套,签完再用 OpenSSL 复验两份签名。
+  私钥**不入库**;丢失或更换的后果见 `docs/architecture.md` 第 9.2 节。P-256 签名仍不是确定性的
+  (openssl 每次用新的随机 k),相同清单重签可能得到不同 `.sig`;Ed25519 签名则固定为 64 字节。
+- **发布锁记着两把签名公钥的指纹**(`signingPublicKeySha256` 与
+  `ed25519SigningPublicKeySha256`):自检会分别与 `data/agent_pubkey.bin`、
+  `data/agent_ed25519_pubkey.bin` 比对,所以任何换钥都会在发布 diff 里显式出现;
 - 清单里的 `baseUrl` 指向 `packaging/agent/<agentVersion>/` 的 raw 前缀,`files[].source` 相对它解析;
 - 玩家侧"一键更新"走的就是这两条:清单(带签名)+ `baseUrl` 下的三个文件,App 按清单里的
   size/sha256 逐个校验后才落盘;
@@ -239,5 +253,6 @@ raw 请求会 302 到 `raw.giteeusercontent.com` 的带签名地址(2026-09-20 �
 - **发布端的连通性**:托管方的可达性会变(历史上换过一次,当时那家在作者网络上整条链路超时),
   所以每次换托管方或发版都要先核对 raw 地址能匿名取到东西,再谈 App 侧;App 侧对失败的处理是
   如实报错并静默退回内置版本,真机是否稳定以 `docs/device-acceptance.md` 的验收记录为准;
-- **商店收录**:1.0.1 的官方 Homebrew App Store PR #852 与 2.2.1 的升级 PR #975 已合并;
-  2.2.2 的升级 PR #1080 已提交,upstream CI 已通过。这里记录的是发布动作状态,不是代码功能缺口。
+- **商店收录**:2.3.0 已完成代码与本地产物验证,尚未推送或提交商店升级 PR;2.2.2 的升级 PR #1080
+  已提交,upstream CI 已通过。1.0.1 的初始收录 PR #852 与 2.2.1 的升级 PR #975 已合并。这里记录
+  的是发布动作状态,不是代码功能缺口。

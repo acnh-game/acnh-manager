@@ -65,7 +65,7 @@ HttpResult Get(const std::string &url, std::size_t max_bytes, long timeout_secon
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
     /* No trust store is available to this stack (see the header): verification is off, the same
        way Sphaira and most homebrew do it.  What arrives here is authenticated by the caller
-       (the release manifest's ECDSA signature) before it is trusted. */
+       (the release manifest's Ed25519 or legacy P-256 signature) before it is trusted. */
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);

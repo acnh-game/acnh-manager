@@ -7,9 +7,9 @@
    - **no certificate verification**: this stack has no trust store to verify against (mbedTLS
      ships no roots, libcurl's Switch port cannot reach the console's own CA list, and libcurl
      7.69 predates `CURLOPT_CAINFO_BLOB`).  Sphaira and most homebrew do the same.  Anything this
-     transport delivers that matters is therefore authenticated *elsewhere* -- today the release
-     manifest carries an ECDSA signature that `net::VerifySignature()` checks before we trust a
-     single byte of it (see `net/update.*`).
+     transport delivers that matters is therefore authenticated *elsewhere* -- the release
+     manifest carries an Ed25519 signature, with a legacy P-256 signature retained for the
+     migration overlap, before we trust a single byte of it (see `net/update.*`).
    - failures come back as data (outcome + raw detail), never as exceptions or aborts, because
      every caller has to degrade gracefully and log why. */
 

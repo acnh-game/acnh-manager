@@ -386,8 +386,9 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
 | `source/i18n/strings.*` | 简中 / English 双语文案表(`StringId` 枚举 + 两列),由主机测试保证两边都补齐 |
 | `source/util/text_wrap.hpp` | 折行规则(纯函数,主机可测):拉丁文本按空格断词、超长单词才中段断、CJK 按字断、`\n` 强制换行 |
 
-- 链接依赖:`-lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx`(portlibs 里的静态 FreeType 自带
-  harfbuzz auto-hinter、PNG 与 bzip2 支持,四个库都必须显式列出),头文件在
+- 链接依赖:`-lfreetype -lharfbuzz -lpng -lbz2 -ljpeg -lcurl -lzstd -lmbedtls
+  -lmbedx509 -lmbedcrypto -lsodium -lz -lnx`。portlibs 里的静态 FreeType 自带 harfbuzz
+  auto-hinter、PNG 与 bzip2 支持;libsodium 只用于 Ed25519 验签。FreeType 头文件在
   `$(PORTLIBS)/include/freetype2`。
 - 渲染循环:`framebufferCreate` + `framebufferMakeLinear`,每帧 `framebufferBegin/End`。
   **绘制高度只能取 `win->height`,不能取 `height_aligned`**:线性影子缓冲是按窗口高度分配的
@@ -575,8 +576,9 @@ NRO 编进去,发布链的自检(`tools/verify-release.py`)会挡住清单缺失
 | 模块 | 职责 |
 |---|---|
 | `source/net/http.*` | 本仓库唯一的 HTTPS 传输(libcurl + mbedTLS,套在 libnx 的 BSD socket 服务上)。只接受 `https://`;连接 5s、总 8s 超时;正文有上限(清单 512 KiB、payload 4 MiB);失败以**数据**返回(outcome + 原文诊断),从不抛异常或终止进程;**TLS 证书校验关闭**(原因见 9.1) |
-| `source/net/signature.*` | mbedTLS 验签(ECDSA P-256),公钥来自编进 NRO 的 `data/agent_pubkey.bin` |
-| `source/net/update.*` | 拉清单 → 拉同址的 `.sig` → 验签 → 解析;返回 `UpdateOutcome` + 原文诊断(玩家侧措辞由界面按当前语言渲染) |
+| `source/net/ed25519.*` | libsodium 验签 Ed25519;公钥来自编进 NRO 的 `data/agent_ed25519_pubkey.bin`,签名输入带固定领域前缀 |
+| `source/net/signature.*` | 迁移窗口内的旧签名验签:mbedTLS 校验 ECDSA P-256 `.sig`,公钥来自 `data/agent_pubkey.bin` |
+| `source/net/update.*` | 拉清单 → 优先拉 `.ed25519.sig`,失败时回退 `.sig` → 验签 → 解析;返回 `UpdateOutcome` + 原文诊断(玩家侧措辞由界面按当前语言渲染) |
 | `source/net/update_task.*` | 工作线程(128 KiB 静态栈):检查在独立线程上跑,界面每帧 `Take()` 一次结果 |
 | `source/install/network_source.*` | 按 `baseUrl + files[].source` 下载 payload;落盘的信任来自引擎自己的校验(每个文件先对清单里的 size + sha256) |
 
@@ -594,16 +596,32 @@ DigiCert / ISRG / GlobalSign 等一长串),而镜像里的 libcurl 是 7.69.1,�
 
 ### 9.2 清单签名(内容可信的根)
 
-- 私钥只存在发布机上,放在本地密钥目录 `~/.switch/acnh-manager-signing-key.pem`(权限 600,不入库,
-  要备份);公钥 `data/agent_pubkey.bin` 编进 NRO,随 NRO 一起发给玩家;
-- 这把公钥同时在两处留痕:发布锁的 `signingPublicKeySha256`(自检比对,让换钥匙在 diff 里显式
-  出现)与 NRO 的 `.rodata`(自检核对 NRO 里编的确实是当前那把);
-- 签名文件与清单同址:URL 加后缀 `.sig`(`agent-manifest.json` → `agent-manifest.json.sig`),
-  格式就是 `openssl dgst -sha256 -sign` 的 DER;
-- 验签失败(缺签名 / 不通 / 本 build 没带公钥)= 清单不可用:不解析、不显示版本、更不会下载;
-- 因此**每次发布都必须重新签名**清单,否则线上每一个 App 都会把它当垃圾丢掉
-  (`tools/sign-manifest.py`,流程见 `docs/release-process.md` 第 6 节);
-- 换私钥等于换身份:已发出去的 App 只认旧公钥,新清单会全部验签失败,只能靠换 NRO 才能追上。
+迁移窗口同时维护两套签名:
+
+- 旧 P-256 私钥在 `~/.switch/acnh-manager-signing-key.pem`,对应
+  `data/agent_pubkey.bin`;签名文件仍是 `agent-manifest.json.sig`,格式是
+  `openssl dgst -sha256 -sign` 的 DER。它存在的意义是让已经发布的 P-256-only Manager
+  能验证清单并升级到过渡版。
+- 新 Ed25519 私钥在架构白皮书固定的 `~/.switch/acnh-signing-key.pem`,对应仓库内 32 字节
+  原始公钥 `data/agent_ed25519_pubkey.bin`;签名文件是
+  `agent-manifest.json.ed25519.sig`,固定 64 字节。签名输入不是裸 JSON,而是:
+
+  ```text
+  "ACNH-MANAGER-MANIFEST-v1" NUL || exact manifest bytes
+  ```
+
+  领域前缀避免把 Manager 清单签名与授权 grant、权限快照或其他 Ed25519 用途互换。
+- 过渡版先取 `.ed25519.sig` 并优先验证;新签名不存在或未通过时,才回退旧 `.sig`。两边都不可用
+  或都验不过时,清单不解析、不显示版本、不会下载任何 payload。
+- `tools/sign-manifest.py` 每次都同时生成并复验两份签名;`tools/verify-release.py` 同时验证两把
+  公钥、两份签名和 NRO 里嵌入的原始公钥字节。
+- 发布锁分别记录 `signingPublicKeySha256` 与 `ed25519SigningPublicKeySha256`,让任何密钥变更
+  都必须以显式 diff 出现。
+- Ed25519 验签使用 devkitPro 固定镜像自带的 libsodium 1.0.20;镜像内的 mbedTLS 2.28 没有
+  Ed25519 验签 API,不能把 P-256 路径替换成未经验证的手写实现。
+
+换私钥等于换身份。旧 P-256 公钥删除前,必须先确认最低支持的 Manager 版本已经包含 Ed25519
+验证器,再完成版本覆盖审计;这段兼容窗口不能只凭“新版本已经发布”就提前结束。
 
 ### 9.3 界面行为
 

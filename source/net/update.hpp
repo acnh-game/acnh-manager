@@ -3,10 +3,11 @@
 /* The update check: fetch the release manifest, verify it, hand back what it says.
 
    The check is a *hint and a source of files*, and it is deliberately split from the transport:
-   `net::Get()` does the HTTPS with verification off (no trust store exists on this stack),
-   `net::VerifySignature()` checks the manifest's ECDSA signature against the public key
-   embedded in this build, and only a manifest that passes both is parsed.  A spoofed answer
-   therefore cannot introduce a version we would offer to install, let alone files.
+   `net::Get()` does the HTTPS with verification off (no trust store exists on this stack).
+   The transition build prefers the Ed25519 `.ed25519.sig` signature and falls back to the
+   legacy P-256 `.sig`, using public keys embedded in this build; only a manifest that passes
+   one of those checks is parsed.  A spoofed answer therefore cannot introduce a version we
+   would offer to install, let alone files.
 
    Nothing here touches the UI or blocks on anything the caller did not ask for: the call is
    synchronous, and `net::UpdateCheckTask` runs it on a worker thread so the interface keeps
@@ -26,8 +27,8 @@ enum class UpdateOutcome {
     NotHttps,        /* the URL is not https; refused before the network */
     HttpStatus,      /* the server answered with something other than 200 */
     Network,         /* the request itself failed (DNS, connect, TLS, timeout, ...) */
-    NoSignature,     /* the manifest is there but the .sig next to it is not */
-    BadSignature,    /* a signature is there but it does not verify against our key */
+    NoSignature,     /* neither the .ed25519.sig nor legacy .sig could be fetched */
+    BadSignature,    /* at least one signature was fetched but none verifies */
     NoTrustAnchor,   /* this build carries no public key, so nothing can be verified */
     InvalidManifest, /* verified, but not a manifest this app accepts */
     WorkerFailed,    /* the check never ran: its worker thread could not be started */

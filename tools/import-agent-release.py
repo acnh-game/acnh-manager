@@ -155,13 +155,19 @@ def main(argv: list[str] | None = None) -> int:
         profile_note = entry.get("id", "")
 
     agent_version = version.get("agentVersion", "unknown")
-    # The public key whose signature the in-app update check will verify, recorded here so that
-    # *changing* it is an explicit, reviewable line in the release diff instead of a silent
-    # identity swap (already-shipped apps only trust the key they were built with).
+    # Both trust anchors are recorded so that changing either one is an explicit, reviewable
+    # line in the release diff instead of a silent identity swap.  The P-256 key is required
+    # during the migration window; every new signature is Ed25519.
     pubkey = REPO_ROOT / "data" / "agent_pubkey.bin"
     if not pubkey.is_file():
         return fail(f"missing {pubkey.relative_to(REPO_ROOT)} (generate it with "
                     "tools/make-signing-key.py before importing a release)")
+    ed25519_pubkey = REPO_ROOT / "data" / "agent_ed25519_pubkey.bin"
+    if not ed25519_pubkey.is_file():
+        return fail(f"missing {ed25519_pubkey.relative_to(REPO_ROOT)} (generate it with "
+                    "tools/make-ed25519-signing-key.py before importing a release)")
+    if ed25519_pubkey.stat().st_size != 32:
+        return fail(f"{ed25519_pubkey.relative_to(REPO_ROOT)} must contain 32 raw bytes")
     lock = {
         "agentVersion": agent_version,
         "commit": version.get("commit"),
@@ -170,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         "nsoSha256": nso_sha,
         "npdmSha256": npdm_sha,
         "signingPublicKeySha256": hashlib.sha256(pubkey.read_bytes()).hexdigest(),
+        "ed25519SigningPublicKeySha256":
+            hashlib.sha256(ed25519_pubkey.read_bytes()).hexdigest(),
         "game": {
             "profile": profile_note,
             "titleId": TITLE_ID,

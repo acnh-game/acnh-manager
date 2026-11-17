@@ -6,9 +6,11 @@
    data/acnh_agent_version.bin -> acnh_agent_version_bin / acnh_agent_version_bin_size
    data/manifest.bin           -> manifest_bin / manifest_bin_size
    data/agent_pubkey.bin       -> agent_pubkey_bin / agent_pubkey_bin_size
+   data/agent_ed25519_pubkey.bin -> agent_ed25519_pubkey_bin / agent_ed25519_pubkey_bin_size
    data/forwarder_nsp.bin      -> forwarder_nsp_bin / forwarder_nsp_bin_size
    These headers are generated into the build/ directory (the build passes -I for it). */
 #include "acnh_agent_version_bin.h"
+#include "agent_ed25519_pubkey_bin.h"
 #include "agent_pubkey_bin.h"
 #include "forwarder_nsp_bin.h"
 #include "installer_page_html_bin.h"
@@ -54,6 +56,11 @@ std::string_view EmbeddedForwarderNsp() {
 std::string_view EmbeddedAgentPublicKeyPem() {
     return std::string_view(reinterpret_cast<const char *>(agent_pubkey_bin),
                             agent_pubkey_bin_size);
+}
+
+std::string_view EmbeddedAgentEd25519PublicKey() {
+    return std::string_view(reinterpret_cast<const char *>(agent_ed25519_pubkey_bin),
+                            agent_ed25519_pubkey_bin_size);
 }
 
 bool EmbeddedAvailable() {

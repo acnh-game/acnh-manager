@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Generate the release-signing key pair (ECDSA P-256) and publish its public half.
+"""Generate the **legacy** release-signing key pair (ECDSA P-256) and publish its public half.
 
 The private key is the project's identity: every ACNH-Manager in the field trusts manifests
 signed with it (the matching public key is compiled into the app as `data/agent_pubkey.bin`).
-It lives outside this repository, in the local secrets directory (`~/.switch/`), and is backed up:
-never regenerate it casually -- a new key means no already-shipped app will accept new releases
-until it is updated itself.
+It lives outside this repository, in the local secrets directory (`~/.switch/`), and is backed
+up.  New authorization signatures use the separate Ed25519 key created by
+tools/make-ed25519-signing-key.py; this P-256 key remains only so already-shipped Managers can
+verify the legacy `.sig` and upgrade to the transition build.
 
     python3 tools/make-signing-key.py --key ~/.switch/acnh-manager-signing-key.pem
     python3 tools/sign-manifest.py --key ~/.switch/acnh-manager-signing-key.pem

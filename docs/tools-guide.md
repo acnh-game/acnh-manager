@@ -2,6 +2,8 @@
 
 所有工具都在本仓库根目录运行。需要 Docker 的是 `tools/build.sh`(构建 NRO)与 `tools/release.sh`
 (它还要在容器里构建 acnh-agent 的发布版);沙盒里 Docker 需 escalation。
+主机侧 `make -C tests` 现在还要能链接 libsodium(用于 Ed25519 测试向量);固定 Switch 镜像已内置
+libsodium 1.0.20。
 `tools/make-icons.py`、`tools/device-tests.py` 与 `tools/ui-measure.py` 需要带 Pillow 的 Python 运行时
 (用 Codex 自带运行时,见工作区根 `AGENTS.md`);其余为纯标准库。`device-tests.py` 还需要真机:
 `switch` 可达(sys-agent 6000、其 FTP 6001)、应用已装好、机器停在主界面。
@@ -17,12 +19,13 @@
 | `tools/check-i18n.py` | 校验 `StringId` 枚举与 `strings.cpp` 文案表**逐条同序**并打印条目总数(死文案/漏文案会让两边错位);`make -C tests` 已内建调用 | 每次改动 `source/i18n/*` 之后,或本地测试前 |
 | `tools/make-dev-manifest.py` | 从 acnh-agent 的 `dist/` 产物生成开发用清单与 payload 目录(`build/scratch/dev-payload/`),保留真实的 `buildFlags`/`dirty` | 开发清单与 payload 联调;发布门控默认会拒绝这类清单 |
 | `tools/deploy-nro.py --push-file <本地> --remote <相对路径>` | 把单个文件推到 `/switch/ACNH-Manager/<相对路径>`(推 payload 与开发用清单用),上传后校验大小 | 部署 NRO 之外的文件时 |
-| `tools/release.sh` | 一条命令跑完整条发布链:前置检查(两个仓库都要干净)→ 容器内构建 agent 发布版 → 校验暂存产物来自当前 agent HEAD → 派生 NPDM → 门控导入 → 构建 NRO → 自检 → 商店包;agent 仓库只读挂载、容器里先拷到 `/work` 再构建,它的 `dist/` 完全不被碰 | 每次发布;`--skip-agent-build/--skip-nro/--skip-store` 跳过单步,`--allow-dirty` 仅开发期验证链用(打出的 NRO 戳会带 `-dirty`) |
+| `tools/release.sh` | 一条命令跑完整条发布链:前置检查(两个仓库都要干净)→ 容器内构建 agent 发布版 → 校验暂存产物来自当前 agent HEAD → 派生 NPDM → 门控导入 → 构建 NRO → 自检 → 商店包;agent 仓库只读挂载、容器里先拷到 `/work` 再构建,它的 `dist/` 完全不被碰 | 每次发布;`--skip-agent-build/--skip-nro/--skip-store` 跳过单步,`--allow-dirty` 仅开发期验证链用(打出的 NRO 戳会带 `-dirty`),`--manager-only` 复用发布锁中的 agent 版本并仅构建 Manager |
 | `tools/import-agent-release.py` | 发布门控 + 导入:校验 `dirty=false`/`buildFlags=2`/NSO 哈希/**NPDM 重放校验**(用同一原始 NPDM 再派生并逐字节比对)/profile 指纹,通过后写 `packaging/agent-lock.json`、`packaging/agent/<版本>/`(原始文件名的发布记录)与 `data/`(bin2s 构建输入)。`--nso/--npdm/--version-json` 必填,不吃 `acnh-agent/dist/` 里的现成产物 | 发布链的第 3 步;手工单独跑时也要自己给刚构建出来的路径 |
-| `tools/make-signing-key.py` | 生成发布签名密钥对(ECDSA P-256,私钥放仓库外,默认给成 `~/.switch/acnh-manager-signing-key.pem`),并把公钥写进 `data/agent_pubkey.bin`(入库、编进 NRO)。已有私钥时拒绝覆盖,除非 `--force` | 只做一次:项目第一次发布前;换密钥等于换身份(见 `docs/architecture.md` 9.2) |
-| `tools/sign-manifest.py` | 用 `--key`(默认 `~/.switch/acnh-manager-signing-key.pem`)给根目录 `agent-manifest.json` 签名 → `agent-manifest.json.sig`,先核对私钥与内嵌公钥配套,再用 openssl 复验;`--manifest/--signature` 可指向别处的副本(本地镜像测试用) | 每次发布,导入清单之后、push 之前 |
+| `tools/make-signing-key.py` | 生成**旧版**发布签名密钥对(ECDSA P-256,私钥放仓库外,默认给成 `~/.switch/acnh-manager-signing-key.pem`),并把公钥写进 `data/agent_pubkey.bin`。已有私钥时拒绝覆盖,除非 `--force` | 只用于迁移前的既有身份;不要在迁移中重新生成,否则已发布的 Manager 会全部失联 |
+| `tools/make-ed25519-signing-key.py` | 在仓库外生成固定路径 `~/.switch/acnh-signing-key.pem` 的 Ed25519 私钥(600),把 32 字节原始公钥写进 `data/agent_ed25519_pubkey.bin`。已有私钥时拒绝覆盖,除非 `--force`;私钥路径不允许落在仓库内 | 过渡版首次启用新授权签名身份时；换钥前必须审计旧公钥覆盖范围 |
+| `tools/sign-manifest.py` | 双签根目录 `agent-manifest.json`:旧 P-256 `.sig`(精确清单字节)与 Ed25519 `.ed25519.sig`(固定领域前缀 + 精确清单字节)。先核对两把私钥分别与内嵌公钥配套,再分别用 OpenSSL 复验;`--manifest` 及两组签名/公钥参数可指向测试副本 | 每次发布,导入清单之后、push 之前 |
 | `tools/update-manager-manifest.py` | 把 `packaging/nro/acnh-manager-<版本>.nro` 的版本、大小、SHA-256 与 Gitee raw 地址写入根清单的 `manager` 对象。内嵌清单不写该对象,避免 NRO 包含自身未来哈希;`tools/release.sh` 在拷贝发布 NRO 后自动调用 | 生成或刷新更新中心使用的 Manager 自更新条目时 |
-| `tools/verify-release.py` | 核对"锁 ↔ 发布记录 ↔ `data/` ↔ 已构建 NRO"四处一致,并验一次对外清单的签名;`--nro` 时还会在 NRO 里搜内嵌清单、三个 payload 与 forwarder NSP 的原始字节,并校验 **NRO 构建戳的 `src:` 哈希 == 当前 `source/` + `data/` + `assets/`**(抓"源码或内嵌素材改了但 NRO 没重建") | 发布链的第 6 步;也可单独挂 CI |
+| `tools/verify-release.py` | 核对"锁 ↔ 发布记录 ↔ `data/` ↔ 已构建 NRO"四处一致,并同时验证 P-256 与 Ed25519 两份对外清单签名;`--nro` 时还会在 NRO 里搜内嵌清单、三个 payload、两把公钥与 forwarder NSP 的原始字节,并校验 **NRO 构建戳的 `src:` 哈希 == 当前 `source/` + `data/` + `assets/`** | 发布链的自检步骤;也可单独挂 CI |
 | `tools/make-qr.py` | 把《森友物码册》小程序码(`src/acnh-chat-code-miniapp/resources/小程序码.jpg`)采样成模块矩阵,写进 `data/qr_miniapp.bin`(u16 宽高 + 每行位打包),供 App 的“聊天码说明”页用矩形逐格画出;同时输出 `build/scratch/qr-check.png` 便于肉眼复核。需要带 Pillow+numpy 的运行时 | 小程序码更新后(或改采样规则后);换码后请用手机扫一次真机截图确认可扫 |
 | `tools/sync-guide-fallback.py` | 把**当前发布版本**同步到指南页仓库的兜底目录:按 SD 卡目录结构写 `switch/ACNH-Manager/acnh-manager.nro`(与卡上同名)与 `atmosphere/contents/01006F8002326000/exefs/{subsdk9,main.npdm,acnh-agent.version}`,并刷新页面运行时读的 `agent-files.json`;写之前逐文件与发布锁/记录核对哈希,发现版本化的旧 NRO 会删掉。**NRO 是唯一在发布记录里没有哈希的文件**,于是改为核对它里面确实嵌着记录中的清单与三件套(`verify-release.py --nro` 用的同一判据),挡住 `--skip-nro` 留下的旧件;`agent-files.json` 的 `generated` 只在内容真的变了才刷新,所以没变化时跑一遍不会弄脏指南页仓库。只写文件、**不碰 git**;`--guide-dir`/`--dry-run` 可选 | 每次发布后(发布链之外的人工一步);之后在指南页仓库提交并部署 |
 | `tools/make-store-package.py` | 生成官方商店 `pkgbuild.json`、图标/横幅与本地测试仓库(`repo.json` + zip)。产物按**上游 spinarak 的格式**写(manifest 行 `U: <相对路径>`、`info.json` 九字段、`repo.json` 含 md5/sha256/binary/screens 等),可用上游构建器逐项比对(流程见 `docs/store-listing.md`) | 打包上架材料或验证商店流程时 |
@@ -41,7 +44,7 @@
 
 开发构建(`./tools/build.sh`,带 `+devaids`)会读取卡上的
 `/switch/ACNH-Manager/dev-update-url`;release 构建忽略这个文件。App 的 HTTP 层只接受 HTTPS,
-但 Switch 端不校验证书,所以本机自签 HTTPS 足够。清单仍必须用项目签名私钥签署。
+但 Switch 端不校验证书,所以本机自签 HTTPS 足够。清单仍必须同时用两把项目签名私钥签署。
 `tools/build.sh` 也接受 `APP_VERSION=<版本>`;它会清理编译对象再构建,但保留
 `build/scratch/` 下的日志、截图和本机测试素材。
 
@@ -63,7 +66,8 @@ python3 tools/update-manager-manifest.py \
   --url "https://${MAC_IP}:9443/acnh-manager-2.3.0.nro"
 python3 tools/sign-manifest.py \
   --manifest build/scratch/update-test/agent-manifest.json \
-  --signature build/scratch/update-test/agent-manifest.json.sig
+  --signature build/scratch/update-test/agent-manifest.json.sig \
+  --ed25519-signature build/scratch/update-test/agent-manifest.json.ed25519.sig
 
 # 3. 自签证书并启动 HTTPS 服务(单独占一个终端)
 mkdir -p build/scratch/update-test-tls

@@ -25,6 +25,7 @@ SOURCES := host_tests.cpp \
            ../source/install/transfer_queue.cpp \
            ../source/install/icon_file.cpp \
            ../source/install/title_name.cpp \
+           ../source/net/ed25519.cpp \
            ../source/util/qr_code.cpp \
            ../source/ui/settings.cpp \
            ../source/util/sha256.cpp \
@@ -36,7 +37,7 @@ BINARY := host-tests
 # The decoder of a compressed content (NSZ/XCZ) is the installer's own code and is tested here
 # too, against real zstd streams built by the test itself -- so the tests need the library, not
 # just the command line tool.  brew's /usr/local is in the compiler's default search path.
-LIBS := -lzstd -lpthread
+LIBS := -lzstd -lsodium -lpthread
 # Vendored C (qrcodegen) is compiled as C, not as C++ -- the same way the NRO build compiles it.
 # It keeps the upstream warning level (no -Werror): we do not edit third-party sources, so a
 # warning here is upstream's to fix, not a reason to block our build.

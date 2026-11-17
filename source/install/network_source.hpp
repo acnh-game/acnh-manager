@@ -6,8 +6,9 @@
    The engine does the authentication that matters here and it does it already: it checks every
    payload against the size and sha256 in the manifest *before* anything is written, so this
    source only has to fetch bytes and report what went wrong.  The manifest itself was verified
-   (ECDSA signature) by the update check before we ever got here, which is the link that keeps
-   the chain trustworthy with TLS verification off (see docs/architecture.md 9). */
+   (Ed25519, with legacy P-256 fallback during migration) by the update check before we ever
+   got here, which is the link that keeps the chain trustworthy with TLS verification off
+   (see docs/architecture.md 9). */
 
 #include <utility>
 #include <vector>

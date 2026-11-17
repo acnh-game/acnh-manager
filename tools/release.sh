@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# ACNH-Manager release chain.  Everything runs from this repo, and the acnh-agent
-# artifacts it needs are built here on the spot.  The agent repo is mounted read-only and
-# its own dist/ is never read or written: the build happens in a throwaway copy inside the
-# container.
+# ACNH-Manager release chain.  A full release builds the acnh-agent artifacts in a throwaway
+# container; --manager-only reuses the locked agent release without consulting or rebuilding
+# the agent tree.
 #
 #   1) build the acnh-agent release form in the pinned image (make switch SEMANTIC_HOOK=1)
 #   2) derive main.npdm with acnh-agent's make-minimal-npdm.py from the original NPDM
@@ -10,7 +9,7 @@
 #   4) compile hbl from source and generate the forwarder NSP
 #   5) build the NRO (data/ is embedded into .rodata)
 #   6) publish the NRO into packaging/nro/ (that raw URL is what players and the store fetch)
-#   7) sign the served manifest (agent-manifest.json.sig) with the release key
+#   7) dual-sign the served manifest (legacy .sig + .ed25519.sig)
 #   8) verify: lock <-> release record <-> data/ <-> NRO <-> signature
 #   9) build the store package
 #
@@ -19,15 +18,24 @@
 #   ./tools/release.sh --skip-agent-build  # reuse the stage in build/scratch/agent-release
 #   ./tools/release.sh --skip-nro --skip-store
 #   ./tools/release.sh --allow-dirty       # development only: validate the chain itself
-#   ./tools/release.sh --key ~/.switch/acnh-manager-signing-key.pem
+#   ./tools/release.sh --manager-only      # reuse the locked agent release; build only Manager
+#   ./tools/release.sh --key ~/.switch/acnh-manager-signing-key.pem \
+#       --ed25519-key ~/.switch/acnh-signing-key.pem
 #
 # Needs docker (pinned image devkitpro/devkita64:20260219); inside the sandbox docker needs
-# escalation.  The signing key (private half of the key compiled into the app, see
-# tools/make-signing-key.py) lives outside this repository.
+# escalation.  Both signing keys live outside this repository: the legacy P-256 key is
+# documented by tools/make-signing-key.py, and the new Ed25519 key by
+# tools/make-ed25519-signing-key.py.
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
-agent_dir="${ACNH_AGENT_DIR:-$(cd "${repo_dir}/../acnh-agent" && pwd)}"
+if [ -n "${ACNH_AGENT_DIR:-}" ]; then
+    agent_dir="${ACNH_AGENT_DIR}"
+elif [ -d "${repo_dir}/../acnh-agent" ]; then
+    agent_dir="$(cd "${repo_dir}/../acnh-agent" && pwd)"
+else
+    agent_dir=""
+fi
 workspace_dir="$(cd "${repo_dir}/../.." && pwd)"
 image="devkitpro/devkita64:20260219"
 stage="${repo_dir}/build/scratch/agent-release"
@@ -39,17 +47,20 @@ skip_agent_build=0
 skip_nro=0
 skip_store=0
 allow_dirty=0
-# The private half of the key compiled into the app.  Kept outside this repository, next to
-# the other local secrets.
+manager_only=0
+# The two private halves of the keys compiled into the app.  Both stay outside this repository.
 signing_key="${ACNH_MANAGER_SIGNING_KEY:-${HOME}/.switch/acnh-manager-signing-key.pem}"
+ed25519_signing_key="${ACNH_SIGNING_KEY:-${HOME}/.switch/acnh-signing-key.pem}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --skip-agent-build) skip_agent_build=1 ;;
         --skip-nro)         skip_nro=1 ;;
         --skip-store)       skip_store=1 ;;
         --allow-dirty)      allow_dirty=1 ;;
+        --manager-only)     manager_only=1; skip_agent_build=1 ;;
         --key)              signing_key="$2"; shift ;;
-        -h|--help)          sed -n "2,26p" "$0"; exit 0 ;;
+        --ed25519-key)      ed25519_signing_key="$2"; shift ;;
+        -h|--help)          sed -n "2,29p" "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -58,7 +69,9 @@ done
 step() { echo; echo "=== $* ==="; }
 
 step "0/9 preflight"
-[ -d "${agent_dir}" ] || { echo "error: acnh-agent not found at ${agent_dir} (override with ACNH_AGENT_DIR)" >&2; exit 2; }
+if [ "${manager_only}" -eq 0 ]; then
+    [ -d "${agent_dir}" ] || { echo "error: acnh-agent not found at ${agent_dir} (override with ACNH_AGENT_DIR)" >&2; exit 2; }
+fi
 # This repo has to be clean as well: the build stamp carries its commit and source hash,
 # and a dirty tree would stamp the NRO with -dirty.
 if [ -n "$(git -C "${repo_dir}" status --porcelain)" ]; then
@@ -70,12 +83,25 @@ if [ -n "$(git -C "${repo_dir}" status --porcelain)" ]; then
         exit 2
     fi
 fi
-head_commit="$(git -C "${agent_dir}" rev-parse --short=12 HEAD)"
-if [ -n "$(git -C "${agent_dir}" status --porcelain)" ]; then
-    echo "error: acnh-agent working tree is dirty; a release must come from a clean commit (otherwise version.json carries dirty=true and the gate refuses it)" >&2
-    exit 2
+if [ "${manager_only}" -eq 0 ]; then
+    head_commit="$(git -C "${agent_dir}" rev-parse --short=12 HEAD)"
+    if [ -n "$(git -C "${agent_dir}" status --porcelain)" ]; then
+        echo "error: acnh-agent working tree is dirty; a release must come from a clean commit (otherwise version.json carries dirty=true and the gate refuses it)" >&2
+        exit 2
+    fi
+    [ -f "${original_npdm}" ] || { echo "error: original main.npdm not found: ${original_npdm}" >&2; exit 2; }
+else
+    [ -f "${repo_dir}/packaging/agent-lock.json" ] || {
+        echo "error: --manager-only needs the existing release lock" >&2
+        exit 2
+    }
+    reused_agent_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["agentVersion"])' "${repo_dir}/packaging/agent-lock.json")"
+    reused_agent_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "${repo_dir}/packaging/agent-lock.json")"
+    [ -d "${repo_dir}/packaging/agent/${reused_agent_version}" ] || {
+        echo "error: --manager-only needs packaging/agent/${reused_agent_version}" >&2
+        exit 2
+    }
 fi
-[ -f "${original_npdm}" ] || { echo "error: original main.npdm not found: ${original_npdm}" >&2; exit 2; }
 # The app version lives in exactly one place (the Makefile); the published NRO's file name and
 # the store's update asset both take it from here, so they cannot drift apart.
 app_version="$(sed -n 's/^APP_VERSION[[:space:]]*:=[[:space:]]*//p' "${repo_dir}/Makefile" | head -1 | tr -d '[:space:]')"
@@ -88,11 +114,24 @@ app_version="$(sed -n 's/^APP_VERSION[[:space:]]*:=[[:space:]]*//p' "${repo_dir}
     echo "       generate one once with tools/make-signing-key.py" >&2
     exit 2
 }
-echo "acnh-agent: ${agent_dir} @ ${head_commit} (clean tree)"
+[ -f "${ed25519_signing_key}" ] || {
+    echo "error: Ed25519 signing key not found: ${ed25519_signing_key}" >&2
+    echo "       pass --ed25519-key <path> (or set ACNH_SIGNING_KEY);" >&2
+    echo "       generate it once with tools/make-ed25519-signing-key.py" >&2
+    exit 2
+}
+if [ "${manager_only}" -eq 0 ]; then
+    echo "acnh-agent: ${agent_dir} @ ${head_commit} (clean tree)"
+else
+    echo "acnh-agent: ${reused_agent_version} @ ${reused_agent_commit} (locked release reused; not rebuilt)"
+fi
 echo "app version: ${app_version}"
-echo "signing key: ${signing_key}"
+echo "P-256 signing key : ${signing_key}"
+echo "Ed25519 signing key: ${ed25519_signing_key}"
 
-if [ "${skip_agent_build}" -eq 0 ]; then
+if [ "${manager_only}" -eq 1 ]; then
+    step "1/9-3/9 manager-only: reuse the locked agent release and embedded payload"
+elif [ "${skip_agent_build}" -eq 0 ]; then
     step "1/9 build the acnh-agent release form in the container (SEMANTIC_HOOK=1)"
     command -v docker >/dev/null || { echo "error: docker is required" >&2; exit 2; }
     rm -rf "${stage}"
@@ -118,33 +157,39 @@ else
     [ -f "${stage}/acnh-agent.nso" ] || { echo "error: ${stage} has no artifact from a previous build" >&2; exit 2; }
 fi
 
-step "1b/9 the staged artifact must come from the current agent HEAD"
-staged_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "${stage}/version.json")"
-if [ "${staged_commit}" != "${head_commit}" ]; then
-    echo "error: the artifact in ${stage} was built from ${staged_commit}, agent HEAD is ${head_commit}" >&2
-    echo "       drop --skip-agent-build to rebuild, or delete ${stage} and rerun" >&2
-    exit 2
-fi
-if [ -f "${stage}/commit.txt" ] && [ "$(tr -d '\n' < "${stage}/commit.txt")" != "${head_commit}" ]; then
-    echo "error: ${stage}/commit.txt does not match agent HEAD (was the stage dir mixed by hand?)" >&2
-    exit 2
-fi
-echo "  staged commit ${staged_commit} == agent HEAD"
+if [ "${manager_only}" -eq 0 ]; then
+    step "1b/9 the staged artifact must come from the current agent HEAD"
+    staged_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "${stage}/version.json")"
+    if [ "${staged_commit}" != "${head_commit}" ]; then
+        echo "error: the artifact in ${stage} was built from ${staged_commit}, agent HEAD is ${head_commit}" >&2
+        echo "       drop --skip-agent-build to rebuild, or delete ${stage} and rerun" >&2
+        exit 2
+    fi
+    if [ -f "${stage}/commit.txt" ] && [ "$(tr -d '\n' < "${stage}/commit.txt")" != "${head_commit}" ]; then
+        echo "error: ${stage}/commit.txt does not match agent HEAD (was the stage dir mixed by hand?)" >&2
+        exit 2
+    fi
+    echo "  staged commit ${staged_commit} == agent HEAD"
 
-step "2/9 derive main.npdm (pure Python, original NPDM opened read-only)"
-python3 "${agent_dir}/tools/make-minimal-npdm.py" \
-    --input "${original_npdm}" --outdir "${stage}/npdm" | tail -5
+    step "2/9 derive main.npdm (pure Python, original NPDM opened read-only)"
+    python3 "${agent_dir}/tools/make-minimal-npdm.py" \
+        --input "${original_npdm}" --outdir "${stage}/npdm" | tail -5
 
-step "3/9 release gate + import of this repo's assets"
-python3 "${repo_dir}/tools/import-agent-release.py" \
-    --nso "${stage}/acnh-agent.nso" \
-    --npdm "${stage}/npdm/main.npdm" \
-    --version-json "${stage}/version.json" \
-    --original-npdm "${original_npdm}"
+    step "3/9 release gate + import of this repo's assets"
+    python3 "${repo_dir}/tools/import-agent-release.py" \
+        --nso "${stage}/acnh-agent.nso" \
+        --npdm "${stage}/npdm/main.npdm" \
+        --version-json "${stage}/version.json" \
+        --original-npdm "${original_npdm}"
+fi
 
 if [ "${skip_nro}" -eq 0 ]; then
-    step "4/9 compile hbl from source and generate the forwarder NSP"
-    python3 "${repo_dir}/tools/build-forwarder.py"
+    if [ "${manager_only}" -eq 0 ]; then
+        step "4/9 compile hbl from source and generate the forwarder NSP"
+        python3 "${repo_dir}/tools/build-forwarder.py"
+    else
+        step "4/9 manager-only: reuse the existing forwarder NSP"
+    fi
     step "5/9 build the NRO (embeds data/)"
     # --release: development aids (probes, text UI) are left out of this build.
     "${repo_dir}/tools/build.sh" --release
@@ -171,8 +216,10 @@ else
     echo "  skipped with --skip-nro"
 fi
 
-step "7/9 sign the served manifest (the app verifies this before it trusts anything)"
-python3 "${repo_dir}/tools/sign-manifest.py" --key "${signing_key}"
+step "7/9 dual-sign the served manifest (legacy P-256 + Ed25519)"
+python3 "${repo_dir}/tools/sign-manifest.py" \
+    --key "${signing_key}" \
+    --ed25519-key "${ed25519_signing_key}"
 
 step "8/9 verify: lock <-> release record <-> data/ <-> NRO <-> signature"
 if [ "${skip_nro}" -eq 0 ]; then

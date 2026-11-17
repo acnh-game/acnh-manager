@@ -24,7 +24,7 @@ INCLUDES	:=	source source/third_party/picohttpparser source/third_party/qrcodege
 
 APP_TITLE	:=	ACNH-Manager
 APP_AUTHOR	:=	acnh-game
-APP_VERSION	:=	2.2.2
+APP_VERSION	:=	2.3.0
 
 # The build stamp comes from tools/build.sh (UTC time + commit); a manual make gets a stub.
 BUILD_STAMP	?=	manual
@@ -66,7 +66,8 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 # The static FreeType brings harfbuzz auto-hinting, PNG and bzip2 along; all four link libs
 # have to be listed explicitly.  libjpeg decodes the game cover `ns` hands out (source/ui/
 # icon_image.cpp); it is the portlibs build, not a vendored copy.
-LIBS	:= -lfreetype -lharfbuzz -lpng -lbz2 -ljpeg -lcurl -lzstd -lmbedtls -lmbedx509 -lmbedcrypto -lz -lnx
+# libsodium provides Ed25519 verification; mbedTLS 2.28 in the pinned image does not.
+LIBS	:= -lfreetype -lharfbuzz -lpng -lbz2 -ljpeg -lcurl -lzstd -lmbedtls -lmbedx509 -lmbedcrypto -lsodium -lz -lnx
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 

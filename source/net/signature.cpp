@@ -18,8 +18,8 @@ std::string Describe(const char *what, int rc) {
 
 }  // namespace
 
-bool VerifySignature(const std::string &data, const std::string &signature_der,
-                     const char *public_key_pem, std::string *error) {
+bool VerifyP256Signature(const std::string &data, const std::string &signature_der,
+                         const char *public_key_pem, std::string *error) {
     if (public_key_pem == nullptr || public_key_pem[0] == '\0') {
         if (error != nullptr) {
             *error = "no public key is embedded in this build";
